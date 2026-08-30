@@ -11,21 +11,32 @@
   (function () {
     var enabled = location.search.includes('debug');
     var lines = [];
-    function show() {
+    var open = false;
+    function render() {
       if (!enabled) return;
-      var el = document.getElementById('debug-log');
-      if (el) {
-        el.style.display = 'block';
-        el.textContent = lines.join('\n');
+      var panel = document.getElementById('debug-log');
+      var toggle = document.getElementById('debug-toggle');
+      if (toggle) toggle.hidden = false;
+      if (panel) {
+        panel.hidden = !open;
+        panel.textContent = lines.join('\n');
+        if (open) panel.scrollTop = panel.scrollHeight;
       }
     }
     window.debugLog = function (msg) {
       if (!enabled) return;
       lines.push('[' + new Date().toLocaleTimeString() + '] ' + msg);
-      show();
+      render();
     };
     window.addEventListener('DOMContentLoaded', function () {
-      show();
+      var toggle = document.getElementById('debug-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', function () {
+          open = !open;
+          render();
+        });
+      }
+      render();
       window.debugLog('DOMContentLoaded');
     });
     window.addEventListener('error', function (e) {
@@ -56,7 +67,8 @@
 
   <input type="file" id="image-input" accept="image/*" hidden>
 
-  <pre id="debug-log" style="display:none; position:fixed; left:0; right:0; bottom:0; z-index:999; max-height:40vh; overflow:auto; margin:0; padding:8px; background:rgba(0,0,0,0.85); color:#8f8; font-size:11px; white-space:pre-wrap;"></pre>
+  <button id="debug-toggle" hidden style="position:fixed; right:8px; bottom:8px; z-index:1000; width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.7); color:#8f8; font-size:14px; line-height:1;">🐞</button>
+  <pre id="debug-log" hidden style="position:fixed; left:0; right:0; bottom:0; z-index:999; max-height:40vh; overflow:auto; margin:0; padding:8px 8px 40px; background:rgba(0,0,0,0.85); color:#8f8; font-size:11px; white-space:pre-wrap;"></pre>
 
   <div id="settings-modal" class="modal-overlay">
     <div class="modal">
