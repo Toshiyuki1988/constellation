@@ -8,10 +8,10 @@
 //
 // 呼び出し側(app.js)は openCamera(mode) を呼ぶだけでよい。
 // 戻り値は Promise<CaptureResult|null>(null はキャンセル)。
-//   写真          : { kind: 'photo', blob, caption: null }
-//   テクスト→写真 : { kind: 'photo', blob, caption: string }
-//   動画          : { kind: 'video', blob, durationSec }
-//   音声          : { kind: 'audio', blob, durationSec }
+//   写真   : { kind: 'photo', blob }
+//   テクスト: { kind: 'text', text }  ※読み取りに使った写真自体は保持しない
+//   動画   : { kind: 'video', blob, durationSec }
+//   音声   : { kind: 'audio', blob, durationSec }
 //
 // interact.js との関係: このオーバーレイは position:fixed; inset:0 で
 // キャンバスの上に独立して被さるだけなので、ポインタ操作はオーバーレイ側で
@@ -49,8 +49,6 @@ let camWaveAnalyser = null;
 let camWaveSource = null;
 let camWaveRAF = null;
 
-let heldCaption = null;
-
 /** @param {'photo'|'caption'|'video'|'audio'} initialMode */
 function openCamera(initialMode) {
   ensureCameraDom();
@@ -86,7 +84,6 @@ function ensureCameraDom() {
     holdChip: document.getElementById('hold-chip'),
     holdChipText: document.getElementById('hold-chip-text'),
     capBtn: document.getElementById('camera-cap-btn'),
-    shutterCaption: document.getElementById('camera-shutter-caption'),
 
     videoScreen: document.getElementById('camera-screen-video'),
     videoVideo: document.getElementById('camera-video-video'),
@@ -112,9 +109,8 @@ function wireCameraEvents() {
     });
   });
 
-  camEls.shutterPhoto.addEventListener('click', () => capturePhoto(camEls.videoPhoto, null));
+  camEls.shutterPhoto.addEventListener('click', capturePhoto);
   camEls.capBtn.addEventListener('click', handleCaptionRead);
-  camEls.shutterCaption.addEventListener('click', () => capturePhoto(camEls.videoCaption, heldCaption));
 
   camEls.videoRecBtn.addEventListener('click', () => {
     if (isRecording()) {
@@ -167,6 +163,7 @@ async function switchCameraMode(mode) {
       camEls.videoCaption.srcObject = camStream;
       camEls.videoCaption.play().catch(() => {});
       resetCaptionState();
+      enableTiltGuide(camEls.tiltLayerCaption, camEls.alignPulseCaption);
     } else if (mode === 'video') {
       camEls.videoVideo.srcObject = camStream;
       camEls.videoVideo.play().catch(() => {});
@@ -352,31 +349,29 @@ function captureFrameBlob(videoEl, maxEdge, quality) {
   });
 }
 
-async function capturePhoto(videoEl, caption) {
+async function capturePhoto() {
   if (!camStream) return;
-  const btn = videoEl === camEls.videoCaption ? camEls.shutterCaption : camEls.shutterPhoto;
-  btn.disabled = true;
+  camEls.shutterPhoto.disabled = true;
   try {
-    const blob = await captureFrameBlob(videoEl, 1600, 0.88);
+    const blob = await captureFrameBlob(camEls.videoPhoto, 1600, 0.88);
     playShutter();
-    finishCamera({ kind: 'photo', blob, caption: caption || null });
+    finishCamera({ kind: 'photo', blob });
   } catch (err) {
     console.error(err);
     showCameraError('撮影に失敗しました');
-    btn.disabled = false;
+    camEls.shutterPhoto.disabled = false;
   }
 }
 
-/* ---------------- テクストモード(キャプション読み取り→保持→写真) ---------------- */
+/* ---------------- テクストモード(キャプションだけをその場で読み取る) ----------------
+   読み取りに使った写真そのものはカードに残さない(OCR用の使い捨て)。
+   読み取れたテキストだけをテクストカードとして返す。 */
 
 function resetCaptionState() {
-  heldCaption = null;
   camEls.holdChip.classList.remove('show');
   camEls.capBtn.hidden = false;
   camEls.capBtn.disabled = false;
   camEls.captionHint.textContent = '画面にキャプションを収めてタップ';
-  camEls.shutterCaption.hidden = true;
-  camEls.tiltLayerCaption.classList.remove('enabled', 'aligned');
 }
 
 function camDebugLog(msg) {
@@ -390,6 +385,7 @@ async function handleCaptionRead() {
   try {
     // OCR用は取り込み後の作品写真(1600px)より高い解像度・画質で送る。
     // 文字の視認性が最優先なので、ダウンスケールで潰れないようにする。
+    // (このBlobはOCRにのみ使い、成功しても保存・アップロードはしない)
     const blob = await captureFrameBlob(camEls.videoCaption, 2400, 0.92);
     playShutter();
     camDebugLog(`OCR送信 size=${blob.size}B type=${blob.type}`);
@@ -400,14 +396,10 @@ async function handleCaptionRead() {
       camEls.capBtn.disabled = false;
       return;
     }
-    heldCaption = text;
     camEls.holdChipText.textContent = text.split('\n')[0].slice(0, 60);
     camEls.holdChip.classList.add('show');
-    camEls.capBtn.hidden = true;
-    camEls.shutterCaption.hidden = false;
-    camEls.shutterCaption.disabled = false;
-    camEls.captionHint.textContent = 'キャプションを保持中・作品にカメラを向けてください';
-    enableTiltGuide(camEls.tiltLayerCaption, camEls.alignPulseCaption);
+    camEls.captionHint.textContent = '読み取りました';
+    setTimeout(() => finishCamera({ kind: 'text', text }), 650);
   } catch (err) {
     console.error(err);
     camDebugLog('OCRエラー: ' + err.message);
@@ -585,7 +577,6 @@ function teardownCamera() {
   teardownWaveform();
   currentTiltLayer = null;
   currentTiltPulse = null;
-  heldCaption = null;
   camEls.overlay.classList.remove('open');
   clearCameraError();
 }

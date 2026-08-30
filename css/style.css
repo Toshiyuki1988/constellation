@@ -138,12 +138,39 @@ html, body {
   width: 100%;
 }
 
+.star-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
 .star-card-title {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.star-card-caption-btn {
+  flex: none;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 3px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.star-card-caption-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 .star-card-memo {
@@ -156,6 +183,12 @@ html, body {
   font-size: 12px;
   padding: 4px;
   font-family: inherit;
+}
+
+/* テクストカード: 画像枠を持たないぶん、メモ欄を全面まで展開して全文を読めるようにする */
+.star-card--text .star-card-memo {
+  flex: 1;
+  height: auto;
 }
 
 .modal-overlay {

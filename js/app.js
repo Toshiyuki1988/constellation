@@ -134,10 +134,13 @@ function renderAllCards() {
   state.cards.forEach(renderCard);
 }
 
+const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
+
 function renderCard(card) {
   const mediaType = card.mediaType || 'image';
+  const isTextCard = mediaType === 'text';
   const el = document.createElement('div');
-  el.className = 'star-card';
+  el.className = 'star-card' + (isTextCard ? ' star-card--text' : '');
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
   el.dataset.y = String(card.y);
@@ -145,8 +148,11 @@ function renderCard(card) {
   el.style.height = `${card.height}px`;
   el.style.transform = `translate(${card.x}px, ${card.y}px)`;
   el.innerHTML = `
-    <div class="star-card-media star-card-media-${mediaType}"></div>
-    <div class="star-card-title">${escapeHtml(card.title || '無題')}</div>
+    ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
+    <div class="star-card-title-row">
+      <div class="star-card-title">${escapeHtml(card.title || '無題')}</div>
+      ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? '<button class="star-card-caption-btn" title="キャプションを読み取ってタイトルにする">📌 キャプション</button>' : ''}
+    </div>
     <textarea class="star-card-memo" placeholder="メモ">${escapeHtml(card.memo || '')}</textarea>
   `;
   els.content.appendChild(el);
@@ -156,6 +162,11 @@ function renderCard(card) {
   memoEl.addEventListener('input', () => {
     card.memo = memoEl.value;
   });
+
+  const captionBtn = el.querySelector('.star-card-caption-btn');
+  if (captionBtn) {
+    captionBtn.addEventListener('click', () => handleCardCaption(card, el));
+  }
 
   if (card.imageFileId) {
     fetchFileBlobUrl(card.imageFileId).then((url) => {
@@ -169,6 +180,17 @@ function renderCard(card) {
       }
     });
   }
+}
+
+/** 写真・動画カードの「キャプション」ボタン: OCRだけ起動し、結果をそのカードのタイトル/メモにする */
+async function handleCardCaption(card, el) {
+  const result = await openCamera('caption');
+  if (!result || result.kind !== 'text') return;
+  card.title = result.text.split('\n')[0].slice(0, 40);
+  card.memo = card.memo ? `${card.memo}\n\n${result.text}` : result.text;
+  el.querySelector('.star-card-title').textContent = card.title;
+  el.querySelector('.star-card-memo').value = card.memo;
+  setStatus('キャプションを反映しました(保存ボタンで確定)');
 }
 
 function getCardById(id) {
@@ -209,10 +231,8 @@ async function handleOpenCamera() {
       blob: result.blob,
       filename: `${Date.now()}-photo.jpg`,
       mediaType: 'image',
-      title: result.caption ? result.caption.split('\n')[0].slice(0, 40) : '',
-      memo: result.caption || '',
     });
-    if (!card || result.caption) return;
+    if (!card) return;
     try {
       const ocrText = await ocrImage(result.blob);
       if (ocrText && !ocrText.includes('(テキストなし)')) {
@@ -223,6 +243,8 @@ async function handleOpenCamera() {
     } catch (err) {
       console.warn('Gemini OCR に失敗しました', err);
     }
+  } else if (result.kind === 'text') {
+    createTextCard(result.text);
   } else if (result.kind === 'video') {
     await createCardFromCapture({
       blob: result.blob,
@@ -243,6 +265,27 @@ function extensionForMime(mimeType, fallback) {
   if (mimeType.includes('mp4')) return 'mp4';
   if (mimeType.includes('webm')) return 'webm';
   return fallback;
+}
+
+/** テクストモードの読み取り結果からカードを作る(画像を伴わないため Drive アップロードは不要) */
+function createTextCard(text) {
+  const card = {
+    id: crypto.randomUUID(),
+    x: 40,
+    y: 40,
+    width: 240,
+    height: 200,
+    title: text.split('\n')[0].slice(0, 40),
+    memo: text,
+    tags: [],
+    mediaType: 'text',
+    imageFileId: null,
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  setStatus('テクストを追加しました(保存ボタンで確定)');
+  return card;
 }
 
 /** Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラの両経路から使う */
