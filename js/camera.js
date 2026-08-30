@@ -178,12 +178,17 @@ async function switchCameraMode(mode) {
   }
 }
 
+// width/height は「これくらい欲しい」という ideal 指定。端末が対応していなければ
+// 自動的に近い値に調整される(失敗はしない)。指定しないとブラウザ既定の低解像度
+// (端末によっては 640x480 程度)になり、特にテクストモードのOCR精度に響くため必須。
+const CAM_VIDEO_CONSTRAINTS = { facingMode: 'environment', width: { ideal: 2560 }, height: { ideal: 1440 } };
+
 async function acquireStreamForMode(mode) {
   stopCameraStream();
   if (mode === 'photo' || mode === 'caption') {
-    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    camStream = await navigator.mediaDevices.getUserMedia({ video: CAM_VIDEO_CONSTRAINTS, audio: false });
   } else if (mode === 'video') {
-    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: true });
+    camStream = await navigator.mediaDevices.getUserMedia({ video: CAM_VIDEO_CONSTRAINTS, audio: true });
   } else if (mode === 'audio') {
     camStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   }
@@ -374,14 +379,22 @@ function resetCaptionState() {
   camEls.tiltLayerCaption.classList.remove('enabled', 'aligned');
 }
 
+function camDebugLog(msg) {
+  if (typeof debugLog === 'function') debugLog(msg);
+}
+
 async function handleCaptionRead() {
   if (!camStream) return;
   camEls.capBtn.disabled = true;
   camEls.captionHint.textContent = '読み取り中…';
   try {
-    const blob = await captureFrameBlob(camEls.videoCaption, 1400, 0.85);
+    // OCR用は取り込み後の作品写真(1600px)より高い解像度・画質で送る。
+    // 文字の視認性が最優先なので、ダウンスケールで潰れないようにする。
+    const blob = await captureFrameBlob(camEls.videoCaption, 2400, 0.92);
     playShutter();
+    camDebugLog(`OCR送信 size=${blob.size}B type=${blob.type}`);
     const text = await ocrImage(blob);
+    camDebugLog(`OCR結果: ${JSON.stringify(text)}`);
     if (!text || text.includes('(テキストなし)')) {
       camEls.captionHint.textContent = '文字を検出できませんでした。もう一度お試しください';
       camEls.capBtn.disabled = false;
@@ -397,7 +410,8 @@ async function handleCaptionRead() {
     enableTiltGuide(camEls.tiltLayerCaption, camEls.alignPulseCaption);
   } catch (err) {
     console.error(err);
-    camEls.captionHint.textContent = '読み取りに失敗しました。もう一度お試しください';
+    camDebugLog('OCRエラー: ' + err.message);
+    camEls.captionHint.textContent = '読み取りに失敗しました(' + err.message + ')';
     camEls.capBtn.disabled = false;
   }
 }
