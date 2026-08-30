@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>CONSTELLATION</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <h1>CONSTELLATION</h1>
+    <div class="toolbar-actions">
+      <button id="settings-btn" title="設定(クライアントID・APIキー)">⚙ 設定</button>
+      <button id="sign-in-btn" disabled>Googleでサインイン</button>
+      <button id="sign-out-btn" hidden>サインアウト</button>
+      <button id="add-card-btn" disabled>+ 作品を追加</button>
+      <button id="save-btn" disabled>保存</button>
+    </div>
+    <span id="status" class="status"></span>
+  </header>
+
+  <main id="canvas-viewport" class="canvas-viewport">
+    <div id="canvas-content" class="canvas-content"></div>
+  </main>
+
+  <input type="file" id="image-input" accept="image/*" hidden>
+
+  <div id="settings-modal" class="modal-overlay">
+    <div class="modal">
+      <h2>初期設定</h2>
+      <p class="modal-desc">
+        Google OAuthクライアントIDとGemini APIキーを入力してください。
+        <strong>このブラウザにのみ保存され</strong>、外部に送信されることはありません
+        (取得方法は README.md 参照)。
+      </p>
+      <label>
+        Google OAuthクライアントID
+        <input type="text" id="settings-client-id" placeholder="xxxxxxxx.apps.googleusercontent.com" autocomplete="off">
+      </label>
+      <label>
+        Gemini APIキー(Auth Key)
+        <input type="text" id="settings-api-key" placeholder="AQ.Ab8..." autocomplete="off">
+      </label>
+      <p id="settings-error" class="modal-error" hidden></p>
+      <div class="modal-actions">
+        <button id="settings-cancel-btn" class="secondary" hidden>キャンセル</button>
+        <button id="settings-save-btn">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Google Identity Services (OAuth) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- interact.js (drag / resize / pinch-zoom) -->
+  <script src="https://cdn.jsdelivr.net/npm/interactjs@1.10.27/dist/interact.min.js"></script>
+
+  <script src="js/config.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/drive.js"></script>
+  <script src="js/gemini.js"></script>
+  <script src="js/canvas.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
