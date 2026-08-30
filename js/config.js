@@ -20,7 +20,8 @@ const CONFIG = {
 
   // 使用する Gemini モデル名。無料枠の対象モデルは変わることがあるため
   // https://ai.google.dev/gemini-api/docs/models で最新の無料枠対象モデル名を確認してください。
-  GEMINI_MODEL: 'gemini-2.5-flash',
+  // (2026-08: gemini-2.5-flash が新規利用不可になったため gemini-3.6-flash に変更)
+  GEMINI_MODEL: 'gemini-3.6-flash',
 
   // Drive アクセススコープ。「アプリが作成/開いたファイルのみ」にアクセスする
   // 非機微(non-sensitive寄り)スコープ。ユーザーのDrive全体は見えない。
