@@ -34,14 +34,16 @@ async function askGemini({ prompt, imageBase64, mimeType }) {
 /** 画像内のキャプション文字(作品名・作者名など)をOCR的に抽出する */
 async function ocrImage(blob) {
   const imageBase64 = await blobToBase64(blob);
-  return askGemini({
+  const raw = await askGemini({
     prompt:
       'この画像は美術館・展覧会のキャプションや作品の写真です。' +
-      '写っている作品名・作者名・年代などのテキストがあれば、簡潔に抜き出してください。' +
+      '写っている作品名・作者名・年代などのテキストを、書かれている通りに抜き出してください。' +
+      '前置き・説明・「以下の通りです」のような一言も一切付けず、抽出した文字だけをそのまま返してください。' +
       'テキストが見当たらない場合は「(テキストなし)」とだけ返してください。',
     imageBase64,
     mimeType: blob.type,
   });
+  return raw.trim();
 }
 
 function blobToBase64(blob) {

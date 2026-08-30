@@ -191,6 +191,7 @@ async function handleImageSelected(event) {
     const ocrText = await ocrImage(file);
     if (ocrText && !ocrText.includes('(テキストなし)')) {
       card.title = ocrText.split('\n')[0].slice(0, 40);
+      card.memo = ocrText;
       renderAllCards();
     }
   } catch (err) {
@@ -208,13 +209,15 @@ async function handleOpenCamera() {
       blob: result.blob,
       filename: `${Date.now()}-photo.jpg`,
       mediaType: 'image',
-      title: result.caption || '',
+      title: result.caption ? result.caption.split('\n')[0].slice(0, 40) : '',
+      memo: result.caption || '',
     });
     if (!card || result.caption) return;
     try {
       const ocrText = await ocrImage(result.blob);
       if (ocrText && !ocrText.includes('(テキストなし)')) {
         card.title = ocrText.split('\n')[0].slice(0, 40);
+        card.memo = ocrText;
         renderAllCards();
       }
     } catch (err) {
@@ -243,7 +246,7 @@ function extensionForMime(mimeType, fallback) {
 }
 
 /** Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラの両経路から使う */
-async function createCardFromCapture({ blob, filename, mediaType, title }) {
+async function createCardFromCapture({ blob, filename, mediaType, title, memo }) {
   setStatus('アップロード中…');
   let fileId;
   try {
@@ -261,7 +264,7 @@ async function createCardFromCapture({ blob, filename, mediaType, title }) {
     width: 220,
     height: 260,
     title: title || '',
-    memo: '',
+    memo: memo || '',
     tags: [],
     mediaType,
     imageFileId: fileId,

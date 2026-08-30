@@ -400,8 +400,8 @@ async function handleCaptionRead() {
       camEls.capBtn.disabled = false;
       return;
     }
-    heldCaption = text.split('\n')[0].slice(0, 60);
-    camEls.holdChipText.textContent = heldCaption;
+    heldCaption = text;
+    camEls.holdChipText.textContent = text.split('\n')[0].slice(0, 60);
     camEls.holdChip.classList.add('show');
     camEls.capBtn.hidden = true;
     camEls.shutterCaption.hidden = false;
