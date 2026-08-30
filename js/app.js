@@ -31,14 +31,22 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsSaveBtn.addEventListener('click', handleSettingsSave);
   els.settingsCancelBtn.addEventListener('click', closeSettings);
 
+  debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
+
   if (isConfigured()) {
     els.signInBtn.disabled = false;
-    whenGisReady(() => initAuth(onSignedIn));
+    whenGisReady(() => {
+      debugLog('whenGisReady -> initAuth() 呼び出し');
+      initAuth(onSignedIn);
+    });
   } else {
     openSettings();
   }
 
-  els.signInBtn.addEventListener('click', () => signIn());
+  els.signInBtn.addEventListener('click', () => {
+    debugLog('signInBtn クリック');
+    signIn();
+  });
   els.signOutBtn.addEventListener('click', () => {
     signOut();
     toggleAuthUI(false);
@@ -77,10 +85,16 @@ function handleSettingsSave() {
 }
 
 /** Google Identity Services のスクリプト(非同期読み込み)が使えるようになるまで待つ */
+let gisWaitCount = 0;
 function whenGisReady(callback) {
   if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+    debugLog('GIS ready (待ち回数=' + gisWaitCount + ')');
     callback();
   } else {
+    gisWaitCount++;
+    if (gisWaitCount === 1 || gisWaitCount % 20 === 0) {
+      debugLog('GIS 待機中... (待ち回数=' + gisWaitCount + ', window.google=' + typeof window.google + ')');
+    }
     setTimeout(() => whenGisReady(callback), 100);
   }
 }

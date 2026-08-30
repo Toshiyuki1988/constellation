@@ -5,6 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css">
+<script>
+  // URLに ?debug を付けたときだけ、画面下部にログを表示する簡易デバッグ機能。
+  // 通常利用時は何も表示されない。
+  (function () {
+    var enabled = location.search.includes('debug');
+    var lines = [];
+    function show() {
+      if (!enabled) return;
+      var el = document.getElementById('debug-log');
+      if (el) {
+        el.style.display = 'block';
+        el.textContent = lines.join('\n');
+      }
+    }
+    window.debugLog = function (msg) {
+      if (!enabled) return;
+      lines.push('[' + new Date().toLocaleTimeString() + '] ' + msg);
+      show();
+    };
+    window.addEventListener('DOMContentLoaded', function () {
+      show();
+      window.debugLog('DOMContentLoaded');
+    });
+    window.addEventListener('error', function (e) {
+      window.debugLog('ERROR: ' + e.message + ' (' + e.filename + ':' + e.lineno + ')');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      window.debugLog('UNHANDLED PROMISE REJECTION: ' + e.reason);
+    });
+  })();
+</script>
 </head>
 <body>
   <header class="toolbar">
@@ -24,6 +55,8 @@
   </main>
 
   <input type="file" id="image-input" accept="image/*" hidden>
+
+  <pre id="debug-log" style="display:none; position:fixed; left:0; right:0; bottom:0; z-index:999; max-height:40vh; overflow:auto; margin:0; padding:8px; background:rgba(0,0,0,0.85); color:#8f8; font-size:11px; white-space:pre-wrap;"></pre>
 
   <div id="settings-modal" class="modal-overlay">
     <div class="modal">

@@ -10,28 +10,43 @@ let tokenExpiresAt = 0;
  * @param {(token: string) => void} onSignedIn サインイン成功時に呼ばれる
  */
 function initAuth(onSignedIn) {
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CONFIG.GOOGLE_CLIENT_ID,
-    scope: CONFIG.DRIVE_SCOPES,
-    callback: (response) => {
-      if (response.error) {
-        console.error('OAuth error:', response);
-        return;
-      }
-      accessToken = response.access_token;
-      tokenExpiresAt = Date.now() + response.expires_in * 1000;
-      onSignedIn(accessToken);
-    },
-  });
+  debugLog('initAuth() 開始, client_id先頭=' + String(CONFIG.GOOGLE_CLIENT_ID).slice(0, 12) + '...');
+  try {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CONFIG.GOOGLE_CLIENT_ID,
+      scope: CONFIG.DRIVE_SCOPES,
+      callback: (response) => {
+        debugLog('OAuthコールバック受信, error=' + (response && response.error));
+        if (response.error) {
+          console.error('OAuth error:', response);
+          return;
+        }
+        accessToken = response.access_token;
+        tokenExpiresAt = Date.now() + response.expires_in * 1000;
+        onSignedIn(accessToken);
+      },
+    });
+    debugLog('initTokenClient 成功, tokenClient=' + (tokenClient ? 'set' : 'null'));
+  } catch (err) {
+    debugLog('initTokenClient 例外: ' + err);
+    console.error(err);
+  }
 }
 
 /** サインインボタンから呼ぶ。同意画面が必要な場合のみ表示される。 */
 function signIn() {
+  debugLog('signIn() 呼び出し, tokenClient=' + (tokenClient ? 'set' : 'null'));
   if (!tokenClient) {
     setStatus('読み込み中です。少し待ってからもう一度お試しください');
     return;
   }
-  tokenClient.requestAccessToken({ prompt: '' });
+  try {
+    tokenClient.requestAccessToken({ prompt: '' });
+    debugLog('requestAccessToken 呼び出し完了');
+  } catch (err) {
+    debugLog('requestAccessToken 例外: ' + err);
+    console.error(err);
+  }
 }
 
 /** サインアウト(トークンを失効させる) */
