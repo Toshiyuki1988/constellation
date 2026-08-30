@@ -95,8 +95,8 @@ async function saveData(folderId, fileId, data) {
   return saved.id;
 }
 
-/** 画像ファイルをフォルダにアップロードし、そのファイルIDを返す */
-async function uploadImage(folderId, blob, filename) {
+/** ファイル(画像・動画・音声)をフォルダにアップロードし、そのファイルIDを返す */
+async function uploadFile(folderId, blob, filename) {
   const token = await ensureAccessToken();
   const metadata = { name: filename, parents: [folderId] };
   const form = new FormData();
@@ -114,10 +114,10 @@ async function uploadImage(folderId, blob, filename) {
 }
 
 /**
- * 画像を認証付きで取得し、表示用の blob URL を返す。
+ * ファイルを認証付きで取得し、表示用の blob URL を返す。
  * (drive.file のファイルは既定で非公開のため、Authorization ヘッダ付きで取得する)
  */
-async function fetchImageBlobUrl(fileId) {
+async function fetchFileBlobUrl(fileId) {
   const res = await driveFetch(`/files/${fileId}?alt=media`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);

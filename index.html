@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/camera.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script>
   // URLに ?debug を付けたときだけ、画面下部にログを表示する簡易デバッグ機能。
   // 通常利用時は何も表示されない。
@@ -56,6 +59,7 @@
       <button id="sign-in-btn" disabled>Googleでサインイン</button>
       <button id="sign-out-btn" hidden>サインアウト</button>
       <button id="add-card-btn" disabled>+ 作品を追加</button>
+      <button id="camera-btn" disabled title="アプリ内蔵カメラで撮影(OSのシャッター音を回避)">📷 その場で撮影</button>
       <button id="save-btn" disabled>保存</button>
     </div>
     <span id="status" class="status"></span>
@@ -69,6 +73,65 @@
 
   <button id="debug-toggle" hidden style="position:fixed; right:8px; bottom:8px; z-index:1000; width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.7); color:#8f8; font-size:14px; line-height:1;">🐞</button>
   <pre id="debug-log" hidden style="position:fixed; left:0; right:0; bottom:0; z-index:999; max-height:40vh; overflow:auto; margin:0; padding:8px 8px 40px; background:rgba(0,0,0,0.85); color:#8f8; font-size:11px; white-space:pre-wrap;"></pre>
+
+  <div id="camera-overlay">
+    <div id="camera-mode-switch">
+      <button class="active" data-mode="photo">写真</button>
+      <button data-mode="caption">テクスト</button>
+      <button data-mode="video">動画</button>
+      <button data-mode="audio">音声</button>
+    </div>
+    <button id="camera-close" title="閉じる">✕ 閉じる</button>
+
+    <div class="cam-screen active" id="camera-screen-photo" data-mode="photo">
+      <video id="camera-video-photo" autoplay playsinline muted></video>
+      <div class="cam-hint">正対するとトンボが揃います・タップでピント</div>
+      <div class="cam-tilt-layer" id="tilt-layer-photo">
+        <div class="cam-tick cam-t-tl"><svg viewBox="0 0 24 24"><path d="M2 14 V4 Q2 2 4 2 H14"/></svg></div>
+        <div class="cam-tick cam-t-tr"><svg viewBox="0 0 24 24"><path d="M10 2 H20 Q22 2 22 4 V14"/></svg></div>
+        <div class="cam-tick cam-t-bl"><svg viewBox="0 0 24 24"><path d="M2 10 V20 Q2 22 4 22 H14"/></svg></div>
+        <div class="cam-tick cam-t-br"><svg viewBox="0 0 24 24"><path d="M22 10 V20 Q22 22 20 22 H10"/></svg></div>
+      </div>
+      <div class="cam-align-pulse" id="align-pulse-photo">◆ 正対しています</div>
+      <div class="cam-focus-layer" id="focus-layer-photo"></div>
+      <button class="cam-shutter-btn" id="camera-shutter-photo" title="撮影"></button>
+    </div>
+
+    <div class="cam-screen" id="camera-screen-caption" data-mode="caption">
+      <video id="camera-video-caption" autoplay playsinline muted></video>
+      <div class="cam-hint" id="caption-hint">画面にキャプションを収めてタップ</div>
+      <div class="cam-tilt-layer" id="tilt-layer-caption">
+        <div class="cam-tick cam-t-tl"><svg viewBox="0 0 24 24"><path d="M2 14 V4 Q2 2 4 2 H14"/></svg></div>
+        <div class="cam-tick cam-t-tr"><svg viewBox="0 0 24 24"><path d="M10 2 H20 Q22 2 22 4 V14"/></svg></div>
+        <div class="cam-tick cam-t-bl"><svg viewBox="0 0 24 24"><path d="M2 10 V20 Q2 22 4 22 H14"/></svg></div>
+        <div class="cam-tick cam-t-br"><svg viewBox="0 0 24 24"><path d="M22 10 V20 Q22 22 20 22 H10"/></svg></div>
+      </div>
+      <div class="cam-align-pulse" id="align-pulse-caption">◆ 正対しています</div>
+      <div class="cam-focus-layer" id="focus-layer-caption"></div>
+      <div class="cam-hold-chip" id="hold-chip"><span class="cam-pin">📌</span><span id="hold-chip-text"></span></div>
+      <button class="cam-cap-btn" id="camera-cap-btn">タップして読み取る</button>
+      <button class="cam-shutter-btn" id="camera-shutter-caption" hidden title="この作品を撮影"></button>
+    </div>
+
+    <div class="cam-screen" id="camera-screen-video" data-mode="video">
+      <video id="camera-video-video" autoplay playsinline muted></video>
+      <div class="cam-video-timer"><span class="cam-rec-dot" id="video-rec-dot" hidden></span><span id="video-time">00:00</span></div>
+      <button class="cam-video-rec-btn" id="camera-video-rec-btn" title="録画開始/停止"></button>
+    </div>
+
+    <div class="cam-screen" id="camera-screen-audio" data-mode="audio">
+      <div class="cam-audio-scene">
+        <div class="cam-wave-wrap"><svg viewBox="0 0 220 64"><path id="audio-wave-path" d=""/></svg></div>
+        <div class="cam-audio-timer" id="audio-timer">00:00</div>
+        <button class="cam-audio-btn" id="camera-audio-btn">
+          <svg viewBox="0 0 76 76"><path d="M38 6 C20 8 8 22 7 38 C6 55 20 70 38 70 C56 69 70 54 69 37 C68 21 55 7 38 6 Z"/></svg>
+        </button>
+        <div class="cam-audio-label" id="audio-label">タップで録音開始</div>
+      </div>
+    </div>
+
+    <div id="camera-error" hidden></div>
+  </div>
 
   <div id="settings-modal" class="modal-overlay">
     <div class="modal">
@@ -103,6 +166,7 @@
   <script src="js/auth.js"></script>
   <script src="js/drive.js"></script>
   <script src="js/gemini.js"></script>
+  <script src="js/camera.js"></script>
   <script src="js/canvas.js"></script>
   <script src="js/app.js"></script>
 </body>

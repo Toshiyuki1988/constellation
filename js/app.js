@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.signInBtn = document.getElementById('sign-in-btn');
   els.signOutBtn = document.getElementById('sign-out-btn');
   els.addCardBtn = document.getElementById('add-card-btn');
+  els.cameraBtn = document.getElementById('camera-btn');
   els.saveBtn = document.getElementById('save-btn');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
@@ -54,6 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   els.addCardBtn.addEventListener('click', () => els.imageInput.click());
   els.imageInput.addEventListener('change', handleImageSelected);
+  els.cameraBtn.addEventListener('click', handleOpenCamera);
   els.saveBtn.addEventListener('click', handleSave);
 });
 
@@ -103,6 +105,7 @@ function toggleAuthUI(signedIn) {
   els.signInBtn.hidden = signedIn;
   els.signOutBtn.hidden = !signedIn;
   els.addCardBtn.disabled = !signedIn;
+  els.cameraBtn.disabled = !signedIn;
   els.saveBtn.disabled = !signedIn;
 }
 
@@ -132,6 +135,7 @@ function renderAllCards() {
 }
 
 function renderCard(card) {
+  const mediaType = card.mediaType || 'image';
   const el = document.createElement('div');
   el.className = 'star-card';
   el.dataset.id = card.id;
@@ -141,7 +145,7 @@ function renderCard(card) {
   el.style.height = `${card.height}px`;
   el.style.transform = `translate(${card.x}px, ${card.y}px)`;
   el.innerHTML = `
-    <div class="star-card-image"></div>
+    <div class="star-card-media star-card-media-${mediaType}"></div>
     <div class="star-card-title">${escapeHtml(card.title || '無題')}</div>
     <textarea class="star-card-memo" placeholder="メモ">${escapeHtml(card.memo || '')}</textarea>
   `;
@@ -154,8 +158,15 @@ function renderCard(card) {
   });
 
   if (card.imageFileId) {
-    fetchImageBlobUrl(card.imageFileId).then((url) => {
-      el.querySelector('.star-card-image').style.backgroundImage = `url(${url})`;
+    fetchFileBlobUrl(card.imageFileId).then((url) => {
+      const mediaEl = el.querySelector('.star-card-media');
+      if (mediaType === 'video') {
+        mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
+      } else if (mediaType === 'audio') {
+        mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
+      } else {
+        mediaEl.style.backgroundImage = `url(${url})`;
+      }
     });
   }
 }
@@ -169,31 +180,12 @@ async function handleImageSelected(event) {
   event.target.value = '';
   if (!file) return;
 
-  setStatus('画像をアップロード中…');
-  let imageFileId;
-  try {
-    imageFileId = await uploadImage(state.folderId, file, `${Date.now()}-${file.name}`);
-  } catch (err) {
-    console.error(err);
-    setStatus('画像のアップロードに失敗しました');
-    return;
-  }
-
-  const card = {
-    id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
-    width: 220,
-    height: 260,
-    title: '',
-    memo: '',
-    tags: [],
-    imageFileId,
-    createdAt: new Date().toISOString(),
-  };
-  state.cards.push(card);
-  renderCard(card);
-  setStatus('画像を追加しました(保存ボタンで確定)');
+  const card = await createCardFromCapture({
+    blob: file,
+    filename: `${Date.now()}-${file.name}`,
+    mediaType: 'image',
+  });
+  if (!card) return;
 
   try {
     const ocrText = await ocrImage(file);
@@ -204,6 +196,81 @@ async function handleImageSelected(event) {
   } catch (err) {
     console.warn('Gemini OCR に失敗しました', err);
   }
+}
+
+/** アプリ内蔵カメラ(js/camera.js)を開き、撮影結果をカードとして追加する */
+async function handleOpenCamera() {
+  const result = await openCamera('photo');
+  if (!result) return;
+
+  if (result.kind === 'photo') {
+    const card = await createCardFromCapture({
+      blob: result.blob,
+      filename: `${Date.now()}-photo.jpg`,
+      mediaType: 'image',
+      title: result.caption || '',
+    });
+    if (!card || result.caption) return;
+    try {
+      const ocrText = await ocrImage(result.blob);
+      if (ocrText && !ocrText.includes('(テキストなし)')) {
+        card.title = ocrText.split('\n')[0].slice(0, 40);
+        renderAllCards();
+      }
+    } catch (err) {
+      console.warn('Gemini OCR に失敗しました', err);
+    }
+  } else if (result.kind === 'video') {
+    await createCardFromCapture({
+      blob: result.blob,
+      filename: `${Date.now()}-video.${extensionForMime(result.blob.type, 'webm')}`,
+      mediaType: 'video',
+    });
+  } else if (result.kind === 'audio') {
+    await createCardFromCapture({
+      blob: result.blob,
+      filename: `${Date.now()}-audio.${extensionForMime(result.blob.type, 'webm')}`,
+      mediaType: 'audio',
+    });
+  }
+}
+
+function extensionForMime(mimeType, fallback) {
+  if (!mimeType) return fallback;
+  if (mimeType.includes('mp4')) return 'mp4';
+  if (mimeType.includes('webm')) return 'webm';
+  return fallback;
+}
+
+/** Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラの両経路から使う */
+async function createCardFromCapture({ blob, filename, mediaType, title }) {
+  setStatus('アップロード中…');
+  let fileId;
+  try {
+    fileId = await uploadFile(state.folderId, blob, filename);
+  } catch (err) {
+    console.error(err);
+    setStatus('アップロードに失敗しました');
+    return null;
+  }
+
+  const card = {
+    id: crypto.randomUUID(),
+    x: 40,
+    y: 40,
+    width: 220,
+    height: 260,
+    title: title || '',
+    memo: '',
+    tags: [],
+    mediaType,
+    imageFileId: fileId,
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  setStatus('追加しました(保存ボタンで確定)');
+  return card;
 }
 
 async function handleSave() {
