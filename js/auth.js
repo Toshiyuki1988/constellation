@@ -27,6 +27,10 @@ function initAuth(onSignedIn) {
 
 /** サインインボタンから呼ぶ。同意画面が必要な場合のみ表示される。 */
 function signIn() {
+  if (!tokenClient) {
+    setStatus('読み込み中です。少し待ってからもう一度お試しください');
+    return;
+  }
   tokenClient.requestAccessToken({ prompt: '' });
 }
 

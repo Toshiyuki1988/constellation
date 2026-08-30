@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (isConfigured()) {
     els.signInBtn.disabled = false;
-    initAuth(onSignedIn);
+    whenGisReady(() => initAuth(onSignedIn));
   } else {
     openSettings();
   }
@@ -72,8 +72,17 @@ function handleSettingsSave() {
   saveUserConfig({ clientId, apiKey });
   closeSettings();
   els.signInBtn.disabled = false;
-  initAuth(onSignedIn);
+  whenGisReady(() => initAuth(onSignedIn));
   setStatus('設定を保存しました。「Googleでサインイン」を押してください');
+}
+
+/** Google Identity Services のスクリプト(非同期読み込み)が使えるようになるまで待つ */
+function whenGisReady(callback) {
+  if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+    callback();
+  } else {
+    setTimeout(() => whenGisReady(callback), 100);
+  }
 }
 
 function toggleAuthUI(signedIn) {
