@@ -4,7 +4,12 @@ const state = {
   folderId: null,
   fileId: null,
   cards: [],
+  // セッション(年 / 展覧会 / 作品などの入れ子)。フラット配列 + parentId でツリーを表現する。
+  // { id, type: 'year'|'session', parentId, name, year(yearのみ), createdAt }
+  sessions: [],
 };
+
+const FIRST_YEAR = 2025;
 
 const els = {};
 
@@ -24,10 +29,13 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolOcr = document.getElementById('tool-ocr');
   els.toolVideo = document.getElementById('tool-video');
   els.toolAudio = document.getElementById('tool-audio');
+  els.toolSession = document.getElementById('tool-session');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
   els.imageInput = document.getElementById('image-input');
+  els.yearTabs = document.getElementById('year-tabs');
+  els.breadcrumb = document.getElementById('breadcrumb');
 
   initCanvas(els.viewport, els.content);
 
@@ -62,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolOcr.addEventListener('click', () => handleOpenCamera('caption'));
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
+  els.toolSession.addEventListener('click', handleCreateSession);
   els.saveBtn.addEventListener('click', handleSave);
 });
 
@@ -116,6 +125,7 @@ function toggleAuthUI(signedIn) {
   els.toolOcr.disabled = !signedIn;
   els.toolVideo.disabled = !signedIn;
   els.toolAudio.disabled = !signedIn;
+  els.toolSession.disabled = !signedIn;
 }
 
 function setStatus(message) {
@@ -130,6 +140,16 @@ async function onSignedIn() {
     const { fileId, data } = await loadData(state.folderId);
     state.fileId = fileId;
     state.cards = data.cards || [];
+    state.sessions = data.sessions || [];
+    ensureYearSessions();
+    // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
+    const migrationTargetId = getCurrentYearSessionId();
+    state.cards.forEach((card) => {
+      if (!card.sessionId) card.sessionId = migrationTargetId;
+    });
+    state.breadcrumb = [migrationTargetId];
+    renderYearTabs();
+    renderBreadcrumb();
     renderAllCards();
     setStatus(`読み込み完了(${state.cards.length}件)`);
   } catch (err) {
@@ -138,9 +158,130 @@ async function onSignedIn() {
   }
 }
 
+/* ---------------- セッション(年 / 展覧会 / 作品の入れ子) ---------------- */
+
+// 現在表示中の階層。配列の先頭は必ず年セッション、以降は入れ子を辿った順。
+state.breadcrumb = [];
+
+function activeSessionId() {
+  return state.breadcrumb[state.breadcrumb.length - 1] || null;
+}
+
+function getSessionById(id) {
+  return state.sessions.find((s) => s.id === id);
+}
+
+/** 2025年から今年までの「年セッション」が揃っているか確認し、無ければ作成する */
+function ensureYearSessions() {
+  const currentYear = new Date().getFullYear();
+  for (let year = FIRST_YEAR; year <= currentYear; year++) {
+    const exists = state.sessions.some((s) => s.type === 'year' && s.year === year);
+    if (!exists) {
+      state.sessions.push({
+        id: crypto.randomUUID(),
+        type: 'year',
+        parentId: null,
+        name: String(year),
+        year,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+}
+
+function getCurrentYearSessionId() {
+  const currentYear = new Date().getFullYear();
+  const session = state.sessions.find((s) => s.type === 'year' && s.year === currentYear);
+  return session ? session.id : state.sessions.find((s) => s.type === 'year').id;
+}
+
+function renderYearTabs() {
+  const years = state.sessions
+    .filter((s) => s.type === 'year')
+    .sort((a, b) => a.year - b.year);
+  els.yearTabs.innerHTML = '';
+  years.forEach((session) => {
+    const btn = document.createElement('button');
+    btn.className = 'year-tab' + (state.breadcrumb[0] === session.id ? ' active' : '');
+    btn.textContent = session.name;
+    btn.addEventListener('click', () => enterSession(session.id, true));
+    els.yearTabs.appendChild(btn);
+  });
+}
+
+function renderBreadcrumb() {
+  els.breadcrumb.innerHTML = '';
+  state.breadcrumb.forEach((id, i) => {
+    if (i > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'crumb-sep';
+      sep.textContent = '›';
+      els.breadcrumb.appendChild(sep);
+    }
+    const session = getSessionById(id);
+    const btn = document.createElement('button');
+    btn.className = 'crumb' + (i === state.breadcrumb.length - 1 ? ' current' : '');
+    btn.textContent = session.name;
+    btn.disabled = i === state.breadcrumb.length - 1;
+    btn.addEventListener('click', () => {
+      state.breadcrumb = state.breadcrumb.slice(0, i + 1);
+      renderYearTabs();
+      renderBreadcrumb();
+      renderAllCards();
+    });
+    els.breadcrumb.appendChild(btn);
+  });
+}
+
+/** セッションに入る。isYear=true のときは年タブからの切り替えとして breadcrumb をリセットする */
+function enterSession(id, isYear) {
+  if (isYear) {
+    state.breadcrumb = [id];
+  } else {
+    state.breadcrumb.push(id);
+  }
+  renderYearTabs();
+  renderBreadcrumb();
+  renderAllCards();
+}
+
+function handleCreateSession() {
+  const name = window.prompt('新規セッションの名前(展覧会名や作品名など)');
+  if (!name) return;
+  const session = {
+    id: crypto.randomUUID(),
+    type: 'session',
+    parentId: activeSessionId(),
+    name: name.trim(),
+    createdAt: new Date().toISOString(),
+  };
+  state.sessions.push(session);
+
+  const card = {
+    id: crypto.randomUUID(),
+    x: 40,
+    y: 40,
+    width: 190,
+    height: 150,
+    memo: '',
+    tags: [],
+    mediaType: 'session',
+    refSessionId: session.id,
+    imageFileId: null,
+    sessionId: activeSessionId(),
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  setStatus(`「${session.name}」セッションを作成しました(保存ボタンで確定)`);
+}
+
 function renderAllCards() {
   els.content.innerHTML = '';
-  state.cards.forEach(renderCard);
+  const currentId = activeSessionId();
+  state.cards
+    .filter((card) => card.sessionId === currentId)
+    .forEach(renderCard);
 }
 
 const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
@@ -160,25 +301,45 @@ const EDIT_ICON_SVG =
 function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
+  const isSessionCard = mediaType === 'session';
   // テクストカードは常時展開、それ以外はキャプションが入るまでメモ欄を隠しておく
-  const hasMemo = isTextCard || Boolean(card.memo);
+  const hasMemo = !isSessionCard && (isTextCard || Boolean(card.memo));
   const el = document.createElement('div');
-  el.className = 'star-card' + (isTextCard ? ' star-card--text' : '');
+  el.className = 'star-card' + (isTextCard ? ' star-card--text' : '') + (isSessionCard ? ' star-card--session' : '');
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
   el.dataset.y = String(card.y);
   el.style.width = `${card.width}px`;
   el.style.height = `${card.height}px`;
   el.style.transform = `translate(${card.x}px, ${card.y}px)`;
-  el.innerHTML = `
-    <button class="star-card-delete-btn" title="削除">✕</button>
-    ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? `<button class="star-card-caption-btn" title="キャプションを読み取る">${PIN_ICON_SVG}</button>` : ''}
-    ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
-    <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
-    <button class="star-card-edit-btn" title="メモを編集" ${hasMemo ? '' : 'hidden'}>${EDIT_ICON_SVG}</button>
-  `;
+
+  if (isSessionCard) {
+    const refSession = getSessionById(card.refSessionId);
+    const childCount = state.cards.filter((c) => c.sessionId === card.refSessionId).length;
+    el.innerHTML = `
+      <button class="star-card-delete-btn" title="削除">✕</button>
+      <button class="star-card-session-open" title="開く">
+        <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
+        <span class="star-card-session-count">${childCount}件</span>
+      </button>
+    `;
+  } else {
+    el.innerHTML = `
+      <button class="star-card-delete-btn" title="削除">✕</button>
+      ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? `<button class="star-card-caption-btn" title="キャプションを読み取る">${PIN_ICON_SVG}</button>` : ''}
+      ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
+      <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
+      <button class="star-card-edit-btn" title="メモを編集" ${hasMemo ? '' : 'hidden'}>${EDIT_ICON_SVG}</button>
+    `;
+  }
   els.content.appendChild(el);
   makeCardInteractive(el);
+
+  if (isSessionCard) {
+    el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
+    el.querySelector('.star-card-session-open').addEventListener('click', () => enterSession(card.refSessionId, false));
+    return;
+  }
 
   const memoEl = el.querySelector('.star-card-memo');
   const editBtn = el.querySelector('.star-card-edit-btn');
@@ -346,6 +507,7 @@ function createTextCard(text) {
     tags: [],
     mediaType: 'text',
     imageFileId: null,
+    sessionId: activeSessionId(),
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
@@ -376,6 +538,7 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
     tags: [],
     mediaType,
     imageFileId: fileId,
+    sessionId: activeSessionId(),
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
@@ -387,7 +550,10 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
 async function handleSave() {
   setStatus('保存中…');
   try {
-    state.fileId = await saveData(state.folderId, state.fileId, { cards: state.cards });
+    state.fileId = await saveData(state.folderId, state.fileId, {
+      cards: state.cards,
+      sessions: state.sessions,
+    });
     setStatus('保存しました');
   } catch (err) {
     console.error(err);

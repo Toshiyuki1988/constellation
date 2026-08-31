@@ -49,10 +49,10 @@ async function findDataFile(folderId) {
   return files && files[0] ? files[0].id : null;
 }
 
-/** @returns {Promise<{fileId: string|null, data: {cards: any[]}}>} */
+/** @returns {Promise<{fileId: string|null, data: {cards: any[], sessions: any[]}}>} */
 async function loadData(folderId) {
   const fileId = await findDataFile(folderId);
-  if (!fileId) return { fileId: null, data: { cards: [] } };
+  if (!fileId) return { fileId: null, data: { cards: [], sessions: [] } };
   const res = await driveFetch(`/files/${fileId}?alt=media`);
   const data = await res.json();
   return { fileId, data };
