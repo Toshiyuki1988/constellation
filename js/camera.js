@@ -82,6 +82,7 @@ function ensureCameraDom() {
     focusLayerCaption: document.getElementById('focus-layer-caption'),
     holdChip: document.getElementById('hold-chip'),
     holdChipText: document.getElementById('hold-chip-text'),
+    ocrProgress: document.getElementById('ocr-progress'),
     capBtn: document.getElementById('camera-cap-btn'),
 
     videoScreen: document.getElementById('camera-screen-video'),
@@ -356,6 +357,7 @@ async function capturePhoto() {
 
 function resetCaptionState() {
   camEls.holdChip.classList.remove('show');
+  camEls.ocrProgress.hidden = true;
   camEls.capBtn.hidden = false;
   camEls.capBtn.disabled = false;
   camEls.captionHint.textContent = '画面にキャプションを収めてタップ';
@@ -369,6 +371,9 @@ async function handleCaptionRead() {
   if (!camStream) return;
   camEls.capBtn.disabled = true;
   camEls.captionHint.textContent = '読み取り中…';
+  // Gemini応答は所要時間が読めないため、進捗率ではなく「動いている」ことだけを示す
+  // 不定進捗のスライドバーで表現する。
+  camEls.ocrProgress.hidden = false;
   try {
     // OCR用は取り込み後の作品写真(1600px)より高い解像度・画質で送る。
     // 文字の視認性が最優先なので、ダウンスケールで潰れないようにする。
@@ -392,6 +397,8 @@ async function handleCaptionRead() {
     camDebugLog('OCRエラー: ' + err.message);
     camEls.captionHint.textContent = '読み取りに失敗しました(' + err.message + ')';
     camEls.capBtn.disabled = false;
+  } finally {
+    camEls.ocrProgress.hidden = true;
   }
 }
 
