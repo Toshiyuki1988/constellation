@@ -171,10 +171,11 @@ function getSessionById(id) {
   return state.sessions.find((s) => s.id === id);
 }
 
-/** 2025年から今年までの「年セッション」が揃っているか確認し、無ければ作成する */
+/** 2025年から「今年の翌年」までの「年セッション」が揃っているか確認し、無ければ作成する。
+ *  年明けと同時に翌年分のタブが既に用意されているようにするため、常に1年先まで作っておく。 */
 function ensureYearSessions() {
   const currentYear = new Date().getFullYear();
-  for (let year = FIRST_YEAR; year <= currentYear; year++) {
+  for (let year = FIRST_YEAR; year <= currentYear + 1; year++) {
     const exists = state.sessions.some((s) => s.type === 'year' && s.year === year);
     if (!exists) {
       state.sessions.push({

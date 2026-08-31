@@ -87,6 +87,7 @@ html, body {
 
 .year-tabs {
   flex: none;
+  min-width: 0;
   z-index: 9;
   display: flex;
   gap: 4px;
@@ -116,6 +117,7 @@ html, body {
 
 .breadcrumb {
   flex: none;
+  min-width: 0;
   z-index: 9;
   display: flex;
   align-items: center;
