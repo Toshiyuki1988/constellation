@@ -170,6 +170,16 @@ html, body {
   transform-origin: 0 0;
 }
 
+/* 手のひらツール有効時: カード類の当たり判定を消し、キャンバスの移動/拡大縮小だけを受け付ける */
+.canvas-content.pan-mode-active {
+  pointer-events: none;
+}
+
+.tool-btn.active {
+  background: var(--text);
+  color: #fff;
+}
+
 /* ---------- ボトムツールバー(制作ツール: アップロード・カメラ・OCR・動画・音声) ---------- */
 
 #bottombar {
@@ -428,4 +438,68 @@ html, body {
   background: transparent;
   border: 1px solid var(--line);
   color: var(--muted);
+}
+
+/* ---------- CONSTELLATION PIE(キャンバス長押しメニュー) ---------- */
+
+#pie-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.pie-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.pie-origin-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #000000;
+}
+
+.pie-item {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  transform: translate(0, 0) scale(1);
+  transition: transform 0.06s ease-out, background 0.06s ease-out, color 0.06s ease-out;
+  will-change: transform;
+}
+
+.pie-item svg {
+  width: 16px;
+  height: 16px;
+}
+
+.pie-item-label {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.pie-item--active {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+  z-index: 1;
 }

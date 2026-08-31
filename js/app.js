@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo = document.getElementById('tool-video');
   els.toolAudio = document.getElementById('tool-audio');
   els.toolSession = document.getElementById('tool-session');
+  els.toolPan = document.getElementById('tool-pan');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
@@ -71,8 +72,36 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
+  els.toolPan.addEventListener('click', togglePanMode);
   els.saveBtn.addEventListener('click', handleSave);
+
+  initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled);
 });
+
+/* ---------------- 手のひらツール(カードの当たり判定を切り、キャンバス移動/拡大縮小だけを行う) ---------------- */
+
+let panModeActive = false;
+
+function togglePanMode() {
+  panModeActive = !panModeActive;
+  els.content.classList.toggle('pan-mode-active', panModeActive);
+  els.toolPan.classList.toggle('active', panModeActive);
+  setStatus(panModeActive ? '手のひらツール: キャンバスの移動・拡大縮小のみ' : '手のひらツールを解除しました');
+}
+
+/* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ---------------- */
+
+function buildPieTools() {
+  return [
+    { label: 'アップロード', icon: els.toolUpload.querySelector('svg').outerHTML, action: () => els.imageInput.click() },
+    { label: 'カメラ', icon: els.toolCamera.querySelector('svg').outerHTML, action: () => handleOpenCamera('photo') },
+    { label: 'OCR', icon: els.toolOcr.querySelector('svg').outerHTML, action: () => handleOpenCamera('caption') },
+    { label: '動画撮影', icon: els.toolVideo.querySelector('svg').outerHTML, action: () => handleOpenCamera('video') },
+    { label: '音声録音', icon: els.toolAudio.querySelector('svg').outerHTML, action: () => handleOpenCamera('audio') },
+    { label: 'セッション', icon: els.toolSession.querySelector('svg').outerHTML, action: () => handleCreateSession() },
+    { label: '手のひら', icon: els.toolPan.querySelector('svg').outerHTML, action: () => togglePanMode() },
+  ];
+}
 
 function openSettings() {
   els.settingsClientId.value = CONFIG.GOOGLE_CLIENT_ID;
@@ -126,6 +155,7 @@ function toggleAuthUI(signedIn) {
   els.toolVideo.disabled = !signedIn;
   els.toolAudio.disabled = !signedIn;
   els.toolSession.disabled = !signedIn;
+  els.toolPan.disabled = !signedIn;
 }
 
 function setStatus(message) {
@@ -422,11 +452,51 @@ function syncCardHeight(el) {
   if (card) card.height = total;
 }
 
+/** セッション配下(入れ子を含む)のカード数・子セッション数を数える(削除確認の文言に使う) */
+function countSessionContents(sessionId) {
+  let cardCount = 0;
+  let sessionCount = 0;
+  state.cards
+    .filter((c) => c.sessionId === sessionId)
+    .forEach((c) => {
+      if (c.mediaType === 'session') {
+        sessionCount += 1;
+        const sub = countSessionContents(c.refSessionId);
+        cardCount += sub.cardCount;
+        sessionCount += sub.sessionCount;
+      } else {
+        cardCount += 1;
+      }
+    });
+  return { cardCount, sessionCount };
+}
+
+/**
+ * カード削除の確認ダイアログを出す。セッションカードは中身の件数を提示したうえで2段階確認にする。
+ * 削除はキャンバス上の参照(カード)を消すだけで、Drive上のファイル本体(画像・動画・音声)は削除しない。
+ */
+function confirmDeleteCard(card) {
+  if (card.mediaType !== 'session') {
+    return window.confirm('このカードを削除しますか?\n(Drive上のファイル本体は削除されません)');
+  }
+  const refSession = getSessionById(card.refSessionId);
+  const { cardCount, sessionCount } = countSessionContents(card.refSessionId);
+  const parts = [];
+  if (sessionCount > 0) parts.push(`内包セッション${sessionCount}件`);
+  if (cardCount > 0) parts.push(`カード${cardCount}件`);
+  const detail = parts.length > 0 ? `中身: ${parts.join(' / ')}\n` : '中身は空です。\n';
+  const name = refSession ? refSession.name : '(不明なセッション)';
+  const step1 = window.confirm(`「${name}」を削除しますか?\n${detail}(Drive上のファイル本体は削除されません)`);
+  if (!step1) return false;
+  return window.confirm(`本当によろしいですか?\n「${name}」への参照が完全に失われます。`);
+}
+
 function deleteCard(card, el) {
+  if (!confirmDeleteCard(card)) return;
   const idx = state.cards.indexOf(card);
   if (idx !== -1) state.cards.splice(idx, 1);
   el.remove();
-  setStatus('削除しました(保存ボタンで確定)');
+  setStatus('削除しました(保存ボタンで確定・Drive上のファイル本体は残ります)');
 }
 
 /** 写真・動画カードの📌ボタン: OCRだけ起動し、結果をそのカードのメモに追記する */
