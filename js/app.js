@@ -136,6 +136,12 @@ function renderAllCards() {
 
 const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
 
+// キャプションボタンのアイコン(モノクロのピン、絵文字ではなく currentColor の線画)
+const PIN_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12a7 7 0 10-14 0c0 4.42 7 12 7 12z"/>' +
+  '<circle cx="12" cy="9" r="2.4"/></svg>';
+
 function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
@@ -148,11 +154,9 @@ function renderCard(card) {
   el.style.height = `${card.height}px`;
   el.style.transform = `translate(${card.x}px, ${card.y}px)`;
   el.innerHTML = `
+    <button class="star-card-delete-btn" title="削除">✕</button>
+    ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? `<button class="star-card-caption-btn" title="キャプションを読み取る">${PIN_ICON_SVG}</button>` : ''}
     ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
-    <div class="star-card-title-row">
-      <div class="star-card-title">${escapeHtml(card.title || '無題')}</div>
-      ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? '<button class="star-card-caption-btn" title="キャプションを読み取ってタイトルにする">📌 キャプション</button>' : ''}
-    </div>
     <textarea class="star-card-memo" placeholder="メモ">${escapeHtml(card.memo || '')}</textarea>
   `;
   els.content.appendChild(el);
@@ -161,7 +165,10 @@ function renderCard(card) {
   const memoEl = el.querySelector('.star-card-memo');
   memoEl.addEventListener('input', () => {
     card.memo = memoEl.value;
+    syncCardHeight(el);
   });
+
+  el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
 
   const captionBtn = el.querySelector('.star-card-caption-btn');
   if (captionBtn) {
@@ -180,16 +187,46 @@ function renderCard(card) {
       }
     });
   }
+
+  syncCardHeight(el);
 }
 
-/** 写真・動画カードの「キャプション」ボタン: OCRだけ起動し、結果をそのカードのタイトル/メモにする */
+/**
+ * メモの中身に合わせてテキストエリアとカード全体の高さを伸ばし、スクロールなしで全文が
+ * 見えるようにする。写真・動画のメディア枠は現在の高さでいったん固定してから、
+ * メモぶんだけカードを縦に伸ばす。
+ */
+function syncCardHeight(el) {
+  const memoEl = el.querySelector('.star-card-memo');
+  if (!memoEl) return;
+  const mediaEl = el.querySelector('.star-card-media');
+  if (mediaEl && mediaEl.style.flex !== 'none') {
+    mediaEl.style.height = `${mediaEl.getBoundingClientRect().height}px`;
+    mediaEl.style.flex = 'none';
+  }
+  memoEl.style.height = 'auto';
+  memoEl.style.height = `${memoEl.scrollHeight}px`;
+  el.style.height = 'auto';
+  const total = el.getBoundingClientRect().height;
+  el.style.height = `${total}px`;
+  const card = getCardById(el.dataset.id);
+  if (card) card.height = total;
+}
+
+function deleteCard(card, el) {
+  const idx = state.cards.indexOf(card);
+  if (idx !== -1) state.cards.splice(idx, 1);
+  el.remove();
+  setStatus('削除しました(保存ボタンで確定)');
+}
+
+/** 写真・動画カードの📌ボタン: OCRだけ起動し、結果をそのカードのメモに追記する */
 async function handleCardCaption(card, el) {
   const result = await openCamera('caption');
   if (!result || result.kind !== 'text') return;
-  card.title = result.text.split('\n')[0].slice(0, 40);
   card.memo = card.memo ? `${card.memo}\n\n${result.text}` : result.text;
-  el.querySelector('.star-card-title').textContent = card.title;
   el.querySelector('.star-card-memo').value = card.memo;
+  syncCardHeight(el);
   setStatus('キャプションを反映しました(保存ボタンで確定)');
 }
 
@@ -212,7 +249,6 @@ async function handleImageSelected(event) {
   try {
     const ocrText = await ocrImage(file);
     if (ocrText && !ocrText.includes('(テキストなし)')) {
-      card.title = ocrText.split('\n')[0].slice(0, 40);
       card.memo = ocrText;
       renderAllCards();
     }
@@ -236,7 +272,6 @@ async function handleOpenCamera() {
     try {
       const ocrText = await ocrImage(result.blob);
       if (ocrText && !ocrText.includes('(テキストなし)')) {
-        card.title = ocrText.split('\n')[0].slice(0, 40);
         card.memo = ocrText;
         renderAllCards();
       }
@@ -274,8 +309,7 @@ function createTextCard(text) {
     x: 40,
     y: 40,
     width: 240,
-    height: 200,
-    title: text.split('\n')[0].slice(0, 40),
+    height: 120,
     memo: text,
     tags: [],
     mediaType: 'text',
@@ -289,7 +323,7 @@ function createTextCard(text) {
 }
 
 /** Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラの両経路から使う */
-async function createCardFromCapture({ blob, filename, mediaType, title, memo }) {
+async function createCardFromCapture({ blob, filename, mediaType, memo }) {
   setStatus('アップロード中…');
   let fileId;
   try {
@@ -306,7 +340,6 @@ async function createCardFromCapture({ blob, filename, mediaType, title, memo })
     y: 40,
     width: 220,
     height: 260,
-    title: title || '',
     memo: memo || '',
     tags: [],
     mediaType,

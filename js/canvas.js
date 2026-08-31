@@ -59,6 +59,7 @@ function onViewportWheel(event) {
 function makeCardInteractive(el) {
   interact(el)
     .draggable({
+      ignoreFrom: 'button, textarea',
       listeners: {
         move(event) {
           const x = (parseFloat(el.dataset.x) || 0) + event.dx / viewportState.scale;

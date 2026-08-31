@@ -138,44 +138,44 @@ html, body {
   width: 100%;
 }
 
-.star-card-title-row {
+.star-card-delete-btn,
+.star-card-caption-btn {
+  position: absolute;
+  top: 4px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 0;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  border: none;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
 }
 
-.star-card-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.star-card-delete-btn:hover,
+.star-card-caption-btn:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.star-card-delete-btn {
+  right: 4px;
 }
 
 .star-card-caption-btn {
-  flex: none;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 10px;
-  padding: 3px 6px;
-  cursor: pointer;
-  white-space: nowrap;
+  left: 4px;
 }
 
-.star-card-caption-btn:hover {
-  color: var(--text);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-
+/* 高さは js/app.js の syncCardHeight() が内容に合わせて都度セットする(スクロールさせず全文表示) */
 .star-card-memo {
   resize: none;
-  height: 48px;
+  overflow: hidden;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
@@ -185,10 +185,9 @@ html, body {
   font-family: inherit;
 }
 
-/* テクストカード: 画像枠を持たないぶん、メモ欄を全面まで展開して全文を読めるようにする */
+/* テクストカードは画像枠がなく本文がすぐ上端まで来るため、右上の削除ボタンぶんだけ空ける */
 .star-card--text .star-card-memo {
-  flex: 1;
-  height: auto;
+  margin-top: 20px;
 }
 
 .modal-overlay {
