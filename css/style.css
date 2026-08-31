@@ -192,9 +192,9 @@ html, body {
 }
 
 .star-card-delete-btn,
-.star-card-caption-btn {
+.star-card-caption-btn,
+.star-card-edit-btn {
   position: absolute;
-  top: 4px;
   z-index: 3;
   width: 22px;
   height: 22px;
@@ -217,19 +217,26 @@ html, body {
   border-color: var(--rust);
 }
 
-.star-card-caption-btn:hover {
+.star-card-caption-btn:hover,
+.star-card-edit-btn:hover {
   color: var(--text);
   background: #fff;
   border-color: var(--text);
 }
 
-.star-card-delete-btn { right: 4px; }
-.star-card-caption-btn { left: 4px; }
+.star-card-delete-btn { top: 4px; right: 4px; }
+.star-card-caption-btn { top: 4px; left: 4px; }
+.star-card-edit-btn { bottom: 4px; left: 4px; }
 
-/* 高さは js/app.js の syncCardHeight() が内容に合わせて都度セットする(スクロールさせず全文表示) */
+/*
+ * 高さは js/app.js の syncCardHeight() が内容に合わせて都度セットする(スクロールさせず全文表示)。
+ * pointer-events は既定で無効にし、カードのドラッグ移動を優先する。鉛筆ボタン(.star-card-edit-btn)
+ * を押した時だけ js/app.js 側で 'auto' に切り替えて編集を受け付ける。
+ */
 .star-card-memo {
   resize: none;
   overflow: hidden;
+  pointer-events: none;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 2px;

@@ -151,9 +151,17 @@ const PIN_ICON_SVG =
   'stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12a7 7 0 10-14 0c0 4.42 7 12 7 12z"/>' +
   '<circle cx="12" cy="9" r="2.4"/></svg>';
 
+// メモ編集ボタンのアイコン(モノクロの鉛筆)
+const EDIT_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>' +
+  '<path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>';
+
 function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
+  // テクストカードは常時展開、それ以外はキャプションが入るまでメモ欄を隠しておく
+  const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
   el.className = 'star-card' + (isTextCard ? ' star-card--text' : '');
   el.dataset.id = card.id;
@@ -166,15 +174,27 @@ function renderCard(card) {
     <button class="star-card-delete-btn" title="削除">✕</button>
     ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? `<button class="star-card-caption-btn" title="キャプションを読み取る">${PIN_ICON_SVG}</button>` : ''}
     ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
-    <textarea class="star-card-memo" placeholder="メモ">${escapeHtml(card.memo || '')}</textarea>
+    <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
+    <button class="star-card-edit-btn" title="メモを編集" ${hasMemo ? '' : 'hidden'}>${EDIT_ICON_SVG}</button>
   `;
   els.content.appendChild(el);
   makeCardInteractive(el);
 
   const memoEl = el.querySelector('.star-card-memo');
+  const editBtn = el.querySelector('.star-card-edit-btn');
+
   memoEl.addEventListener('input', () => {
     card.memo = memoEl.value;
     syncCardHeight(el);
+  });
+  // 既定ではメモへのポインタ操作を無効化し、カードの移動を優先する。
+  // 鉛筆ボタンを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
+  memoEl.addEventListener('blur', () => {
+    memoEl.style.pointerEvents = 'none';
+  });
+  editBtn.addEventListener('click', () => {
+    memoEl.style.pointerEvents = 'auto';
+    memoEl.focus();
   });
 
   el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
@@ -234,7 +254,10 @@ async function handleCardCaption(card, el) {
   const result = await openCamera('caption');
   if (!result || result.kind !== 'text') return;
   card.memo = card.memo ? `${card.memo}\n\n${result.text}` : result.text;
-  el.querySelector('.star-card-memo').value = card.memo;
+  const memoEl = el.querySelector('.star-card-memo');
+  memoEl.value = card.memo;
+  memoEl.hidden = false;
+  el.querySelector('.star-card-edit-btn').hidden = false;
   syncCardHeight(el);
   setStatus('キャプションを反映しました(保存ボタンで確定)');
 }
