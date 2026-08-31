@@ -299,6 +299,24 @@ const EDIT_ICON_SVG =
   'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>' +
   '<path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>';
 
+/**
+ * セッションカードはドラッグで動かせるようにするため開閉ボタンを持たず、カード本体が
+ * ドラッグ対象になる。そのぶん「ほぼ動かさずに指を離した(=タップ/クリック)」場合だけ
+ * onOpen を呼び、ドラッグ操作と区別する。
+ */
+function attachTapToOpen(el, onOpen) {
+  let downPos = null;
+  el.addEventListener('pointerdown', (event) => {
+    downPos = { x: event.clientX, y: event.clientY };
+  });
+  el.addEventListener('pointerup', (event) => {
+    if (!downPos) return;
+    const moved = Math.hypot(event.clientX - downPos.x, event.clientY - downPos.y);
+    downPos = null;
+    if (moved < 6) onOpen();
+  });
+}
+
 function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
@@ -319,10 +337,10 @@ function renderCard(card) {
     const childCount = state.cards.filter((c) => c.sessionId === card.refSessionId).length;
     el.innerHTML = `
       <button class="star-card-delete-btn" title="削除">✕</button>
-      <button class="star-card-session-open" title="開く">
+      <div class="star-card-session-body" title="タップで開く">
         <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
         <span class="star-card-session-count">${childCount}件</span>
-      </button>
+      </div>
     `;
   } else {
     el.innerHTML = `
@@ -338,7 +356,7 @@ function renderCard(card) {
 
   if (isSessionCard) {
     el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
-    el.querySelector('.star-card-session-open').addEventListener('click', () => enterSession(card.refSessionId, false));
+    attachTapToOpen(el.querySelector('.star-card-session-body'), () => enterSession(card.refSessionId, false));
     return;
   }
 
