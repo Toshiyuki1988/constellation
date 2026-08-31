@@ -35,6 +35,11 @@ function initCanvas(viewportEl, contentElArg) {
     });
 
   viewportEl.addEventListener('wheel', onViewportWheel, { passive: false });
+
+  // 長押し(パイメニューのトリガー)でブラウザ標準のテキスト選択/コンテキストメニューが
+  // 出てしまうのを防ぐ。CSS の user-select だけでは Android Chrome 等で防ぎきれないため
+  // contextmenu 自体も止める。
+  viewportEl.addEventListener('contextmenu', (event) => event.preventDefault());
 }
 
 function onViewportPan(event) {

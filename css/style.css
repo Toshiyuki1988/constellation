@@ -156,6 +156,17 @@ html, body {
   background-color: var(--bg);
   background-image: radial-gradient(circle, rgba(0, 0, 0, 0.12) 1px, transparent 1px);
   background-size: 26px 26px;
+  /* 長押し(パイメニューのトリガー)でブラウザ標準のテキスト選択/コピーメニューが出るのを防ぐ */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* メモ欄だけは編集のため選択を許可する(親の user-select: none を打ち消す) */
+.star-card-memo {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 @media (max-width: 480px) {

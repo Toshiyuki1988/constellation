@@ -153,17 +153,58 @@ function onPiePointerMove(event) {
   updatePieMagnification(event.clientX, event.clientY);
 }
 
+/**
+ * 指を離しても自動実行・自動クローズはしない。狙いを定め直してから確定できるよう、
+ * メニューを開いたままの「待機状態」にする。待機状態では各ツールをタップすると確定、
+ * メニュー外(ツール以外)をタップするとキャンセルする。
+ */
 function onPiePointerUp(event) {
   if (!pieState || event.pointerId !== pieState.pointerId) return;
   updatePieMagnification(event.clientX, event.clientY);
-  const { activeIndex, items } = pieState;
-  closePieMenu();
-  if (activeIndex >= 0) items[activeIndex].tool.action();
+  document.removeEventListener('pointermove', onPiePointerMove);
+  document.removeEventListener('pointerup', onPiePointerUp);
+  document.removeEventListener('pointercancel', onPiePointerCancel);
+  enterPieWaitingState();
 }
 
 function onPiePointerCancel(event) {
   if (!pieState || event.pointerId !== pieState.pointerId) return;
+  document.removeEventListener('pointermove', onPiePointerMove);
+  document.removeEventListener('pointerup', onPiePointerUp);
+  document.removeEventListener('pointercancel', onPiePointerCancel);
   closePieMenu();
+}
+
+function enterPieWaitingState() {
+  if (!pieState) return;
+  // #pie-menu / 各ツールは既定で pointer-events: none(裏のキャンバス操作の邪魔をしないため)
+  // なので、待機状態に入ったらここだけクリックを受け付けるようにする。
+  pieState.overlay.style.pointerEvents = 'auto';
+  pieState.items.forEach((item) => {
+    item.el.style.pointerEvents = 'auto';
+    item.el.addEventListener('pointerenter', () => setPieActiveItem(item));
+    item.el.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const tool = item.tool;
+      closePieMenu();
+      tool.action();
+    });
+  });
+  pieState.overlay.addEventListener('click', () => closePieMenu());
+  document.addEventListener('keydown', onPieKeydown);
+}
+
+function setPieActiveItem(activeItem) {
+  if (!pieState) return;
+  pieState.items.forEach((item) => {
+    const isActive = item === activeItem;
+    item.el.style.transform = `scale(${isActive ? 1.7 : 1})`;
+    item.el.classList.toggle('pie-item--active', isActive);
+  });
+}
+
+function onPieKeydown(event) {
+  if (event.key === 'Escape') closePieMenu();
 }
 
 /** macOSのDockに似た近接拡大: 指に一番近いツールだけを強調し、選択候補として扱う */
@@ -194,6 +235,7 @@ function closePieMenu() {
   document.removeEventListener('pointermove', onPiePointerMove);
   document.removeEventListener('pointerup', onPiePointerUp);
   document.removeEventListener('pointercancel', onPiePointerCancel);
+  document.removeEventListener('keydown', onPieKeydown);
   pieState.overlay.remove();
   pieState = null;
   interact(els.viewport).draggable({ enabled: true }).gesturable({ enabled: true });
