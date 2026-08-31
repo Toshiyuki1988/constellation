@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="css/style.css">
 <link rel="stylesheet" href="css/camera.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
   // URLに ?debug を付けたときだけ、画面下部にログを表示する簡易デバッグ機能。
   // 通常利用時は何も表示されない。
@@ -58,8 +58,6 @@
       <button id="settings-btn" title="設定(クライアントID・APIキー)">⚙ 設定</button>
       <button id="sign-in-btn" disabled>Googleでサインイン</button>
       <button id="sign-out-btn" hidden>サインアウト</button>
-      <button id="add-card-btn" disabled>+ 作品を追加</button>
-      <button id="camera-btn" disabled title="アプリ内蔵カメラで撮影(OSのシャッター音を回避)">📷 その場で撮影</button>
       <button id="save-btn" disabled>保存</button>
     </div>
     <span id="status" class="status"></span>
@@ -69,18 +67,35 @@
     <div id="canvas-content" class="canvas-content"></div>
   </main>
 
+  <footer id="bottombar">
+    <button class="tool-btn" id="tool-upload" disabled title="端末から画像を選ぶ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5-4 4-2-2-6 6"/></svg>
+      アップロード
+    </button>
+    <button class="tool-btn" id="tool-camera" disabled title="その場で撮影(OSのシャッター音を回避)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13.5" r="3.2"/></svg>
+      カメラ
+    </button>
+    <button class="tool-btn" id="tool-ocr" disabled title="キャプションを読み取る">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M8 9h8M8 12.5h8M8 16h5"/></svg>
+      OCR
+    </button>
+    <button class="tool-btn" id="tool-video" disabled title="動画を撮影">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h11v12H4z"/><path d="M15 10l5-3v10l-5-3z"/></svg>
+      動画撮影
+    </button>
+    <button class="tool-btn" id="tool-audio" disabled title="音声を録音">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
+      音声録音
+    </button>
+  </footer>
+
   <input type="file" id="image-input" accept="image/*" hidden>
 
   <button id="debug-toggle" hidden style="position:fixed; right:8px; bottom:8px; z-index:1000; width:32px; height:32px; border-radius:50%; border:none; background:rgba(0,0,0,0.7); color:#8f8; font-size:14px; line-height:1;">🐞</button>
   <pre id="debug-log" hidden style="position:fixed; left:0; right:0; bottom:0; z-index:999; max-height:40vh; overflow:auto; margin:0; padding:8px 8px 40px; background:rgba(0,0,0,0.85); color:#8f8; font-size:11px; white-space:pre-wrap;"></pre>
 
   <div id="camera-overlay">
-    <div id="camera-mode-switch">
-      <button class="active" data-mode="photo">写真</button>
-      <button data-mode="caption">テクスト</button>
-      <button data-mode="video">動画</button>
-      <button data-mode="audio">音声</button>
-    </div>
     <button id="camera-close" title="閉じる">✕ 閉じる</button>
 
     <div class="cam-screen active" id="camera-screen-photo" data-mode="photo">

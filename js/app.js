@@ -18,9 +18,12 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsCancelBtn = document.getElementById('settings-cancel-btn');
   els.signInBtn = document.getElementById('sign-in-btn');
   els.signOutBtn = document.getElementById('sign-out-btn');
-  els.addCardBtn = document.getElementById('add-card-btn');
-  els.cameraBtn = document.getElementById('camera-btn');
   els.saveBtn = document.getElementById('save-btn');
+  els.toolUpload = document.getElementById('tool-upload');
+  els.toolCamera = document.getElementById('tool-camera');
+  els.toolOcr = document.getElementById('tool-ocr');
+  els.toolVideo = document.getElementById('tool-video');
+  els.toolAudio = document.getElementById('tool-audio');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
@@ -53,9 +56,12 @@ document.addEventListener('DOMContentLoaded', () => {
     toggleAuthUI(false);
     setStatus('サインアウトしました');
   });
-  els.addCardBtn.addEventListener('click', () => els.imageInput.click());
+  els.toolUpload.addEventListener('click', () => els.imageInput.click());
   els.imageInput.addEventListener('change', handleImageSelected);
-  els.cameraBtn.addEventListener('click', handleOpenCamera);
+  els.toolCamera.addEventListener('click', () => handleOpenCamera('photo'));
+  els.toolOcr.addEventListener('click', () => handleOpenCamera('caption'));
+  els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
+  els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.saveBtn.addEventListener('click', handleSave);
 });
 
@@ -104,9 +110,12 @@ function whenGisReady(callback) {
 function toggleAuthUI(signedIn) {
   els.signInBtn.hidden = signedIn;
   els.signOutBtn.hidden = !signedIn;
-  els.addCardBtn.disabled = !signedIn;
-  els.cameraBtn.disabled = !signedIn;
   els.saveBtn.disabled = !signedIn;
+  els.toolUpload.disabled = !signedIn;
+  els.toolCamera.disabled = !signedIn;
+  els.toolOcr.disabled = !signedIn;
+  els.toolVideo.disabled = !signedIn;
+  els.toolAudio.disabled = !signedIn;
 }
 
 function setStatus(message) {
@@ -258,8 +267,8 @@ async function handleImageSelected(event) {
 }
 
 /** アプリ内蔵カメラ(js/camera.js)を開き、撮影結果をカードとして追加する */
-async function handleOpenCamera() {
-  const result = await openCamera('photo');
+async function handleOpenCamera(mode) {
+  const result = await openCamera(mode);
   if (!result) return;
 
   if (result.kind === 'photo') {

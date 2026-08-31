@@ -64,7 +64,6 @@ function ensureCameraDom() {
   camEls = {
     overlay: document.getElementById('camera-overlay'),
     closeBtn: document.getElementById('camera-close'),
-    modeButtons: Array.from(document.querySelectorAll('#camera-mode-switch button')),
     screens: Array.from(document.querySelectorAll('.cam-screen')),
     error: document.getElementById('camera-error'),
 
@@ -102,13 +101,6 @@ function ensureCameraDom() {
 function wireCameraEvents() {
   camEls.closeBtn.addEventListener('click', closeCamera);
 
-  camEls.modeButtons.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (isRecording()) return;
-      switchCameraMode(btn.dataset.mode);
-    });
-  });
-
   camEls.shutterPhoto.addEventListener('click', capturePhoto);
   camEls.capBtn.addEventListener('click', handleCaptionRead);
 
@@ -143,7 +135,6 @@ async function switchCameraMode(mode) {
   try {
     teardownModeExtras();
     camMode = mode;
-    updateModeSwitchUI();
     updateScreenVisibility();
     clearCameraError();
 
@@ -207,10 +198,6 @@ function teardownModeExtras() {
     camEls.tiltLayerPhoto.classList.remove('enabled', 'aligned');
     camEls.tiltLayerCaption.classList.remove('enabled', 'aligned');
   }
-}
-
-function updateModeSwitchUI() {
-  camEls.modeButtons.forEach((btn) => btn.classList.toggle('active', btn.dataset.mode === camMode));
 }
 
 function updateScreenVisibility() {
