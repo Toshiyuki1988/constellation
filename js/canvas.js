@@ -161,6 +161,24 @@ function zoomAroundPoint(clientX, clientY, newScale) {
   applyViewportTransform();
 }
 
+/** ブラウザ座標(clientX/Y)を、カードと同じ座標系(.canvas-content の生px)に変換する */
+function clientToContent(clientX, clientY) {
+  const rect = viewportEl.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left - viewportState.x) / viewportState.scale,
+    y: (clientY - rect.top - viewportState.y) / viewportState.scale,
+  };
+}
+
+/** カード要素の中心を、.canvas-content の生px座標(カードのdata-x/y/style.width/heightと同じ系)で返す */
+function getCardCenterFromEl(el) {
+  const x = parseFloat(el.dataset.x) || 0;
+  const y = parseFloat(el.dataset.y) || 0;
+  const w = parseFloat(el.style.width) || el.offsetWidth;
+  const h = parseFloat(el.style.height) || el.offsetHeight;
+  return { x: x + w / 2, y: y + h / 2 };
+}
+
 function onViewportPinch(event) {
   zoomAroundPoint(event.clientX, event.clientY, viewportState.scale * (1 + event.ds));
 }
@@ -330,6 +348,7 @@ function attachCardGestures(el) {
     el.dataset.y = String(y);
     applyCardTransform(el);
     updateAutoPanPointer(clientX, clientY);
+    redrawAsterismLines(); // 繋がっている線をカードの移動に追従させる
   }
 
   function endMove() {
@@ -437,6 +456,7 @@ function attachCardGestures(el) {
     el.dataset.y = String(y);
     applyCardTransform(el);
     fitMediaToCardHeight(el);
+    redrawAsterismLines(); // 繋がっている線をカードのリサイズに追従させる
   }
 
   function commitHandleResize() {
@@ -489,7 +509,129 @@ function attachCardGestures(el) {
   });
 }
 
+/* ---------------- Asterism: 編集ガイドのASTRを長押し→ドラッグでカード同士を線でつなぐ ---------------- */
+
+const ASTR_LONG_PRESS_MS = 280;
+const ASTR_PRESS_TOLERANCE_PX = 10;
+
+/**
+ * ASTRヘックス(緑バッジ)1つぶんのジェスチャー。カード長押し(attachCardGestures)と同じ
+ * Pointer Captureパターンで、「長押し確定→ドラッグ中は仮の線と対象カードの緑枠を表示→
+ * 指を離した位置のカードへ接続」を行う。js/app.js の createAstrConnection() へ最終的な
+ * データ更新を委譲する(このファイルは座標計算とジェスチャーだけを担当する)。
+ */
+function attachAstrGesture(el) {
+  const hexEl = el.querySelector('.star-card-hex--astr');
+  if (!hexEl) return;
+
+  let pointerId = null;
+  let pressStart = null;
+  let pressTimer = null;
+  let dragging = false;
+  let tempLine = null;
+  let targetEl = null;
+
+  function clearPressTimer() {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  }
+
+  function updateTempLine(clientX, clientY) {
+    if (!asterismSvg) return;
+    if (!tempLine) {
+      tempLine = document.createElementNS(SVG_NS, 'line');
+      tempLine.setAttribute('class', 'asterism-line asterism-line--drag');
+      asterismSvg.appendChild(tempLine);
+    }
+    const source = getCardCenterFromEl(el);
+    const p = clientToContent(clientX, clientY);
+    tempLine.setAttribute('x1', source.x);
+    tempLine.setAttribute('y1', source.y);
+    tempLine.setAttribute('x2', p.x);
+    tempLine.setAttribute('y2', p.y);
+  }
+
+  function setTarget(newTargetEl) {
+    if (targetEl === newTargetEl) return;
+    if (targetEl) targetEl.classList.remove('star-card--astr-target');
+    targetEl = newTargetEl;
+    if (targetEl) targetEl.classList.add('star-card--astr-target');
+  }
+
+  function updateHoverTarget(clientX, clientY) {
+    const under = document.elementFromPoint(clientX, clientY);
+    const cardUnder = under ? under.closest('.star-card') : null;
+    setTarget(cardUnder && cardUnder !== el ? cardUnder : null);
+  }
+
+  function endDrag(commit) {
+    dragging = false;
+    if (tempLine) {
+      tempLine.remove();
+      tempLine = null;
+    }
+    if (commit && targetEl) {
+      hexEl.dataset.justDragged = '1'; // 直後に発火するclickでヒントメッセージを出さないようにする
+      createAstrConnection(el.dataset.id, targetEl.dataset.id);
+    }
+    setTarget(null);
+    stopAutoPan();
+    interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
+  }
+
+  hexEl.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    if (pointerId !== null) return;
+    pointerId = event.pointerId;
+    pressStart = { x: event.clientX, y: event.clientY };
+    try {
+      hexEl.setPointerCapture(event.pointerId);
+    } catch (err) {
+      /* no-op */
+    }
+    clearPressTimer();
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      dragging = true;
+      if (navigator.vibrate) navigator.vibrate(8);
+      interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
+      updateTempLine(pressStart.x, pressStart.y);
+    }, ASTR_LONG_PRESS_MS);
+  });
+
+  hexEl.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== pointerId) return;
+    if (dragging) {
+      updateTempLine(event.clientX, event.clientY);
+      updateHoverTarget(event.clientX, event.clientY);
+      updateAutoPanPointer(event.clientX, event.clientY);
+      return;
+    }
+    if (pressStart) {
+      const moved = Math.hypot(event.clientX - pressStart.x, event.clientY - pressStart.y);
+      if (moved > ASTR_PRESS_TOLERANCE_PX) {
+        clearPressTimer();
+        pointerId = null;
+        pressStart = null;
+      }
+    }
+  });
+
+  function handleEnd(event) {
+    if (event.pointerId !== pointerId) return;
+    clearPressTimer();
+    if (dragging) endDrag(true);
+    pointerId = null;
+    pressStart = null;
+  }
+
+  ['pointerup', 'pointercancel'].forEach((type) => hexEl.addEventListener(type, handleEnd));
+}
+
 /** カード要素にジェスチャー(長押し編集ガイド表示・移動・ハンドルリサイズ)を付与する */
 function makeCardInteractive(el) {
   attachCardGestures(el);
+  attachAstrGesture(el);
 }

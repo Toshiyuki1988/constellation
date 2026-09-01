@@ -187,6 +187,49 @@ html, body {
   transition: transform 0.35s ease-out;
 }
 
+/* ---------- Asterism(見た順の自動線 + ASTRガイドでの手動接続) ----------
+ * .canvas-content の子として置き、カードと同じ生px座標系で線を引く(js/app.js参照)。
+ * カードより前にDOMへ挿入しているので、z-indexなしで自然に線がカードの下に潜る。 */
+.asterism-layer {
+  position: absolute;
+  top: 0; left: 0;
+  width: 0; height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.asterism-line {
+  stroke: var(--muted);
+  stroke-width: 1.4;
+  opacity: 0.55;
+}
+
+.asterism-line--manual {
+  stroke: var(--rust);
+  opacity: 0.75;
+}
+
+/* ASTRドラッグ中の仮の線(接続先が決まるまでの追従表示) */
+.asterism-line--drag {
+  stroke: #2e7d32;
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  opacity: 0.9;
+}
+
+/* 手動線だけ、見えている細い線より広い透明な線を重ねてタップしやすくする(削除用) */
+.asterism-line-hit {
+  stroke: transparent;
+  stroke-width: 16;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* ASTRドラッグ中、指/カーソルが乗っているカードの接続候補ハイライト */
+.star-card--astr-target {
+  box-shadow: 0 0 0 3px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3);
+}
+
 .tool-btn.active {
   background: var(--text);
   color: #fff;

@@ -7,6 +7,9 @@ const state = {
   // セッション(年 / 展覧会 / 作品などの入れ子)。フラット配列 + parentId でツリーを表現する。
   // { id, type: 'year'|'session', parentId, name, year(yearのみ), createdAt }
   sessions: [],
+  // Asterism: ASTRガイドから手動で結んだカード同士のつながり。
+  // { id, sessionId, cardIdA, cardIdB }(向きの意味は持たない)
+  connections: [],
 };
 
 const FIRST_YEAR = 2025;
@@ -191,6 +194,7 @@ async function onSignedIn() {
     state.fileId = fileId;
     state.cards = data.cards || [];
     state.sessions = data.sessions || [];
+    state.connections = data.connections || [];
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -333,16 +337,111 @@ async function handleCreateSession() {
   };
   state.cards.push(card);
   renderCard(card);
+  redrawAsterismLines();
   setStatus(`「${session.name}」セッションを作成しました`);
   scheduleAutoSave();
 }
 
 function renderAllCards() {
   els.content.innerHTML = '';
+  createAsterismLayer();
   const currentId = activeSessionId();
   state.cards
     .filter((card) => card.sessionId === currentId)
     .forEach(renderCard);
+  redrawAsterismLines();
+}
+
+/* ---------------- Asterism(見た順の自動線 + ASTRガイドでの手動接続) ----------------
+ * 自動の「見た順」線はデータを持たず、毎回createdAt順に並べ替えて描き直すだけ。
+ * 手動でつないだ線だけ state.connections に実データとして保持する。
+ * 線は .canvas-content の子(カードと同じ座標系)に置いたSVGへ、カード中心の
+ * 生座標で描くことで、パン/ズームに追従する計算を別途行わずに済ませている。 */
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let asterismSvg = null;
+
+function createAsterismLayer() {
+  asterismSvg = document.createElementNS(SVG_NS, 'svg');
+  asterismSvg.setAttribute('class', 'asterism-layer');
+  els.content.appendChild(asterismSvg);
+}
+
+function cardElById(id) {
+  return els.content.querySelector(`.star-card[data-id="${CSS.escape(String(id))}"]`);
+}
+
+function drawAsterismLine(elA, elB, className) {
+  const a = getCardCenterFromEl(elA);
+  const b = getCardCenterFromEl(elB);
+  const line = document.createElementNS(SVG_NS, 'line');
+  line.setAttribute('x1', a.x);
+  line.setAttribute('y1', a.y);
+  line.setAttribute('x2', b.x);
+  line.setAttribute('y2', b.y);
+  line.setAttribute('class', `asterism-line ${className}`);
+  asterismSvg.appendChild(line);
+  return line;
+}
+
+/** 現在のセッションの線(自動の見た順+手動接続)をすべて描き直す */
+function redrawAsterismLines() {
+  if (!asterismSvg) return;
+  asterismSvg.innerHTML = '';
+  const currentId = activeSessionId();
+  const sessionCards = state.cards.filter((c) => c.sessionId === currentId);
+
+  // 自動: 追加した順(見た順)に隣同士をつなぐ
+  const sorted = sessionCards.slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  for (let i = 1; i < sorted.length; i++) {
+    const elA = cardElById(sorted[i - 1].id);
+    const elB = cardElById(sorted[i].id);
+    if (elA && elB) drawAsterismLine(elA, elB, 'asterism-line--auto');
+  }
+
+  // 手動: ASTRガイドで結んだつながり。当たり判定を広く取った透明な線を重ね、
+  // タップで削除できるようにする(自動線は削除対象がないため当たり判定を持たない)。
+  state.connections
+    .filter((conn) => conn.sessionId === currentId)
+    .forEach((conn) => {
+      const elA = cardElById(conn.cardIdA);
+      const elB = cardElById(conn.cardIdB);
+      if (!elA || !elB) return;
+      drawAsterismLine(elA, elB, 'asterism-line--manual');
+      const hit = drawAsterismLine(elA, elB, 'asterism-line-hit');
+      hit.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (window.confirm('この線を削除しますか?')) removeAstrConnection(conn.id);
+      });
+    });
+}
+
+/** ASTRガイドのドラッグ&ドロップから呼ぶ(js/canvas.js) */
+function createAstrConnection(cardIdA, cardIdB) {
+  if (!cardIdA || !cardIdB || cardIdA === cardIdB) return;
+  const sessionId = activeSessionId();
+  const exists = state.connections.some(
+    (c) =>
+      c.sessionId === sessionId &&
+      ((c.cardIdA === cardIdA && c.cardIdB === cardIdB) || (c.cardIdA === cardIdB && c.cardIdB === cardIdA))
+  );
+  if (exists) {
+    setStatus('既につながっています');
+    return;
+  }
+  state.connections.push({ id: crypto.randomUUID(), sessionId, cardIdA, cardIdB });
+  redrawAsterismLines();
+  setStatus('線でつなぎました');
+  scheduleAutoSave();
+}
+
+function removeAstrConnection(connectionId) {
+  const idx = state.connections.findIndex((c) => c.id === connectionId);
+  if (idx === -1) return;
+  state.connections.splice(idx, 1);
+  redrawAsterismLines();
+  setStatus('線を削除しました');
+  scheduleAutoSave();
 }
 
 const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
@@ -466,7 +565,13 @@ function renderCard(card) {
       } else if (action === 'title') {
         startSessionTitleEdit(card, el);
       } else if (action === 'astr') {
-        setStatus('ASTR: カード同士を線で繋ぐ機能は準備中です');
+        // 長押し→ドラッグでの接続はjs/canvas.jsのattachAstrGesture()が処理する。
+        // ここに来るのは「長押しせずタップだけした」場合なので、使い方のヒントだけ出す。
+        if (hexEl.dataset.justDragged) {
+          delete hexEl.dataset.justDragged;
+        } else {
+          setStatus('ASTRを長押しすると、線を引いてカード同士をつなげます');
+        }
       } else if (action === 'depth') {
         card.depthBlurred = !card.depthBlurred;
         el.classList.toggle('star-card--depth-blurred', card.depthBlurred);
@@ -584,6 +689,7 @@ function syncCardHeight(el) {
   el.style.height = `${total}px`;
   const card = getCardById(el.dataset.id);
   if (card) card.height = total;
+  redrawAsterismLines(); // 高さが変わるとカード中心もずれるため、繋がっている線を引き直す
 }
 
 /** セッション配下(入れ子を含む)にある画像カードのサムネイル(dataURL)を再帰的に集める */
@@ -708,6 +814,7 @@ function removeCardFromState(card, el) {
   const idx = state.cards.indexOf(card);
   if (idx !== -1) state.cards.splice(idx, 1);
   el.remove();
+  redrawAsterismLines(); // 消えたカードに繋がっていた線も引き直しで自然に消える
   scheduleAutoSave();
 }
 
@@ -715,6 +822,7 @@ function pasteCardFromClipboard() {
   if (!cardClipboard) return;
   const newCard = materializeSnapshot(cardClipboard, activeSessionId(), { x: 24, y: 24 });
   renderCard(newCard);
+  redrawAsterismLines();
   setStatus('貼り付けました');
   scheduleAutoSave();
 }
@@ -897,6 +1005,7 @@ function createTextCard(text) {
   };
   state.cards.push(card);
   renderCard(card);
+  redrawAsterismLines();
   setStatus('テクストを追加しました');
   scheduleAutoSave();
   return card;
@@ -958,6 +1067,7 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
   };
   state.cards.push(card);
   renderCard(card);
+  redrawAsterismLines();
   setStatus('追加しました');
   scheduleAutoSave();
   return card;
@@ -969,6 +1079,7 @@ async function handleSave() {
     state.fileId = await saveData(state.folderId, state.fileId, {
       cards: state.cards,
       sessions: state.sessions,
+      connections: state.connections,
     });
     setStatus('自動保存しました');
   } catch (err) {
