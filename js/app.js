@@ -10,6 +10,9 @@ const state = {
   // Asterism: ASTRガイドから手動で結んだカード同士のつながり。
   // { id, sessionId, cardIdA, cardIdB }(向きの意味は持たない)
   connections: [],
+  // Asterism: 自動の見た順の線のうち、個別に非表示にしたペア。
+  // { id, sessionId, cardIdA, cardIdB }
+  hiddenAutoLinks: [],
 };
 
 const FIRST_YEAR = 2025;
@@ -195,6 +198,7 @@ async function onSignedIn() {
     state.cards = data.cards || [];
     state.sessions = data.sessions || [];
     state.connections = data.connections || [];
+    state.hiddenAutoLinks = data.hiddenAutoLinks || [];
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -384,6 +388,36 @@ function drawAsterismLine(elA, elB, className) {
   return line;
 }
 
+/** 2枚のカードが(順不同で)同じペアかどうか */
+function isSameCardPair(cardIdA, cardIdB, otherIdA, otherIdB) {
+  return (cardIdA === otherIdA && cardIdB === otherIdB) || (cardIdA === otherIdB && cardIdB === otherIdA);
+}
+
+/** 展覧会の混雑などで必ずしも見た順どおりに回れるとは限らないため、自動線も個別に非表示にできる。
+ *  非表示にした組み合わせだけ state.hiddenAutoLinks に記録し、以降そのペアの自動線を描かない。 */
+function isAutoLinkHidden(sessionId, cardIdA, cardIdB) {
+  return state.hiddenAutoLinks.some(
+    (h) => h.sessionId === sessionId && isSameCardPair(h.cardIdA, h.cardIdB, cardIdA, cardIdB)
+  );
+}
+
+function hideAutoLink(sessionId, cardIdA, cardIdB) {
+  state.hiddenAutoLinks.push({ id: crypto.randomUUID(), sessionId, cardIdA, cardIdB });
+  redrawAsterismLines();
+  setStatus('自動線を非表示にしました');
+  scheduleAutoSave();
+}
+
+/** 削除確認つきで1本の線を描く(自動線・手動線共通)。当たり判定を広く取った透明な線を重ねる。 */
+function drawDeletableAsterismLine(elA, elB, className, onDelete) {
+  drawAsterismLine(elA, elB, className);
+  const hit = drawAsterismLine(elA, elB, 'asterism-line-hit');
+  hit.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (window.confirm('この線を削除しますか?')) onDelete();
+  });
+}
+
 /** 現在のセッションの線(自動の見た順+手動接続)をすべて描き直す */
 function redrawAsterismLines() {
   if (!asterismSvg) return;
@@ -391,28 +425,26 @@ function redrawAsterismLines() {
   const currentId = activeSessionId();
   const sessionCards = state.cards.filter((c) => c.sessionId === currentId);
 
-  // 自動: 追加した順(見た順)に隣同士をつなぐ
+  // 自動: 追加した順(見た順)に隣同士をつなぐ。ただしhideAutoLink()で個別に消されたペアは除く
   const sorted = sessionCards.slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   for (let i = 1; i < sorted.length; i++) {
-    const elA = cardElById(sorted[i - 1].id);
-    const elB = cardElById(sorted[i].id);
-    if (elA && elB) drawAsterismLine(elA, elB, 'asterism-line--auto');
+    const cardIdA = sorted[i - 1].id;
+    const cardIdB = sorted[i].id;
+    if (isAutoLinkHidden(currentId, cardIdA, cardIdB)) continue;
+    const elA = cardElById(cardIdA);
+    const elB = cardElById(cardIdB);
+    if (!elA || !elB) continue;
+    drawDeletableAsterismLine(elA, elB, 'asterism-line--auto', () => hideAutoLink(currentId, cardIdA, cardIdB));
   }
 
-  // 手動: ASTRガイドで結んだつながり。当たり判定を広く取った透明な線を重ね、
-  // タップで削除できるようにする(自動線は削除対象がないため当たり判定を持たない)。
+  // 手動: ASTRガイドで結んだつながり
   state.connections
     .filter((conn) => conn.sessionId === currentId)
     .forEach((conn) => {
       const elA = cardElById(conn.cardIdA);
       const elB = cardElById(conn.cardIdB);
       if (!elA || !elB) return;
-      drawAsterismLine(elA, elB, 'asterism-line--manual');
-      const hit = drawAsterismLine(elA, elB, 'asterism-line-hit');
-      hit.addEventListener('click', (event) => {
-        event.stopPropagation();
-        if (window.confirm('この線を削除しますか?')) removeAstrConnection(conn.id);
-      });
+      drawDeletableAsterismLine(elA, elB, 'asterism-line--manual', () => removeAstrConnection(conn.id));
     });
 }
 
@@ -1080,6 +1112,7 @@ async function handleSave() {
       cards: state.cards,
       sessions: state.sessions,
       connections: state.connections,
+      hiddenAutoLinks: state.hiddenAutoLinks,
     });
     setStatus('自動保存しました');
   } catch (err) {

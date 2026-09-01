@@ -217,7 +217,7 @@ html, body {
   opacity: 0.9;
 }
 
-/* 手動線だけ、見えている細い線より広い透明な線を重ねてタップしやすくする(削除用) */
+/* 見えている細い線(自動/手動どちらも)より広い透明な線を重ねてタップしやすくする(削除用) */
 .asterism-line-hit {
   stroke: transparent;
   stroke-width: 16;
