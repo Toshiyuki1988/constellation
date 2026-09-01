@@ -423,9 +423,14 @@ html, body {
 
 .star-card--session {
   padding: 0;
-  overflow: hidden;
 }
 
+/*
+ * 写真の角を丸めるための overflow:hidden はカード本体(.star-card--session)ではなく
+ * ここ(.star-card-session-body)に付ける。カード本体に付けてしまうと、カード外側に
+ * はみ出す配置になっている編集ガイドのヘックスパネル(Title/Edit/Depth/Delete)や
+ * リサイズハンドルまで一緒にクリップされ、中央のASTRしか見えなくなってしまう。
+ */
 .star-card-session-body {
   position: relative;
   width: 100%;
@@ -436,6 +441,8 @@ html, body {
   background: var(--surface-2);
   cursor: pointer;
   touch-action: none;
+  overflow: hidden;
+  border-radius: 2px;
 }
 
 .star-card-session-body:hover .star-card-session-text { background: #e4e4e4; }
