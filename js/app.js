@@ -46,9 +46,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (isConfigured()) {
     els.signInBtn.disabled = false;
+    els.signInBtn.hidden = true;
     whenGisReady(() => {
       debugLog('whenGisReady -> initAuth() 呼び出し');
-      initAuth(onSignedIn);
+      initAuth(onSignedIn, onSignInFailed);
+      // 既に同意済み・ログイン中なら、ボタンを押させずポップアップなしでサインインを試みる
+      signIn(true);
     });
   } else {
     openSettings();
@@ -126,6 +129,13 @@ function whenGisReady(callback) {
     }
     setTimeout(() => whenGisReady(callback), 100);
   }
+}
+
+/** 起動時の自動サイレントサインインが失敗した場合(未ログイン・未同意など)。手動サインインボタンを出す。 */
+function onSignInFailed() {
+  debugLog('onSignInFailed() 呼び出し');
+  els.signInBtn.hidden = false;
+  setStatus('「Googleでサインイン」を押してください');
 }
 
 function toggleAuthUI(signedIn) {

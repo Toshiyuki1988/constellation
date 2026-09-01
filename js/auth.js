@@ -8,8 +8,9 @@ let tokenExpiresAt = 0;
 
 /**
  * @param {(token: string) => void} onSignedIn サインイン成功時に呼ばれる
+ * @param {(error: string) => void} [onSignInFailed] サイレント取得に失敗した時に呼ばれる(未同意・未ログインなど)
  */
-function initAuth(onSignedIn) {
+function initAuth(onSignedIn, onSignInFailed) {
   debugLog('initAuth() 開始, client_id先頭=' + String(CONFIG.GOOGLE_CLIENT_ID).slice(0, 12) + '...');
   try {
     tokenClient = google.accounts.oauth2.initTokenClient({
@@ -19,6 +20,7 @@ function initAuth(onSignedIn) {
         debugLog('OAuthコールバック受信, error=' + (response && response.error));
         if (response.error) {
           console.error('OAuth error:', response);
+          if (onSignInFailed) onSignInFailed(response.error);
           return;
         }
         accessToken = response.access_token;
@@ -33,11 +35,14 @@ function initAuth(onSignedIn) {
   }
 }
 
-/** サインインボタンから呼ぶ。同意画面が必要な場合のみ表示される。 */
-function signIn() {
-  debugLog('signIn() 呼び出し, tokenClient=' + (tokenClient ? 'set' : 'null'));
+/**
+ * サインイン(トークン取得)を試みる。既に同意済み・ログイン中ならポップアップなしで完了する。
+ * @param {boolean} [silent] true の場合、失敗してもエラー表示をtokenClient任せにする(起動時の自動試行用)
+ */
+function signIn(silent) {
+  debugLog('signIn() 呼び出し, tokenClient=' + (tokenClient ? 'set' : 'null') + ', silent=' + !!silent);
   if (!tokenClient) {
-    setStatus('読み込み中です。少し待ってからもう一度お試しください');
+    if (!silent) setStatus('読み込み中です。少し待ってからもう一度お試しください');
     return;
   }
   try {
