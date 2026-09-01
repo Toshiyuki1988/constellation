@@ -23,7 +23,6 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsCancelBtn = document.getElementById('settings-cancel-btn');
   els.signInBtn = document.getElementById('sign-in-btn');
   els.signOutBtn = document.getElementById('sign-out-btn');
-  els.saveBtn = document.getElementById('save-btn');
   els.toolUpload = document.getElementById('tool-upload');
   els.toolCamera = document.getElementById('tool-camera');
   els.toolOcr = document.getElementById('tool-ocr');
@@ -71,7 +70,6 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
-  els.saveBtn.addEventListener('click', handleSave);
 
   initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled);
 });
@@ -133,7 +131,6 @@ function whenGisReady(callback) {
 function toggleAuthUI(signedIn) {
   els.signInBtn.hidden = signedIn;
   els.signOutBtn.hidden = !signedIn;
-  els.saveBtn.disabled = !signedIn;
   els.toolUpload.disabled = !signedIn;
   els.toolCamera.disabled = !signedIn;
   els.toolOcr.disabled = !signedIn;
@@ -144,6 +141,17 @@ function toggleAuthUI(signedIn) {
 
 function setStatus(message) {
   els.status.textContent = message;
+}
+
+/* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ---------------- */
+
+const AUTO_SAVE_DELAY_MS = 1200; // 連続した変更(タイピング等)をまとめて1回の保存にする
+let autoSaveTimer = null;
+
+function scheduleAutoSave() {
+  if (!state.folderId) return; // サインイン前は何もしない
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => { handleSave(); }, AUTO_SAVE_DELAY_MS);
 }
 
 async function onSignedIn() {
@@ -288,7 +296,8 @@ function handleCreateSession() {
   };
   state.cards.push(card);
   renderCard(card);
-  setStatus(`「${session.name}」セッションを作成しました(保存ボタンで確定)`);
+  setStatus(`「${session.name}」セッションを作成しました`);
+  scheduleAutoSave();
 }
 
 function renderAllCards() {
@@ -424,7 +433,9 @@ function renderCard(card) {
       } else if (action === 'depth') {
         card.depthBlurred = !card.depthBlurred;
         el.classList.toggle('star-card--depth-blurred', card.depthBlurred);
+        scheduleAutoSave();
       }
+      if (action !== 'astr') scheduleAutoSave();
     });
   });
 
@@ -440,6 +451,7 @@ function renderCard(card) {
   memoEl.addEventListener('input', () => {
     card.memo = memoEl.value;
     syncCardHeight(el);
+    scheduleAutoSave();
   });
   // 既定ではメモへのポインタ操作を無効化し、カードの移動を優先する。
   // 鉛筆ボタンを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
@@ -593,7 +605,8 @@ function deleteCard(card, el) {
   const idx = state.cards.indexOf(card);
   if (idx !== -1) state.cards.splice(idx, 1);
   el.remove();
-  setStatus('削除しました(保存ボタンで確定・Drive上のファイル本体は残ります)');
+  setStatus('削除しました(Drive上のファイル本体は残ります)');
+  scheduleAutoSave();
 }
 
 /** 写真・動画カードの📌ボタン: OCRだけ起動し、結果をそのカードのメモに追記する */
@@ -605,7 +618,8 @@ async function handleCardCaption(card, el) {
   memoEl.value = card.memo;
   memoEl.hidden = false;
   syncCardHeight(el);
-  setStatus('キャプションを反映しました(保存ボタンで確定)');
+  setStatus('キャプションを反映しました');
+  scheduleAutoSave();
 }
 
 function getCardById(id) {
@@ -629,6 +643,7 @@ async function handleImageSelected(event) {
     if (ocrText && !ocrText.includes('(テキストなし)')) {
       card.memo = ocrText;
       renderAllCards();
+      scheduleAutoSave();
     }
   } catch (err) {
     console.warn('Gemini OCR に失敗しました', err);
@@ -697,7 +712,8 @@ function createTextCard(text) {
   };
   state.cards.push(card);
   renderCard(card);
-  setStatus('テクストを追加しました(保存ボタンで確定)');
+  setStatus('テクストを追加しました');
+  scheduleAutoSave();
   return card;
 }
 
@@ -757,21 +773,22 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
   };
   state.cards.push(card);
   renderCard(card);
-  setStatus('追加しました(保存ボタンで確定)');
+  setStatus('追加しました');
+  scheduleAutoSave();
   return card;
 }
 
 async function handleSave() {
-  setStatus('保存中…');
+  setStatus('自動保存中…');
   try {
     state.fileId = await saveData(state.folderId, state.fileId, {
       cards: state.cards,
       sessions: state.sessions,
     });
-    setStatus('保存しました');
+    setStatus('自動保存しました');
   } catch (err) {
     console.error(err);
-    setStatus('保存に失敗しました(コンソールを確認)');
+    setStatus('自動保存に失敗しました(コンソールを確認)');
   }
 }
 

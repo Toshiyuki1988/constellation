@@ -238,6 +238,7 @@ function attachCardGestures(el) {
     }
     interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
     stopAutoPan();
+    scheduleAutoSave();
   }
 
   el.addEventListener('pointerdown', (event) => {
@@ -343,6 +344,7 @@ function attachCardGestures(el) {
       card.x = parseFloat(el.dataset.x) || 0;
       card.y = parseFloat(el.dataset.y) || 0;
     }
+    scheduleAutoSave();
   }
 
   el.querySelectorAll('.star-card-handle').forEach((handleEl) => {
