@@ -555,9 +555,9 @@ function attachAstrGesture(el) {
 
   function setTarget(newTargetEl) {
     if (targetEl === newTargetEl) return;
-    if (targetEl) targetEl.classList.remove('star-card--astr-target');
+    if (targetEl) targetEl.classList.remove('star-card--astr-glow');
     targetEl = newTargetEl;
-    if (targetEl) targetEl.classList.add('star-card--astr-target');
+    if (targetEl) targetEl.classList.add('star-card--astr-glow');
   }
 
   function updateHoverTarget(clientX, clientY) {
@@ -568,6 +568,7 @@ function attachAstrGesture(el) {
 
   function endDrag(commit) {
     dragging = false;
+    el.classList.remove('star-card--astr-glow');
     if (tempLine) {
       tempLine.remove();
       tempLine = null;
@@ -595,6 +596,7 @@ function attachAstrGesture(el) {
     pressTimer = setTimeout(() => {
       pressTimer = null;
       dragging = true;
+      el.classList.add('star-card--astr-glow'); // 押し込んだ元のカードも同じ緑発光にする
       if (navigator.vibrate) navigator.vibrate(8);
       interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
       updateTempLine(pressStart.x, pressStart.y);

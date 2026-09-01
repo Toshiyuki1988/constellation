@@ -193,19 +193,18 @@ html, body {
 .asterism-layer {
   position: absolute;
   top: 0; left: 0;
-  width: 0; height: 0;
+  /* 0x0 + overflow:visible でも仕様上は描けるはずだが、環境差の影響を受けにくいよう
+     現実的なキャンバス範囲を覆う大きさを明示しておく(overflowはさらに保険として残す) */
+  width: 20000px;
+  height: 20000px;
   overflow: visible;
   pointer-events: none;
 }
 
+/* 自動線・手動線は見た目上区別しない(同じスタイル) */
 .asterism-line {
   stroke: var(--muted);
-  stroke-width: 1.4;
-  opacity: 0.55;
-}
-
-.asterism-line--manual {
-  stroke: var(--rust);
+  stroke-width: 2;
   opacity: 0.75;
 }
 
@@ -225,9 +224,13 @@ html, body {
   cursor: pointer;
 }
 
-/* ASTRドラッグ中、指/カーソルが乗っているカードの接続候補ハイライト */
-.star-card--astr-target {
-  box-shadow: 0 0 0 3px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3);
+/*
+ * ASTRを長押しして線を引いている間、つながろうとしている2枚(押し込んだ元のカードと、
+ * 今指/カーソルが乗っている先のカード)を同じ緑の発光で示す。.star-card--edit-guide の
+ * 通常のリングより後に書くことで、ドラッグ中は発光の方を優先して見せる。
+ */
+.star-card--astr-glow {
+  box-shadow: 0 0 0 3px #2e7d32, 0 0 26px 8px rgba(46, 125, 50, 0.65);
 }
 
 .tool-btn.active {
