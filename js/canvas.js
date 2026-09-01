@@ -1,18 +1,27 @@
-// interact.js によるキャンバス操作:
-// - 背景のパン(ドラッグ)とピンチズーム/ホイールズーム
+// キャンバス操作:
+// - 背景のパン(ドラッグ)とピンチズーム/ホイールズームは interact.js に任せる。
 // - カード(.star-card)は既定では当たり判定を持たず、1指操作はキャンバスのパンとして扱われる。
-//   カードを0.3秒ほど長押しすると「移動可能モード」に入り、そのときだけカード自体がドラッグ対象になる。
-// - カードのリサイズ(端のハンドル)は従来通り常時有効。
+//   カードを0.3秒ほど1指で長押しすると「移動可能モード」に入り、そのときだけカードが指に追従する。
+//   カードを2本指で長押しすると「リサイズ可能モード」に入り、そのままピンチイン/アウトで
+//   カード自体の大きさを変えられる(四隅の当たり判定によるリサイズは廃止)。
+// - カード側の移動・リサイズは interact.js を使わず、Pointer Events(Pointer Capture)による
+//   自前の実装。理由は、interact.js の resizable(端の当たり判定)がタッチ環境では既定20pxと
+//   広く、小さいカードでは移動しようとした操作までリサイズに奪われてしまう問題があったため。
 
 const viewportState = { scale: 1, x: 0, y: 0 };
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 4;
 
-// カード長押し関連の調整値
+// カードジェスチャー関連の調整値
 const CARD_LONG_PRESS_MS = 300; // 0.25〜0.35秒の範囲で現代的なバランスとされる値
 const CARD_PRESS_TOLERANCE_PX = 10; // 長押し待機中、指が多少動いてもキャンセルしない許容半径
 const AUTO_PAN_MARGIN = 48; // この距離より画面端に近づいたらキャンバスを自動でパンする
 const AUTO_PAN_MAX_SPEED = 14; // 端にぴったり張り付いた場合の1フレームあたりの移動量(px)
+const CARD_MIN_WIDTH = 120;
+const CARD_MIN_HEIGHT = 140;
+const CARD_MAX_SIZE = 900; // ピンチで際限なく巨大化しないための上限
+const CARD_PINCH_RATIO_MIN = 0.3;
+const CARD_PINCH_RATIO_MAX = 4;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -118,145 +127,252 @@ function stopAutoPan() {
   autoPanPointer = null;
 }
 
-/* ---------------- カードの長押し→移動可能モード ---------------- */
+/* ---------------- カードのジェスチャー(1指長押し=移動 / 2指長押し=リサイズ) ---------------- */
+
+function distanceBetween(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
 
 /**
- * カードを0.3秒ほど長押しすると「移動可能モード」に入る。それ以外の1指操作は
- * (このカードでは何もせず)そのままキャンバスのパンとしてバブリングさせる。
+ * カード1枚ぶんのジェスチャーを管理する。指の本数で役割が変わる:
+ * - 1指: 既定ではそのままキャンバスのパンとしてバブリングさせる。0.3秒長押しすると
+ *   「移動可能モード」に入り、そのまま指に追従して移動する。
+ * - 2指: 両方の指が0.3秒ほど静止したら「リサイズ可能モード」に入り、以降は2指の間の
+ *   距離の変化(ピンチイン/アウト)に合わせてカード自身の大きさを変える。
  *
- * 移動処理は interact.js の draggable に頼らず、Pointer Capture を使った自前の
- * translate計算で行う。理由は2つ:
- * 1. interact.js の resizable(端の当たり判定)がタッチ環境では既定20pxとかなり広く、
- *    draggable を長押し後に動的に有効化しても resizable 側にジェスチャーを奪われ、
- *    見た目の「持ち上げ」演出はするのに実際には移動できない/意図せず縮小される事があった。
- * 2. Pointer Capture により、指がカードの外まで大きく動いても移動イベントを確実に
- *    このカード自身で受け続けられる。
+ * どちらのモードも Pointer Capture を使い、指がカードの外まで大きく動いても
+ * このカード自身でイベントを受け続けられるようにしている。
  */
-function attachCardLongPress(el) {
-  let timer = null;
-  let start = null; // { x, y, pointerId }
-  let lastPos = null; // 移動可能モード中の直近ポインタ位置(差分計算用)
-  let lifted = false;
+function attachCardGestures(el) {
+  const pointers = new Map(); // pointerId -> { x, y }(このカード上でいま押されている指)
 
-  function clearTimer() {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
+  // 1指(移動)の状態
+  let moveTimer = null;
+  let moveStart = null; // { x, y, pointerId }
+  let moveLastPos = null;
+  let moveLifted = false;
+
+  // 2指(リサイズ)の状態
+  let resizeTimer = null;
+  let resizePending = null; // { ids: [id1, id2], starts: {id: {x,y}} } (長押し待機中)
+  let resizeActive = false;
+  let resizeStart = null; // { dist, width, height, centerX, centerY }
+
+  function clearMoveTimer() {
+    if (moveTimer) {
+      clearTimeout(moveTimer);
+      moveTimer = null;
     }
   }
 
-  function liftCard() {
-    lifted = true;
+  function clearResizeTimer() {
+    if (resizeTimer) {
+      clearTimeout(resizeTimer);
+      resizeTimer = null;
+    }
+  }
+
+  function liftMove() {
+    moveLifted = true;
     el.dataset.justLifted = '1';
     el.classList.remove('star-card--pressing');
     el.classList.add('star-card--lifted');
     applyCardTransform(el);
-    // 移動可能モード中はキャンバス側のパン/ピンチと競合しないよう無効化する
     interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
     if (navigator.vibrate) navigator.vibrate(8);
   }
 
-  function dropCard() {
-    lifted = false;
-    lastPos = null;
+  function dropMove() {
+    moveLifted = false;
     const card = getCardById(el.dataset.id);
     if (card) {
       card.x = parseFloat(el.dataset.x) || 0;
       card.y = parseFloat(el.dataset.y) || 0;
     }
-    el.classList.remove('star-card--lifted', 'star-card--pressing');
+    el.classList.remove('star-card--lifted');
     applyCardTransform(el);
     interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
     stopAutoPan();
   }
 
+  /** 単指フローを中断する(2本目の指が触れた/指が離れた等)。移動可能モード中なら位置を確定して戻す */
+  function cancelMove() {
+    clearMoveTimer();
+    el.classList.remove('star-card--pressing');
+    moveStart = null;
+    moveLastPos = null;
+    if (moveLifted) dropMove();
+  }
+
+  function beginResizePending() {
+    const ids = Array.from(pointers.keys());
+    const starts = {};
+    ids.forEach((id) => { starts[id] = { ...pointers.get(id) }; });
+    resizePending = { ids, starts };
+    clearResizeTimer();
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      startResizeActive();
+    }, CARD_LONG_PRESS_MS);
+  }
+
+  function startResizeActive() {
+    if (!resizePending) return;
+    resizeActive = true;
+    el.classList.remove('star-card--pressing');
+    el.classList.add('star-card--resize-ready');
+    const [idA, idB] = resizePending.ids;
+    const a = pointers.get(idA);
+    const b = pointers.get(idB);
+    const width = parseFloat(el.style.width) || el.getBoundingClientRect().width;
+    const height = parseFloat(el.style.height) || el.getBoundingClientRect().height;
+    const x = parseFloat(el.dataset.x) || 0;
+    const y = parseFloat(el.dataset.y) || 0;
+    resizeStart = {
+      dist: distanceBetween(a, b),
+      width,
+      height,
+      centerX: x + width / 2,
+      centerY: y + height / 2,
+    };
+    interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
+    if (navigator.vibrate) navigator.vibrate(8);
+  }
+
+  function updateResizeActive() {
+    if (!resizeActive || !resizeStart || !resizePending) return;
+    const [idA, idB] = resizePending.ids;
+    const a = pointers.get(idA);
+    const b = pointers.get(idB);
+    if (!a || !b) return;
+    const ratio = clamp(distanceBetween(a, b) / resizeStart.dist, CARD_PINCH_RATIO_MIN, CARD_PINCH_RATIO_MAX);
+    const width = clamp(resizeStart.width * ratio, CARD_MIN_WIDTH, CARD_MAX_SIZE);
+    const height = clamp(resizeStart.height * ratio, CARD_MIN_HEIGHT, CARD_MAX_SIZE);
+    const x = resizeStart.centerX - width / 2;
+    const y = resizeStart.centerY - height / 2;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    el.dataset.x = String(x);
+    el.dataset.y = String(y);
+    applyCardTransform(el);
+  }
+
+  function endResizeActive() {
+    resizeActive = false;
+    resizeStart = null;
+    el.classList.remove('star-card--resize-ready');
+    const card = getCardById(el.dataset.id);
+    if (card) {
+      card.width = parseFloat(el.style.width);
+      card.height = parseFloat(el.style.height);
+      card.x = parseFloat(el.dataset.x) || 0;
+      card.y = parseFloat(el.dataset.y) || 0;
+    }
+    interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
+  }
+
+  function cancelResizePending() {
+    clearResizeTimer();
+    el.classList.remove('star-card--pressing');
+    resizePending = null;
+  }
+
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('button, textarea')) return;
-    start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
-    lastPos = { x: event.clientX, y: event.clientY };
-    // 指がカードの外に大きくはみ出しても、このカードで move/up を受け続けられるようにする
-    // (ブラウザによっては無効な pointerId で例外を投げることがあるため安全に無視する)
+    if (pointers.size >= 2) return; // 3本目以降は無視
+
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     try {
       el.setPointerCapture(event.pointerId);
     } catch (err) {
-      /* no-op */
+      /* ブラウザによっては無効な pointerId で例外を投げることがあるため無視する */
     }
-    el.classList.add('star-card--pressing');
-    clearTimer();
-    timer = setTimeout(() => {
-      timer = null;
-      liftCard();
-    }, CARD_LONG_PRESS_MS);
+
+    if (pointers.size === 1) {
+      moveStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+      moveLastPos = { x: event.clientX, y: event.clientY };
+      el.classList.add('star-card--pressing');
+      clearMoveTimer();
+      moveTimer = setTimeout(() => {
+        moveTimer = null;
+        liftMove();
+      }, CARD_LONG_PRESS_MS);
+    } else if (pointers.size === 2) {
+      // 2本目が触れたら単指の移動フローは中断し、2本指リサイズの長押し待機に切り替える
+      cancelMove();
+      el.classList.add('star-card--pressing');
+      beginResizePending();
+    }
   });
 
   el.addEventListener('pointermove', (event) => {
-    if (!start || event.pointerId !== start.pointerId) return;
-    if (lifted) {
-      const dx = (event.clientX - lastPos.x) / viewportState.scale;
-      const dy = (event.clientY - lastPos.y) / viewportState.scale;
-      lastPos = { x: event.clientX, y: event.clientY };
-      const x = (parseFloat(el.dataset.x) || 0) + dx;
-      const y = (parseFloat(el.dataset.y) || 0) + dy;
-      el.dataset.x = String(x);
-      el.dataset.y = String(y);
-      applyCardTransform(el);
-      updateAutoPanPointer(event.clientX, event.clientY);
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (resizeActive) {
+      updateResizeActive();
       return;
     }
-    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-    if (moved > CARD_PRESS_TOLERANCE_PX) {
-      clearTimer();
-      el.classList.remove('star-card--pressing');
-      start = null;
+
+    if (resizePending) {
+      const stillWithinTolerance = resizePending.ids.every((id) => {
+        const now = pointers.get(id);
+        const start = resizePending.starts[id];
+        return distanceBetween(now, start) <= CARD_PRESS_TOLERANCE_PX;
+      });
+      if (!stillWithinTolerance) cancelResizePending();
+      return;
+    }
+
+    if (moveStart && event.pointerId === moveStart.pointerId) {
+      if (moveLifted) {
+        const dx = (event.clientX - moveLastPos.x) / viewportState.scale;
+        const dy = (event.clientY - moveLastPos.y) / viewportState.scale;
+        moveLastPos = { x: event.clientX, y: event.clientY };
+        const x = (parseFloat(el.dataset.x) || 0) + dx;
+        const y = (parseFloat(el.dataset.y) || 0) + dy;
+        el.dataset.x = String(x);
+        el.dataset.y = String(y);
+        applyCardTransform(el);
+        updateAutoPanPointer(event.clientX, event.clientY);
+        return;
+      }
+      const moved = Math.hypot(event.clientX - moveStart.x, event.clientY - moveStart.y);
+      if (moved > CARD_PRESS_TOLERANCE_PX) {
+        clearMoveTimer();
+        el.classList.remove('star-card--pressing');
+        moveStart = null;
+      }
     }
   });
 
-  ['pointerup', 'pointercancel'].forEach((type) => {
-    el.addEventListener(type, () => {
-      clearTimer();
+  function handlePointerEnd(event) {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.delete(event.pointerId);
+
+    if (resizeActive) {
+      if (pointers.size < 2) endResizeActive();
+      return;
+    }
+    if (resizePending) {
+      cancelResizePending();
+      return;
+    }
+    if (moveStart && event.pointerId === moveStart.pointerId) {
+      clearMoveTimer();
       el.classList.remove('star-card--pressing');
-      start = null;
-      if (lifted) dropCard();
-    });
+      const wasLifted = moveLifted;
+      moveStart = null;
+      if (wasLifted) dropMove();
+    }
+  }
+
+  ['pointerup', 'pointercancel'].forEach((type) => {
+    el.addEventListener(type, handlePointerEnd);
   });
 }
 
-/** カード要素にリサイズを付与する(移動は attachCardLongPress の自前処理が担う) */
+/** カード要素にジェスチャー(1指長押し移動・2指長押しリサイズ)を付与する */
 function makeCardInteractive(el) {
-  interact(el)
-    .resizable({
-      edges: { left: true, right: true, top: true, bottom: true },
-      // interact.js のタッチ既定値(20px)は小さいカードだと大半を占めてしまい、
-      // 移動しようとした操作までリサイズに奪われる原因になるため、控えめな値に絞る。
-      margin: 10,
-      listeners: {
-        move(event) {
-          let x = parseFloat(el.dataset.x) || 0;
-          let y = parseFloat(el.dataset.y) || 0;
-          x += event.deltaRect.left / viewportState.scale;
-          y += event.deltaRect.top / viewportState.scale;
-
-          Object.assign(el.style, {
-            width: `${event.rect.width / viewportState.scale}px`,
-            height: `${event.rect.height / viewportState.scale}px`,
-          });
-          el.dataset.x = String(x);
-          el.dataset.y = String(y);
-          applyCardTransform(el);
-        },
-        end(event) {
-          const card = getCardById(event.target.dataset.id);
-          if (!card) return;
-          card.width = parseFloat(event.target.style.width);
-          card.height = parseFloat(event.target.style.height);
-          card.x = parseFloat(event.target.dataset.x) || 0;
-          card.y = parseFloat(event.target.dataset.y) || 0;
-        },
-      },
-      modifiers: [
-        interact.modifiers.restrictSize({ min: { width: 120, height: 140 } }),
-      ],
-    });
-
-  attachCardLongPress(el);
+  attachCardGestures(el);
 }

@@ -261,6 +261,17 @@ html, body {
   z-index: 5;
 }
 
+/*
+ * 2本指長押しが確定し、ピンチでカード自体をリサイズできる状態: 縁取りのリングで
+ * 「移動」とは違う操作モードであることを示す。width/height 自体が変化するため
+ * transform のスケールは重ねない。
+ */
+.star-card--resize-ready {
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35), 0 20px 44px rgba(0, 0, 0, 0.3);
+  transition: box-shadow 0.12s ease-out;
+  z-index: 5;
+}
+
 .star-card-media {
   flex: 1;
   background-color: var(--surface-2);
