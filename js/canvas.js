@@ -159,6 +159,23 @@ function cursorForEdges(edges) {
 }
 
 /**
+ * 写真・動画枠(.star-card-media)は、メモ欄の分量に合わせて自動で高さを伸ばす syncCardHeight()
+ * (js/app.js)によって初回描画時に高さがpxで固定されている(flex:1のままだと auto 計測時に
+ * 潰れてしまうため)。そのままだとユーザーがカード全体をドラッグでリサイズしても、固定された
+ * 写真枠の高さは追従できず、伸びた分がキャプション下の空白として残ってしまう。
+ * リサイズのたびに一度 flex:1 に戻して実際に確保できる高さを測り直し、その値で固定し直す。
+ */
+function fitMediaToCardHeight(el) {
+  const mediaEl = el.querySelector('.star-card-media');
+  if (!mediaEl) return;
+  mediaEl.style.flex = '1';
+  mediaEl.style.height = '';
+  const height = mediaEl.getBoundingClientRect().height;
+  mediaEl.style.height = `${height}px`;
+  mediaEl.style.flex = 'none';
+}
+
+/**
  * カード1枚ぶんのジェスチャーを管理する。入力方式・指の本数で役割が変わる:
  * - タッチ1指: 既定ではそのままキャンバスのパンとしてバブリングさせる。0.3秒長押しすると
  *   「移動可能モード」に入り、そのまま指に追従して移動する。
@@ -286,6 +303,7 @@ function attachCardGestures(el) {
     el.dataset.x = String(x);
     el.dataset.y = String(y);
     applyCardTransform(el);
+    fitMediaToCardHeight(el);
   }
 
   function endResizeActive() {
@@ -357,6 +375,7 @@ function attachCardGestures(el) {
     el.dataset.x = String(x);
     el.dataset.y = String(y);
     applyCardTransform(el);
+    fitMediaToCardHeight(el);
   }
 
   function endEdgeResize() {

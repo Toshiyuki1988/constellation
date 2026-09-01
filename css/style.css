@@ -275,7 +275,13 @@ html, body {
 .star-card-media {
   flex: 1;
   background-color: var(--surface-2);
-  background-size: cover;
+  /*
+   * cover だとカードの縦横比を変えるたびに写真の一部が意図せずクロップされてしまう
+   * (作品写真やキャプション札の一部が見切れる)。contain にして、リサイズ時は
+   * 常に写真全体が縮尺されるだけで欠けないようにする。
+   */
+  background-size: contain;
+  background-repeat: no-repeat;
   background-position: center;
   border-radius: 2px;
   overflow: hidden;
@@ -284,7 +290,7 @@ html, body {
 .star-card-media video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 
