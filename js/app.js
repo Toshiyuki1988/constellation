@@ -485,15 +485,19 @@ function loadFullMedia(el, card) {
 function syncCardHeight(el) {
   const memoEl = el.querySelector('.star-card-memo');
   if (!memoEl) return;
+  // getBoundingClientRect() はキャンバスのズーム後の画面px を返すため、カード自身の
+  // CSS px(ズーム前の論理値)に戻してから style.height に反映する。これをしないと、
+  // キャンバスを縮小表示している間にカードを編集・追加した際、実際より小さい値が
+  // 固定されてしまい、あとで空白ができる原因になる。
   const mediaEl = el.querySelector('.star-card-media');
   if (mediaEl && mediaEl.style.flex !== 'none') {
-    mediaEl.style.height = `${mediaEl.getBoundingClientRect().height}px`;
+    mediaEl.style.height = `${mediaEl.getBoundingClientRect().height / viewportState.scale}px`;
     mediaEl.style.flex = 'none';
   }
   memoEl.style.height = 'auto';
   memoEl.style.height = `${memoEl.scrollHeight}px`;
   el.style.height = 'auto';
-  const total = el.getBoundingClientRect().height;
+  const total = el.getBoundingClientRect().height / viewportState.scale;
   el.style.height = `${total}px`;
   const card = getCardById(el.dataset.id);
   if (card) card.height = total;

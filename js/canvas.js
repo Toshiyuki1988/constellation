@@ -158,7 +158,9 @@ function fitMediaToCardHeight(el) {
   if (!mediaEl) return;
   mediaEl.style.flex = '1';
   mediaEl.style.height = '';
-  const height = mediaEl.getBoundingClientRect().height;
+  // getBoundingClientRect() は画面上の(キャンバスのズームがかかった後の)pxを返すため、
+  // カード自身のCSS px(ズーム前の論理値)に戻してから style.height に反映する
+  const height = mediaEl.getBoundingClientRect().height / viewportState.scale;
   mediaEl.style.height = `${height}px`;
   mediaEl.style.flex = 'none';
 }
