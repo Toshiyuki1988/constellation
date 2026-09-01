@@ -244,33 +244,71 @@ html, body {
   transition: box-shadow 0.15s ease-out;
 }
 
-/* 長押し開始直後(移動可能になる前)の予兆: 影を徐々に濃くする */
+/* 長押し開始直後(編集ガイドが出る前)の予兆: 影を徐々に濃くする */
 .star-card--pressing {
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.22);
   transition: box-shadow 0.28s ease-out;
 }
 
 /*
- * 長押しが確定し、カード移動が可能になった状態: 影を強め、わずかに拡大する。
+ * 長押しが確定し「編集ガイド」が表示された状態のカード: 緑のリングと四隅・四辺の
+ * ハンドル(トンボ)が現れ、ボディをドラッグすれば移動、ハンドルをドラッグすれば
+ * 縦横別に自由変形できる。他のカード/キャンバスを操作すると解除される。
+ * スマホ・PCで見た目/操作を統一しており、今後この編集ガイドに機能を追加していく想定。
  * transform はドラッグ中に毎フレーム書き換えられるため、ここに transition を掛けると
- * 追従がもたついて見える。拡大は即座に反映し、box-shadow だけをなめらかに変化させる。
+ * 追従がもたついて見える。box-shadow だけをなめらかに変化させる。
  */
-.star-card--lifted {
-  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.3);
+.star-card--edit-guide {
+  box-shadow: 0 0 0 2px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3);
   transition: box-shadow 0.12s ease-out;
   z-index: 5;
 }
 
-/*
- * 2本指長押しが確定し、ピンチでカード自体をリサイズできる状態: 縁取りのリングで
- * 「移動」とは違う操作モードであることを示す。width/height 自体が変化するため
- * transform のスケールは重ねない。
- */
-.star-card--resize-ready {
-  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35), 0 20px 44px rgba(0, 0, 0, 0.3);
-  transition: box-shadow 0.12s ease-out;
-  z-index: 5;
+/* 編集ガイド表示中は操作アイコンより変形ハンドルを優先し、視覚的な混雑を避ける */
+.star-card--edit-guide .star-card-delete-btn,
+.star-card--edit-guide .star-card-caption-btn,
+.star-card--edit-guide .star-card-edit-btn {
+  display: none;
 }
+
+/*
+ * 編集ガイドのリサイズハンドル(緑のトンボ)。見た目は小さい正方形だが、指でも
+ * 狙いやすいよう実際のヒット領域(24x24)は見た目より広く取ってある。
+ */
+.star-card-handle {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  touch-action: none;
+}
+
+.star-card--edit-guide .star-card-handle {
+  display: flex;
+}
+
+.star-card-handle::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: #2e7d32;
+  border: 2px solid #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.star-card-handle[data-edge="nw"] { top: 0; left: 0; cursor: nwse-resize; }
+.star-card-handle[data-edge="ne"] { top: 0; left: 100%; cursor: nesw-resize; }
+.star-card-handle[data-edge="se"] { top: 100%; left: 100%; cursor: nwse-resize; }
+.star-card-handle[data-edge="sw"] { top: 100%; left: 0; cursor: nesw-resize; }
+.star-card-handle[data-edge="n"] { top: 0; left: 50%; cursor: ns-resize; }
+.star-card-handle[data-edge="s"] { top: 100%; left: 50%; cursor: ns-resize; }
+.star-card-handle[data-edge="e"] { top: 50%; left: 100%; cursor: ew-resize; }
+.star-card-handle[data-edge="w"] { top: 50%; left: 0; cursor: ew-resize; }
 
 .star-card-media {
   flex: 1;

@@ -313,6 +313,12 @@ const EDIT_ICON_SVG =
   'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>' +
   '<path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>';
 
+// 編集ガイド(長押しで表示される緑のトンボ)。四隅は自由変形、四辺は縦横どちらか片方だけの
+// リサイズを担う。実際のドラッグ処理は js/canvas.js の attachCardGestures() 側で行う。
+const EDIT_GUIDE_HANDLES_HTML = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+  .map((edge) => `<div class="star-card-handle" data-edge="${edge}"></div>`)
+  .join('');
+
 /**
  * セッションカードはドラッグで動かせるようにするため開閉ボタンを持たず、カード本体が
  * ドラッグ対象になる。そのぶん「ほぼ動かさずに指を離した(=タップ/クリック)」場合だけ
@@ -327,7 +333,7 @@ function attachTapToOpen(el, onOpen) {
     if (!downPos) return;
     const moved = Math.hypot(event.clientX - downPos.x, event.clientY - downPos.y);
     downPos = null;
-    // 直前に長押しでカードの移動可能モードに入っていた場合は、置いただけでも開かない
+    // 直前に長押しで編集ガイドが表示された場合は、置いただけでも開かない
     const card = el.closest('.star-card');
     if (card && card.dataset.justLifted) {
       delete card.dataset.justLifted;
@@ -361,6 +367,7 @@ function renderCard(card) {
         <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
         <span class="star-card-session-count">${childCount}件</span>
       </div>
+      ${EDIT_GUIDE_HANDLES_HTML}
     `;
   } else {
     el.innerHTML = `
@@ -369,6 +376,7 @@ function renderCard(card) {
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
       <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
       <button class="star-card-edit-btn" title="メモを書く">${EDIT_ICON_SVG}</button>
+      ${EDIT_GUIDE_HANDLES_HTML}
     `;
   }
   els.content.appendChild(el);
