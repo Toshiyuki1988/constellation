@@ -362,7 +362,8 @@ function renderAllCards() {
  * 線は .canvas-content の子(カードと同じ座標系)に置いたSVGへ、カード中心の
  * 生座標で描くことで、パン/ズームに追従する計算を別途行わずに済ませている。 */
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
+// SVG_NS は js/pie-menu.js で既に定義されているものを流用する(同一グローバルスコープ内で
+// constを二重定義するとページ全体のスクリプトが読み込み時エラーになるため、ここでは宣言しない)
 let asterismSvg = null;
 
 function createAsterismLayer() {
