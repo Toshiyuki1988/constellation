@@ -2,8 +2,11 @@
 // - 背景のパン(ドラッグ)とピンチズーム/ホイールズームは interact.js に任せる。
 // - カード(.star-card)は既定では当たり判定を持たず、1指操作はキャンバスのパンとして扱われる。
 //   カードを0.3秒ほど1指で長押しすると「移動可能モード」に入り、そのときだけカードが指に追従する。
-//   カードを2本指で長押しすると「リサイズ可能モード」に入り、そのままピンチイン/アウトで
-//   カード自体の大きさを変えられる(四隅の当たり判定によるリサイズは廃止)。
+//   カードを2本指(タッチ)で長押しすると「リサイズ可能モード」に入り、そのままピンチイン/アウトで
+//   カード自体の大きさを変えられる。
+// - マウス/ペン入力は事情が異なり、そもそも同時に2点の座標を送れないためタッチと同じピンチ操作が
+//   できない。その代わり、指と違って端を正確に狙えるので、カード端付近(pointerType!=='touch')
+//   だけは従来通り「その場でドラッグして即リサイズ」を残し、カーソルもリサイズ形状に変える。
 // - カード側の移動・リサイズは interact.js を使わず、Pointer Events(Pointer Capture)による
 //   自前の実装。理由は、interact.js の resizable(端の当たり判定)がタッチ環境では既定20pxと
 //   広く、小さいカードでは移動しようとした操作までリサイズに奪われてしまう問題があったため。
@@ -22,6 +25,7 @@ const CARD_MIN_HEIGHT = 140;
 const CARD_MAX_SIZE = 900; // ピンチで際限なく巨大化しないための上限
 const CARD_PINCH_RATIO_MIN = 0.3;
 const CARD_PINCH_RATIO_MAX = 4;
+const MOUSE_RESIZE_MARGIN = 8; // マウス/ペンは正確に狙えるため、タッチ用の20pxより控えめでよい
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -133,18 +137,42 @@ function distanceBetween(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/** カード端(margin px以内)に (clientX, clientY) が掛かっているか判定する(マウス/ペン専用) */
+function getEdgeHit(rect, clientX, clientY, margin) {
+  const left = clientX - rect.left <= margin;
+  const right = rect.right - clientX <= margin;
+  const top = clientY - rect.top <= margin;
+  const bottom = rect.bottom - clientY <= margin;
+  if (!left && !right && !top && !bottom) return null;
+  return { left, right, top, bottom };
+}
+
+/** 端の組み合わせから、どちらの方向にドラッグするかを示す resize カーソル形状を返す */
+function cursorForEdges(edges) {
+  if (!edges) return '';
+  const { left, right, top, bottom } = edges;
+  if ((left && top) || (right && bottom)) return 'nwse-resize';
+  if ((right && top) || (left && bottom)) return 'nesw-resize';
+  if (left || right) return 'ew-resize';
+  if (top || bottom) return 'ns-resize';
+  return '';
+}
+
 /**
- * カード1枚ぶんのジェスチャーを管理する。指の本数で役割が変わる:
- * - 1指: 既定ではそのままキャンバスのパンとしてバブリングさせる。0.3秒長押しすると
+ * カード1枚ぶんのジェスチャーを管理する。入力方式・指の本数で役割が変わる:
+ * - タッチ1指: 既定ではそのままキャンバスのパンとしてバブリングさせる。0.3秒長押しすると
  *   「移動可能モード」に入り、そのまま指に追従して移動する。
- * - 2指: 両方の指が0.3秒ほど静止したら「リサイズ可能モード」に入り、以降は2指の間の
+ * - タッチ2指: 両方の指が0.3秒ほど静止したら「リサイズ可能モード」に入り、以降は2指の間の
  *   距離の変化(ピンチイン/アウト)に合わせてカード自身の大きさを変える。
+ * - マウス/ペン: 同時に2点の座標を送れずピンチができないため、カード端付近(数px)で
+ *   押した場合だけ即座にリサイズドラッグを開始する(長押し不要。マウスは指と違い正確に
+ *   端を狙えるため、待たせる必要がない)。それ以外の場所は1指と同じ長押し移動の扱い。
  *
- * どちらのモードも Pointer Capture を使い、指がカードの外まで大きく動いても
+ * 移動・リサイズいずれも Pointer Capture を使い、ポインタがカードの外まで大きく動いても
  * このカード自身でイベントを受け続けられるようにしている。
  */
 function attachCardGestures(el) {
-  const pointers = new Map(); // pointerId -> { x, y }(このカード上でいま押されている指)
+  const pointers = new Map(); // pointerId -> { x, y }(このカード上でいま押されているポインタ)
 
   // 1指(移動)の状態
   let moveTimer = null;
@@ -152,11 +180,14 @@ function attachCardGestures(el) {
   let moveLastPos = null;
   let moveLifted = false;
 
-  // 2指(リサイズ)の状態
+  // 2指(タッチのピンチリサイズ)の状態
   let resizeTimer = null;
   let resizePending = null; // { ids: [id1, id2], starts: {id: {x,y}} } (長押し待機中)
   let resizeActive = false;
   let resizeStart = null; // { dist, width, height, centerX, centerY }
+
+  // マウス/ペンの端ドラッグリサイズの状態
+  let edgeResize = null; // { pointerId, edges, startClientX, startClientY, startWidth, startHeight, startCardX, startCardY }
 
   function clearMoveTimer() {
     if (moveTimer) {
@@ -277,9 +308,82 @@ function attachCardGestures(el) {
     resizePending = null;
   }
 
+  /** マウス/ペンでカード端をつかんだ瞬間、長押し不要でその場からリサイズを開始する */
+  function startEdgeResize(event, edges) {
+    edgeResize = {
+      pointerId: event.pointerId,
+      edges,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startWidth: parseFloat(el.style.width) || el.getBoundingClientRect().width,
+      startHeight: parseFloat(el.style.height) || el.getBoundingClientRect().height,
+      startCardX: parseFloat(el.dataset.x) || 0,
+      startCardY: parseFloat(el.dataset.y) || 0,
+    };
+    try {
+      el.setPointerCapture(event.pointerId);
+    } catch (err) {
+      /* no-op */
+    }
+    el.classList.add('star-card--resize-ready');
+    interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
+  }
+
+  function updateEdgeResize(event) {
+    const dx = (event.clientX - edgeResize.startClientX) / viewportState.scale;
+    const dy = (event.clientY - edgeResize.startClientY) / viewportState.scale;
+    let width = edgeResize.startWidth;
+    let height = edgeResize.startHeight;
+
+    if (edgeResize.edges.right) width = edgeResize.startWidth + dx;
+    if (edgeResize.edges.left) width = edgeResize.startWidth - dx;
+    if (edgeResize.edges.bottom) height = edgeResize.startHeight + dy;
+    if (edgeResize.edges.top) height = edgeResize.startHeight - dy;
+
+    width = clamp(width, CARD_MIN_WIDTH, CARD_MAX_SIZE);
+    height = clamp(height, CARD_MIN_HEIGHT, CARD_MAX_SIZE);
+
+    // 右端/下端は左上を固定点にすればよいが、左端/上端は反対側(右/下)が固定点になるため、
+    // クランプ後の幅・高さから x/y を逆算する
+    const x = edgeResize.edges.left
+      ? edgeResize.startCardX + (edgeResize.startWidth - width)
+      : edgeResize.startCardX;
+    const y = edgeResize.edges.top
+      ? edgeResize.startCardY + (edgeResize.startHeight - height)
+      : edgeResize.startCardY;
+
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    el.dataset.x = String(x);
+    el.dataset.y = String(y);
+    applyCardTransform(el);
+  }
+
+  function endEdgeResize() {
+    el.classList.remove('star-card--resize-ready');
+    const card = getCardById(el.dataset.id);
+    if (card) {
+      card.width = parseFloat(el.style.width);
+      card.height = parseFloat(el.style.height);
+      card.x = parseFloat(el.dataset.x) || 0;
+      card.y = parseFloat(el.dataset.y) || 0;
+    }
+    interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
+    edgeResize = null;
+  }
+
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('button, textarea')) return;
-    if (pointers.size >= 2) return; // 3本目以降は無視
+    if (pointers.size >= 2 || edgeResize) return; // 3点目以降・多重開始は無視
+
+    // マウス/ペンがカード端付近を押した場合は、長押しなしで即リサイズ開始
+    if (event.pointerType !== 'touch' && pointers.size === 0) {
+      const edges = getEdgeHit(el.getBoundingClientRect(), event.clientX, event.clientY, MOUSE_RESIZE_MARGIN);
+      if (edges) {
+        startEdgeResize(event, edges);
+        return;
+      }
+    }
 
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     try {
@@ -305,7 +409,25 @@ function attachCardGestures(el) {
     }
   });
 
+  // カードから離れる際、リサイズカーソルが残ったままにならないよう戻す
+  el.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'touch' || edgeResize || pointers.size > 0) return;
+    el.style.cursor = '';
+  });
+
+  // マウス/ペンがボタンを押さずカード上をホバーしている間、端に近づいたらリサイズカーソルを示す
   el.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'touch' || event.buttons !== 0 || edgeResize || pointers.size > 0) return;
+    const edges = getEdgeHit(el.getBoundingClientRect(), event.clientX, event.clientY, MOUSE_RESIZE_MARGIN);
+    el.style.cursor = cursorForEdges(edges);
+  });
+
+  el.addEventListener('pointermove', (event) => {
+    if (edgeResize && event.pointerId === edgeResize.pointerId) {
+      updateEdgeResize(event);
+      return;
+    }
+
     if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
@@ -347,6 +469,10 @@ function attachCardGestures(el) {
   });
 
   function handlePointerEnd(event) {
+    if (edgeResize && event.pointerId === edgeResize.pointerId) {
+      endEdgeResize();
+      return;
+    }
     if (!pointers.has(event.pointerId)) return;
     pointers.delete(event.pointerId);
 
