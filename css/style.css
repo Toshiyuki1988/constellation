@@ -181,11 +181,6 @@ html, body {
   transform-origin: 0 0;
 }
 
-/* 手のひらツール有効時: カード類の当たり判定を消し、キャンバスの移動/拡大縮小だけを受け付ける */
-.canvas-content.pan-mode-active {
-  pointer-events: none;
-}
-
 .tool-btn.active {
   background: var(--text);
   color: #fff;
@@ -246,6 +241,24 @@ html, body {
   flex-direction: column;
   gap: 6px;
   touch-action: none;
+  transition: box-shadow 0.15s ease-out;
+}
+
+/* 長押し開始直後(移動可能になる前)の予兆: 影を徐々に濃くする */
+.star-card--pressing {
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.22);
+  transition: box-shadow 0.28s ease-out;
+}
+
+/*
+ * 長押しが確定し、カード移動が可能になった状態: 影を強め、わずかに拡大する。
+ * transform はドラッグ中に毎フレーム書き換えられるため、ここに transition を掛けると
+ * 追従がもたついて見える。拡大は即座に反映し、box-shadow だけをなめらかに変化させる。
+ */
+.star-card--lifted {
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.3);
+  transition: box-shadow 0.12s ease-out;
+  z-index: 5;
 }
 
 .star-card-media {

@@ -30,7 +30,6 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo = document.getElementById('tool-video');
   els.toolAudio = document.getElementById('tool-audio');
   els.toolSession = document.getElementById('tool-session');
-  els.toolPan = document.getElementById('tool-pan');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
@@ -72,22 +71,10 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
-  els.toolPan.addEventListener('click', togglePanMode);
   els.saveBtn.addEventListener('click', handleSave);
 
   initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled);
 });
-
-/* ---------------- 手のひらツール(カードの当たり判定を切り、キャンバス移動/拡大縮小だけを行う) ---------------- */
-
-let panModeActive = false;
-
-function togglePanMode() {
-  panModeActive = !panModeActive;
-  els.content.classList.toggle('pan-mode-active', panModeActive);
-  els.toolPan.classList.toggle('active', panModeActive);
-  setStatus(panModeActive ? '手のひらツール: キャンバスの移動・拡大縮小のみ' : '手のひらツールを解除しました');
-}
 
 /* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ---------------- */
 
@@ -98,8 +85,6 @@ function buildPieTools() {
     { label: 'OCR', icon: els.toolOcr.querySelector('svg').outerHTML, action: () => handleOpenCamera('caption') },
     { label: '動画撮影', icon: els.toolVideo.querySelector('svg').outerHTML, action: () => handleOpenCamera('video') },
     { label: '音声録音', icon: els.toolAudio.querySelector('svg').outerHTML, action: () => handleOpenCamera('audio') },
-    { label: 'セッション', icon: els.toolSession.querySelector('svg').outerHTML, action: () => handleCreateSession() },
-    { label: '手のひら', icon: els.toolPan.querySelector('svg').outerHTML, action: () => togglePanMode() },
   ];
 }
 
@@ -155,7 +140,6 @@ function toggleAuthUI(signedIn) {
   els.toolVideo.disabled = !signedIn;
   els.toolAudio.disabled = !signedIn;
   els.toolSession.disabled = !signedIn;
-  els.toolPan.disabled = !signedIn;
 }
 
 function setStatus(message) {
@@ -343,6 +327,12 @@ function attachTapToOpen(el, onOpen) {
     if (!downPos) return;
     const moved = Math.hypot(event.clientX - downPos.x, event.clientY - downPos.y);
     downPos = null;
+    // 直前に長押しでカードの移動可能モードに入っていた場合は、置いただけでも開かない
+    const card = el.closest('.star-card');
+    if (card && card.dataset.justLifted) {
+      delete card.dataset.justLifted;
+      return;
+    }
     if (moved < 6) onOpen();
   });
 }
@@ -360,7 +350,7 @@ function renderCard(card) {
   el.dataset.y = String(card.y);
   el.style.width = `${card.width}px`;
   el.style.height = `${card.height}px`;
-  el.style.transform = `translate(${card.x}px, ${card.y}px)`;
+  applyCardTransform(el);
 
   if (isSessionCard) {
     const refSession = getSessionById(card.refSessionId);
@@ -378,7 +368,7 @@ function renderCard(card) {
       ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? `<button class="star-card-caption-btn" title="キャプションを読み取る">${PIN_ICON_SVG}</button>` : ''}
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
       <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
-      <button class="star-card-edit-btn" title="メモを編集" ${hasMemo ? '' : 'hidden'}>${EDIT_ICON_SVG}</button>
+      <button class="star-card-edit-btn" title="メモを書く">${EDIT_ICON_SVG}</button>
     `;
   }
   els.content.appendChild(el);
@@ -401,10 +391,17 @@ function renderCard(card) {
   // 鉛筆ボタンを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
   memoEl.addEventListener('blur', () => {
     memoEl.style.pointerEvents = 'none';
+    // OCR取り込みも手入力もなく空のまま編集を終えた場合は、テキスト欄を再び隠す
+    if (!isTextCard && !memoEl.value.trim()) {
+      memoEl.hidden = true;
+      syncCardHeight(el);
+    }
   });
   editBtn.addEventListener('click', () => {
+    memoEl.hidden = false;
     memoEl.style.pointerEvents = 'auto';
     memoEl.focus();
+    syncCardHeight(el);
   });
 
   el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
@@ -415,19 +412,61 @@ function renderCard(card) {
   }
 
   if (card.imageFileId) {
-    fetchFileBlobUrl(card.imageFileId).then((url) => {
-      const mediaEl = el.querySelector('.star-card-media');
-      if (mediaType === 'video') {
-        mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
-      } else if (mediaType === 'audio') {
-        mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
-      } else {
-        mediaEl.style.backgroundImage = `url(${url})`;
-      }
-    });
+    const mediaEl = el.querySelector('.star-card-media');
+    // 概観時はまず軽量サムネイル(あれば)を即表示し、実際にカードが画面内に来たときだけ
+    // Driveへ本画像/動画/音声を取りに行く(OneNoteのサムネイル運用と同じ考え方)。
+    if (mediaType === 'image' && card.thumbDataUrl) {
+      mediaEl.style.backgroundImage = `url(${card.thumbDataUrl})`;
+    }
+    observeMediaForLazyLoad(el, card);
   }
 
   syncCardHeight(el);
+}
+
+/* ---------------- 画像・動画・音声の遅延読み込み ----------------
+ * キャンバス上に大量のカードを置いても、実際に画面内へ入ったものだけをDriveから取得する。
+ * 取得済みのfileIdはキャッシュし、セッションの行き来などで再描画されても再取得しない。 */
+
+const blobUrlCache = new Map();
+
+function getFileBlobUrlCached(fileId) {
+  if (!blobUrlCache.has(fileId)) {
+    blobUrlCache.set(fileId, fetchFileBlobUrl(fileId));
+  }
+  return blobUrlCache.get(fileId);
+}
+
+let mediaVisibilityObserver = null;
+const cardByMediaEl = new WeakMap();
+
+function observeMediaForLazyLoad(el, card) {
+  cardByMediaEl.set(el, card);
+  if (!mediaVisibilityObserver) {
+    mediaVisibilityObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        mediaVisibilityObserver.unobserve(entry.target);
+        loadFullMedia(entry.target, cardByMediaEl.get(entry.target));
+      });
+    }, { root: els.viewport, rootMargin: '400px' });
+  }
+  mediaVisibilityObserver.observe(el);
+}
+
+function loadFullMedia(el, card) {
+  const mediaEl = el.querySelector('.star-card-media');
+  if (!mediaEl || !card.imageFileId) return;
+  const mediaType = card.mediaType || 'image';
+  getFileBlobUrlCached(card.imageFileId).then((url) => {
+    if (mediaType === 'video') {
+      mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
+    } else if (mediaType === 'audio') {
+      mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
+    } else {
+      mediaEl.style.backgroundImage = `url(${url})`;
+    }
+  });
 }
 
 /**
@@ -507,7 +546,6 @@ async function handleCardCaption(card, el) {
   const memoEl = el.querySelector('.star-card-memo');
   memoEl.value = card.memo;
   memoEl.hidden = false;
-  el.querySelector('.star-card-edit-btn').hidden = false;
   syncCardHeight(el);
   setStatus('キャプションを反映しました(保存ボタンで確定)');
 }
@@ -605,9 +643,36 @@ function createTextCard(text) {
   return card;
 }
 
+/**
+ * 画像を軽量なサムネイル(dataURL、長辺240px・JPEG圧縮)に縮小する。カードデータに同梱しておくことで、
+ * 概観時にDriveへ問い合わせなくても即座にプレビューを表示できる(OneNoteのサムネイル運用と同じ考え方)。
+ * 実寸の画像は表示中のカードだけ observeMediaForLazyLoad() 経由で遅延取得する。
+ */
+function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(blob);
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(objectUrl);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(null);
+    };
+    img.src = objectUrl;
+  });
+}
+
 /** Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラの両経路から使う */
 async function createCardFromCapture({ blob, filename, mediaType, memo }) {
   setStatus('アップロード中…');
+  const thumbPromise = mediaType === 'image' ? generateThumbnail(blob) : Promise.resolve(null);
   let fileId;
   try {
     fileId = await uploadFile(state.folderId, blob, filename);
@@ -616,6 +681,7 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
     setStatus('アップロードに失敗しました');
     return null;
   }
+  const thumbDataUrl = await thumbPromise;
 
   const card = {
     id: crypto.randomUUID(),
@@ -627,6 +693,7 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
     tags: [],
     mediaType,
     imageFileId: fileId,
+    thumbDataUrl,
     sessionId: activeSessionId(),
     createdAt: new Date().toISOString(),
   };
