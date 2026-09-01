@@ -123,10 +123,19 @@ function stopAutoPan() {
 /**
  * カードを0.3秒ほど長押しすると「移動可能モード」に入る。それ以外の1指操作は
  * (このカードでは何もせず)そのままキャンバスのパンとしてバブリングさせる。
+ *
+ * 移動処理は interact.js の draggable に頼らず、Pointer Capture を使った自前の
+ * translate計算で行う。理由は2つ:
+ * 1. interact.js の resizable(端の当たり判定)がタッチ環境では既定20pxとかなり広く、
+ *    draggable を長押し後に動的に有効化しても resizable 側にジェスチャーを奪われ、
+ *    見た目の「持ち上げ」演出はするのに実際には移動できない/意図せず縮小される事があった。
+ * 2. Pointer Capture により、指がカードの外まで大きく動いても移動イベントを確実に
+ *    このカード自身で受け続けられる。
  */
 function attachCardLongPress(el) {
   let timer = null;
   let start = null; // { x, y, pointerId }
+  let lastPos = null; // 移動可能モード中の直近ポインタ位置(差分計算用)
   let lifted = false;
 
   function clearTimer() {
@@ -142,7 +151,6 @@ function attachCardLongPress(el) {
     el.classList.remove('star-card--pressing');
     el.classList.add('star-card--lifted');
     applyCardTransform(el);
-    interact(el).draggable({ enabled: true });
     // 移動可能モード中はキャンバス側のパン/ピンチと競合しないよう無効化する
     interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
     if (navigator.vibrate) navigator.vibrate(8);
@@ -150,9 +158,14 @@ function attachCardLongPress(el) {
 
   function dropCard() {
     lifted = false;
+    lastPos = null;
+    const card = getCardById(el.dataset.id);
+    if (card) {
+      card.x = parseFloat(el.dataset.x) || 0;
+      card.y = parseFloat(el.dataset.y) || 0;
+    }
     el.classList.remove('star-card--lifted', 'star-card--pressing');
     applyCardTransform(el);
-    interact(el).draggable({ enabled: false });
     interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
     stopAutoPan();
   }
@@ -160,6 +173,14 @@ function attachCardLongPress(el) {
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('button, textarea')) return;
     start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+    lastPos = { x: event.clientX, y: event.clientY };
+    // 指がカードの外に大きくはみ出しても、このカードで move/up を受け続けられるようにする
+    // (ブラウザによっては無効な pointerId で例外を投げることがあるため安全に無視する)
+    try {
+      el.setPointerCapture(event.pointerId);
+    } catch (err) {
+      /* no-op */
+    }
     el.classList.add('star-card--pressing');
     clearTimer();
     timer = setTimeout(() => {
@@ -171,6 +192,14 @@ function attachCardLongPress(el) {
   el.addEventListener('pointermove', (event) => {
     if (!start || event.pointerId !== start.pointerId) return;
     if (lifted) {
+      const dx = (event.clientX - lastPos.x) / viewportState.scale;
+      const dy = (event.clientY - lastPos.y) / viewportState.scale;
+      lastPos = { x: event.clientX, y: event.clientY };
+      const x = (parseFloat(el.dataset.x) || 0) + dx;
+      const y = (parseFloat(el.dataset.y) || 0) + dy;
+      el.dataset.x = String(x);
+      el.dataset.y = String(y);
+      applyCardTransform(el);
       updateAutoPanPointer(event.clientX, event.clientY);
       return;
     }
@@ -192,31 +221,14 @@ function attachCardLongPress(el) {
   });
 }
 
-/** カード要素にドラッグ・リサイズを付与する(ドラッグは長押し確定まで無効) */
+/** カード要素にリサイズを付与する(移動は attachCardLongPress の自前処理が担う) */
 function makeCardInteractive(el) {
   interact(el)
-    .draggable({
-      enabled: false,
-      ignoreFrom: 'button, textarea',
-      listeners: {
-        move(event) {
-          const x = (parseFloat(el.dataset.x) || 0) + event.dx / viewportState.scale;
-          const y = (parseFloat(el.dataset.y) || 0) + event.dy / viewportState.scale;
-          el.dataset.x = String(x);
-          el.dataset.y = String(y);
-          applyCardTransform(el);
-          updateAutoPanPointer(event.client.x, event.client.y);
-        },
-        end(event) {
-          const card = getCardById(event.target.dataset.id);
-          if (!card) return;
-          card.x = parseFloat(event.target.dataset.x) || 0;
-          card.y = parseFloat(event.target.dataset.y) || 0;
-        },
-      },
-    })
     .resizable({
       edges: { left: true, right: true, top: true, bottom: true },
+      // interact.js のタッチ既定値(20px)は小さいカードだと大半を占めてしまい、
+      // 移動しようとした操作までリサイズに奪われる原因になるため、控えめな値に絞る。
+      margin: 10,
       listeners: {
         move(event) {
           let x = parseFloat(el.dataset.x) || 0;
