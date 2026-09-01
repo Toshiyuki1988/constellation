@@ -87,6 +87,19 @@ function initCanvas(viewportElArg, contentElArg) {
       deactivateEditGuide(editGuideCard);
     }
   });
+
+  // 非ガイドモードで背景(カードのない部分)をダブルタップ/ダブルクリックすると、
+  // 全カードが収まるまでズームアウトして俯瞰できるようにする。
+  viewportEl.addEventListener('dblclick', (event) => {
+    if (editGuideCard) return;
+    if (event.target !== viewportEl) return;
+    fitAllCardsToScreen();
+  });
+}
+
+/** 現在編集ガイドが表示されているカード要素(なければnull)。js/app.js のコピペ機能から参照する。 */
+function getEditGuideCard() {
+  return editGuideCard;
 }
 
 function onViewportPan(event) {
@@ -95,16 +108,71 @@ function onViewportPan(event) {
   applyViewportTransform();
 }
 
-function onViewportPinch(event) {
-  viewportState.scale = clamp(viewportState.scale * (1 + event.ds), MIN_SCALE, MAX_SCALE);
+/**
+ * 指/カーソルの真下にある1点を固定したままスケールだけを変える。
+ * (clientX, clientY) はブラウザ座標(viewportEl.getBoundingClientRect()基準に変換して使う)。
+ */
+function zoomAroundPoint(clientX, clientY, newScale) {
+  newScale = clamp(newScale, MIN_SCALE, MAX_SCALE);
+  const rect = viewportEl.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const py = clientY - rect.top;
+  // ズーム前、その画面座標が指していたコンテンツ側の座標(不変点)
+  const contentX = (px - viewportState.x) / viewportState.scale;
+  const contentY = (py - viewportState.y) / viewportState.scale;
+  viewportState.scale = newScale;
+  viewportState.x = px - contentX * newScale;
+  viewportState.y = py - contentY * newScale;
   applyViewportTransform();
+}
+
+function onViewportPinch(event) {
+  zoomAroundPoint(event.clientX, event.clientY, viewportState.scale * (1 + event.ds));
 }
 
 function onViewportWheel(event) {
   event.preventDefault();
   const delta = -event.deltaY * 0.001;
-  viewportState.scale = clamp(viewportState.scale + delta, MIN_SCALE, MAX_SCALE);
+  zoomAroundPoint(event.clientX, event.clientY, viewportState.scale + delta);
+}
+
+/* ---------------- 非ガイドモードでのダブルタップ: 全カードが収まるまでズームアウト ---------------- */
+
+function fitAllCardsToScreen() {
+  const cardEls = contentEl.querySelectorAll('.star-card');
+  if (cardEls.length === 0) return;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  cardEls.forEach((el) => {
+    const x = parseFloat(el.dataset.x) || 0;
+    const y = parseFloat(el.dataset.y) || 0;
+    const w = parseFloat(el.style.width) || el.offsetWidth;
+    const h = parseFloat(el.style.height) || el.offsetHeight;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + w);
+    maxY = Math.max(maxY, y + h);
+  });
+
+  const PADDING = 60; // 画面端に残す余白(px)
+  const rect = viewportEl.getBoundingClientRect();
+  const contentWidth = Math.max(1, maxX - minX);
+  const contentHeight = Math.max(1, maxY - minY);
+  const scaleX = (rect.width - PADDING * 2) / contentWidth;
+  const scaleY = (rect.height - PADDING * 2) / contentHeight;
+  const newScale = clamp(Math.min(scaleX, scaleY), MIN_SCALE, MAX_SCALE);
+  const centerX = minX + contentWidth / 2;
+  const centerY = minY + contentHeight / 2;
+
+  contentEl.classList.add('canvas-content--animated');
+  viewportState.scale = newScale;
+  viewportState.x = rect.width / 2 - centerX * newScale;
+  viewportState.y = rect.height / 2 - centerY * newScale;
   applyViewportTransform();
+  setTimeout(() => contentEl.classList.remove('canvas-content--animated'), 400);
 }
 
 /* ---------------- カードの自動パン(移動中に画面端へ近づいたらキャンバスが追従する) ---------------- */
@@ -243,7 +311,7 @@ function attachCardGestures(el) {
 
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('.star-card-handle, .star-card-hex')) return; // ハンドル/編集ガイドのボタンは専用処理
-    if (event.target.closest('button, textarea')) return;
+    if (event.target.closest('button, textarea, input')) return;
     if (pointerId !== null) return; // 既に1点を追跡中なら追加のポインタは無視
 
     pointerId = event.pointerId;

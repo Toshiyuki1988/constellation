@@ -320,17 +320,11 @@ function renderAllCards() {
 
 const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
 
-// キャプションボタンのアイコン(モノクロのピン、絵文字ではなく currentColor の線画)
-const PIN_ICON_SVG =
-  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" ' +
-  'stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12a7 7 0 10-14 0c0 4.42 7 12 7 12z"/>' +
-  '<circle cx="12" cy="9" r="2.4"/></svg>';
-
-// メモ編集ボタンのアイコン(モノクロの鉛筆)
-const EDIT_ICON_SVG =
+// セッションカードのタイトル編集欄に添えるOCR起動ボタンのアイコン(モノクロのカメラ)
+const CAMERA_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" ' +
-  'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>' +
-  '<path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>';
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/>' +
+  '<circle cx="12" cy="13.2" r="3.2"/></svg>';
 
 // 編集ガイド(長押しで表示される緑のトンボ)。四隅は自由変形、四辺は縦横どちらか片方だけの
 // リサイズを担う。実際のドラッグ処理は js/canvas.js の attachCardGestures() 側で行う。
@@ -347,7 +341,7 @@ function editGuideHexHtml(mediaType) {
   const hex = (action, label) =>
     `<div class="star-card-hex star-card-hex--${action}" data-action="${action}">` +
     `<span class="star-card-hex-strut star-card-hex-strut--${action}"></span>${label}</div>`;
-  if (mediaType === 'session') return hex('delete', 'Delete');
+  if (mediaType === 'session') return hex('title', 'Title') + hex('delete', 'Delete');
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
   return (
     captionHex +
@@ -400,9 +394,14 @@ function renderCard(card) {
   if (isSessionCard) {
     const refSession = getSessionById(card.refSessionId);
     const childCount = state.cards.filter((c) => c.sessionId === card.refSessionId).length;
+    const thumbUrls = pickRandomThumbs(collectDescendantImageThumbs(card.refSessionId), 3);
+    const thumbsHtml = thumbUrls
+      .map((url) => `<div class="star-card-session-thumb" style="background-image:url(${url})"></div>`)
+      .join('');
     el.innerHTML = `
-      <button class="star-card-delete-btn" title="削除">✕</button>
       <div class="star-card-session-body" title="タップで開く">
+        <div class="star-card-session-thumbs">${thumbsHtml}</div>
+        <button class="star-card-title-ocr-btn" title="OCRでタイトルを読み取る" hidden>${CAMERA_ICON_SVG}</button>
         <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
         <span class="star-card-session-count">${childCount}件</span>
       </div>
@@ -411,11 +410,8 @@ function renderCard(card) {
     `;
   } else {
     el.innerHTML = `
-      <button class="star-card-delete-btn" title="削除">✕</button>
-      ${CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? `<button class="star-card-caption-btn" title="キャプションを読み取る">${PIN_ICON_SVG}</button>` : ''}
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
       <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
-      <button class="star-card-edit-btn" title="メモを書く">${EDIT_ICON_SVG}</button>
       ${EDIT_GUIDE_HANDLES_HTML}
       ${editGuideHexHtml(mediaType)}
     `;
@@ -438,6 +434,8 @@ function renderCard(card) {
           memoEl.focus();
           syncCardHeight(el);
         }
+      } else if (action === 'title') {
+        startSessionTitleEdit(card, el);
       } else if (action === 'astr') {
         setStatus('ASTR: カード同士を線で繋ぐ機能は準備中です');
       } else if (action === 'depth') {
@@ -445,18 +443,16 @@ function renderCard(card) {
         el.classList.toggle('star-card--depth-blurred', card.depthBlurred);
         scheduleAutoSave();
       }
-      if (action !== 'astr') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title') scheduleAutoSave();
     });
   });
 
   if (isSessionCard) {
-    el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
     attachTapToOpen(el.querySelector('.star-card-session-body'), () => enterSession(card.refSessionId, false));
     return;
   }
 
   const memoEl = el.querySelector('.star-card-memo');
-  const editBtn = el.querySelector('.star-card-edit-btn');
 
   memoEl.addEventListener('input', () => {
     card.memo = memoEl.value;
@@ -464,7 +460,7 @@ function renderCard(card) {
     scheduleAutoSave();
   });
   // 既定ではメモへのポインタ操作を無効化し、カードの移動を優先する。
-  // 鉛筆ボタンを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
+  // 編集ガイドのEditアクションを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
   memoEl.addEventListener('blur', () => {
     memoEl.style.pointerEvents = 'none';
     // OCR取り込みも手入力もなく空のまま編集を終えた場合は、テキスト欄を再び隠す
@@ -473,19 +469,6 @@ function renderCard(card) {
       syncCardHeight(el);
     }
   });
-  editBtn.addEventListener('click', () => {
-    memoEl.hidden = false;
-    memoEl.style.pointerEvents = 'auto';
-    memoEl.focus();
-    syncCardHeight(el);
-  });
-
-  el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
-
-  const captionBtn = el.querySelector('.star-card-caption-btn');
-  if (captionBtn) {
-    captionBtn.addEventListener('click', () => handleCardCaption(card, el));
-  }
 
   if (card.imageFileId) {
     const mediaEl = el.querySelector('.star-card-media');
@@ -571,6 +554,169 @@ function syncCardHeight(el) {
   if (card) card.height = total;
 }
 
+/** セッション配下(入れ子を含む)にある画像カードのサムネイル(dataURL)を再帰的に集める */
+function collectDescendantImageThumbs(sessionId, depth = 0) {
+  if (depth > 6) return []; // 循環参照などに備えた保険
+  const thumbs = [];
+  state.cards
+    .filter((c) => c.sessionId === sessionId)
+    .forEach((c) => {
+      if (c.mediaType === 'session') {
+        thumbs.push(...collectDescendantImageThumbs(c.refSessionId, depth + 1));
+      } else if (c.mediaType === 'image' && c.thumbDataUrl) {
+        thumbs.push(c.thumbDataUrl);
+      }
+    });
+  return thumbs;
+}
+
+/** 配列からランダムにcount件を選ぶ(元の配列は変更しない) */
+function pickRandomThumbs(arr, count) {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, count);
+}
+
+/**
+ * セッションカードの「Title」ガイドから呼ぶ。タイトルをその場でテキスト入力に切り替え、
+ * OCRボタン(カメラ起動→読み取ったテキストをそのまま入力欄へ)も一時的に表示する。
+ */
+function startSessionTitleEdit(card, el) {
+  const refSession = getSessionById(card.refSessionId);
+  if (!refSession) return;
+  const nameEl = el.querySelector('.star-card-session-name');
+  const ocrBtn = el.querySelector('.star-card-title-ocr-btn');
+  if (!nameEl || nameEl.tagName === 'INPUT') return; // 既に編集中なら何もしない
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'star-card-session-name-input';
+  input.value = refSession.name;
+  input.addEventListener('pointerdown', (event) => event.stopPropagation());
+  input.addEventListener('click', (event) => event.stopPropagation());
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  ocrBtn.hidden = false;
+
+  function commit() {
+    const newName = input.value.trim();
+    if (newName) {
+      refSession.name = newName;
+      scheduleAutoSave();
+    }
+    const span = document.createElement('span');
+    span.className = 'star-card-session-name';
+    span.textContent = refSession.name;
+    input.replaceWith(span);
+    ocrBtn.hidden = true;
+  }
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') input.blur();
+  });
+
+  ocrBtn.onpointerdown = (event) => {
+    event.stopPropagation();
+    event.preventDefault(); // input からフォーカスを奪わない(blurでの早期commitを防ぐ)
+  };
+  ocrBtn.onclick = async (event) => {
+    event.stopPropagation();
+    const result = await openCamera('caption');
+    if (result && result.kind === 'text' && result.text.trim()) {
+      input.value = result.text.trim();
+    }
+    input.focus();
+  };
+}
+
+/* ---------------- クリップボード(編集ガイド中の Ctrl+C / Ctrl+X / Ctrl+V) ----------------
+ * セッションカードは中身(参照先セッション + その配下のカード/子セッション)ごと、
+ * 新しいIDを振り直しながら丸ごとコピー/ペーストできる。 */
+
+let cardClipboard = null; // snapshotCardSubtree() の戻り値、またはnull
+
+/** カード(セッションカードなら配下も再帰的に)を、Driveへの参照はそのままにデータだけ複製する */
+function snapshotCardSubtree(card) {
+  const cardCopy = JSON.parse(JSON.stringify(card));
+  if (card.mediaType === 'session') {
+    const session = getSessionById(card.refSessionId);
+    const sessionCopy = session ? JSON.parse(JSON.stringify(session)) : null;
+    const children = state.cards
+      .filter((c) => c.sessionId === card.refSessionId)
+      .map((c) => snapshotCardSubtree(c));
+    return { card: cardCopy, session: sessionCopy, children };
+  }
+  return { card: cardCopy };
+}
+
+/** snapshotCardSubtree() のスナップショットを新しいIDで state に実体化する */
+function materializeSnapshot(node, targetSessionId, offset) {
+  const newCard = { ...node.card, id: crypto.randomUUID(), sessionId: targetSessionId };
+  if (offset) {
+    newCard.x = (newCard.x || 0) + offset.x;
+    newCard.y = (newCard.y || 0) + offset.y;
+  }
+  if (node.session) {
+    const newSession = { ...node.session, id: crypto.randomUUID(), parentId: targetSessionId };
+    state.sessions.push(newSession);
+    newCard.refSessionId = newSession.id;
+    (node.children || []).forEach((childNode) => materializeSnapshot(childNode, newSession.id, null));
+  }
+  state.cards.push(newCard);
+  return newCard;
+}
+
+/** 確認なしでカードをキャンバス/state から取り除く(カット・確認済み削除の共通処理) */
+function removeCardFromState(card, el) {
+  const idx = state.cards.indexOf(card);
+  if (idx !== -1) state.cards.splice(idx, 1);
+  el.remove();
+  scheduleAutoSave();
+}
+
+function pasteCardFromClipboard() {
+  if (!cardClipboard) return;
+  const newCard = materializeSnapshot(cardClipboard, activeSessionId(), { x: 24, y: 24 });
+  renderCard(newCard);
+  setStatus('貼り付けました');
+  scheduleAutoSave();
+}
+
+document.addEventListener('keydown', (event) => {
+  const isMod = event.ctrlKey || event.metaKey;
+  if (!isMod) return;
+  const active = document.activeElement;
+  const isEditingText = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
+  if (isEditingText) return; // テキスト編集中は通常のコピー/カット/ペーストに任せる
+
+  const key = event.key.toLowerCase();
+  const guideEl = getEditGuideCard();
+
+  if (key === 'c' && guideEl) {
+    const card = getCardById(guideEl.dataset.id);
+    if (!card) return;
+    event.preventDefault();
+    cardClipboard = snapshotCardSubtree(card);
+    setStatus('コピーしました');
+  } else if (key === 'x' && guideEl) {
+    const card = getCardById(guideEl.dataset.id);
+    if (!card) return;
+    event.preventDefault();
+    cardClipboard = snapshotCardSubtree(card);
+    removeCardFromState(card, guideEl);
+    deactivateEditGuide(guideEl);
+    setStatus('カットしました');
+  } else if (key === 'v' && cardClipboard) {
+    event.preventDefault();
+    pasteCardFromClipboard();
+  }
+});
+
 /** セッション配下(入れ子を含む)のカード数・子セッション数を数える(削除確認の文言に使う) */
 function countSessionContents(sessionId) {
   let cardCount = 0;
@@ -612,11 +758,8 @@ function confirmDeleteCard(card) {
 
 function deleteCard(card, el) {
   if (!confirmDeleteCard(card)) return;
-  const idx = state.cards.indexOf(card);
-  if (idx !== -1) state.cards.splice(idx, 1);
-  el.remove();
+  removeCardFromState(card, el);
   setStatus('削除しました(Drive上のファイル本体は残ります)');
-  scheduleAutoSave();
 }
 
 /** 写真・動画カードの📌ボタン: OCRだけ起動し、結果をそのカードのメモに追記する */

@@ -181,6 +181,12 @@ html, body {
   transform-origin: 0 0;
 }
 
+/* ダブルタップでの「全体を俯瞰」ズーム中だけtransformをアニメーションさせる
+   (通常のドラッグ/ピンチ操作では毎フレーム書き換わるためtransitionを掛けない) */
+.canvas-content--animated {
+  transition: transform 0.35s ease-out;
+}
+
 .tool-btn.active {
   background: var(--text);
   color: #fff;
@@ -264,13 +270,6 @@ html, body {
   z-index: 5;
 }
 
-/* 編集ガイド表示中は操作アイコンより変形ハンドルを優先し、視覚的な混雑を避ける */
-.star-card--edit-guide .star-card-delete-btn,
-.star-card--edit-guide .star-card-caption-btn,
-.star-card--edit-guide .star-card-edit-btn {
-  display: none;
-}
-
 /*
  * 編集ガイドのリサイズハンドル(緑のトンボ)。見た目は小さい正方形だが、指でも
  * 狙いやすいよう実際のヒット領域(24x24)は見た目より広く取ってある。
@@ -339,6 +338,7 @@ html, body {
 
 .star-card-hex--caption { left: 0; top: 22%; transform: translate(-115%, -50%); }
 .star-card-hex--edit    { left: 0; top: 78%; transform: translate(-115%, -50%); }
+.star-card-hex--title   { left: 0; top: 50%; transform: translate(-115%, -50%); }
 .star-card-hex--depth   { left: 100%; top: 22%; transform: translate(15%, -50%); }
 .star-card-hex--delete  { left: 100%; top: 78%; transform: translate(15%, -50%); }
 .star-card-hex--astr {
@@ -350,6 +350,9 @@ html, body {
   letter-spacing: 0.04em;
 }
 
+/* セッションカードはTitle/Deleteの2つだけなので、左右それぞれ中央の高さに揃える */
+.star-card--session .star-card-hex--delete { top: 50%; }
+
 .star-card-hex-strut {
   position: absolute;
   height: 2px;
@@ -358,7 +361,7 @@ html, body {
   opacity: 0.7;
   z-index: 6;
 }
-.star-card-hex-strut--caption, .star-card-hex-strut--edit { right: -20px; top: 50%; transform: translateY(-50%); }
+.star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title { right: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--depth, .star-card-hex-strut--delete { left: -20px; top: 50%; transform: translateY(-50%); }
 
 /* Depth: カードを意図的にぼかして視覚的な優先度を下げる */
@@ -399,46 +402,9 @@ html, body {
   width: 100%;
 }
 
-.star-card-delete-btn,
-.star-card-caption-btn,
-.star-card-edit-btn {
-  position: absolute;
-  z-index: 3;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-}
-
-.star-card-delete-btn:hover {
-  color: #fff;
-  background: var(--rust);
-  border-color: var(--rust);
-}
-
-.star-card-caption-btn:hover,
-.star-card-edit-btn:hover {
-  color: var(--text);
-  background: #fff;
-  border-color: var(--text);
-}
-
-.star-card-delete-btn { top: 4px; right: 4px; }
-.star-card-caption-btn { top: 4px; left: 4px; }
-.star-card-edit-btn { bottom: 4px; left: 4px; }
-
 /*
  * 高さは js/app.js の syncCardHeight() が内容に合わせて都度セットする(スクロールさせず全文表示)。
- * pointer-events は既定で無効にし、カードのドラッグ移動を優先する。鉛筆ボタン(.star-card-edit-btn)
+ * pointer-events は既定で無効にし、カードのドラッグ移動を優先する。編集ガイドのEditアクション
  * を押した時だけ js/app.js 側で 'auto' に切り替えて編集を受け付ける。
  */
 .star-card-memo {
@@ -455,10 +421,6 @@ html, body {
   padding: 6px 7px;
 }
 
-/* テクストカードは画像枠がなく本文がすぐ上端まで来るため、右上の削除ボタンぶんだけ空ける */
-.star-card--text .star-card-memo {
-  margin-top: 20px;
-}
 
 /* ---------- セッションカード(入れ子セッションへのポータル) ---------- */
 
@@ -468,6 +430,7 @@ html, body {
 }
 
 .star-card-session-body {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
@@ -484,6 +447,36 @@ html, body {
 
 .star-card-session-body:hover { background: #e4e4e4; }
 
+/* 中身の写真をランダムに数枚、背景として敷く(写真が無いセッションは空のまま) */
+.star-card-session-thumbs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  z-index: 0;
+}
+
+.star-card-session-thumb {
+  flex: 1;
+  background-size: cover;
+  background-position: center;
+}
+
+/* 背景の写真の上に文字が読めるよう、下側だけ地の色へ溶け込ませる */
+.star-card-session-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(240, 240, 240, 0) 35%, rgba(240, 240, 240, 0.94) 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.star-card-session-name,
+.star-card-session-count {
+  position: relative;
+  z-index: 1;
+}
+
 .star-card-session-name {
   font-family: var(--serif);
   font-style: italic;
@@ -492,11 +485,46 @@ html, body {
   line-height: 1.3;
 }
 
+.star-card-session-name-input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--text);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
 .star-card-session-count {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--muted);
 }
+
+/* Titleガイドでの編集中だけ現れる、OCRでタイトルを読み取るボタン */
+.star-card-title-ocr-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.star-card-title-ocr-btn:hover { background: #fff; border-color: var(--text); }
 
 .modal-overlay {
   display: none;
