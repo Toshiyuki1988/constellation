@@ -26,6 +26,11 @@ const CARD_MIN_WIDTH = 120;
 const CARD_MIN_HEIGHT = 140;
 const CARD_MAX_SIZE = 900; // ハンドルドラッグで際限なく巨大化しないための上限
 
+// 背景ダブルタップ(俯瞰ズーム)関連の調整値
+const DOUBLE_TAP_MS = 350; // 1回目・2回目のタップの間隔がこれ以内なら「ダブルタップ」とみなす
+const DOUBLE_TAP_MOVE_TOLERANCE_PX = 10; // 指を離すまでにこれ以上動いたらパン操作とみなしタップ扱いしない
+const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 40; // 1回目・2回目のタップ位置がこれ以内ならダブルタップとみなす
+
 // ハンドルの data-edge → どの辺を動かすか
 const EDIT_GUIDE_HANDLE_EDGES = {
   nw: { left: true, top: true },
@@ -44,6 +49,11 @@ function clamp(value, min, max) {
 
 let contentEl = null;
 let viewportEl = null;
+
+// 背景ダブルタップ検知用の状態
+let viewportPressStart = null; // { x, y } (client座標)。背景でpointerdownした位置
+let lastViewportTapAt = 0;
+let lastViewportTapPos = null;
 
 function applyViewportTransform() {
   contentEl.style.transform =
@@ -86,14 +96,39 @@ function initCanvas(viewportElArg, contentElArg) {
     if (editGuideCard && !editGuideCard.contains(event.target)) {
       deactivateEditGuide(editGuideCard);
     }
+    if (event.target === viewportEl) {
+      viewportPressStart = { x: event.clientX, y: event.clientY };
+    } else {
+      viewportPressStart = null;
+    }
   });
 
   // 非ガイドモードで背景(カードのない部分)をダブルタップ/ダブルクリックすると、
   // 全カードが収まるまでズームアウトして俯瞰できるようにする。
-  viewportEl.addEventListener('dblclick', (event) => {
+  // ブラウザ標準の dblclick はスマホでの二本指操作やinteract.jsの介在で確実に発火しない
+  // ことがあるため、長押し検知(上記)と同様に自前でpointerup同士の間隔/距離を見て判定する。
+  viewportEl.addEventListener('pointerup', (event) => {
     if (editGuideCard) return;
     if (event.target !== viewportEl) return;
-    fitAllCardsToScreen();
+    if (!viewportPressStart) return;
+    const moved = Math.hypot(event.clientX - viewportPressStart.x, event.clientY - viewportPressStart.y);
+    viewportPressStart = null;
+    if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) return; // パン操作の指離しはタップとみなさない
+
+    const now = Date.now();
+    const pos = { x: event.clientX, y: event.clientY };
+    if (
+      lastViewportTapPos &&
+      now - lastViewportTapAt < DOUBLE_TAP_MS &&
+      Math.hypot(pos.x - lastViewportTapPos.x, pos.y - lastViewportTapPos.y) < DOUBLE_TAP_DISTANCE_TOLERANCE_PX
+    ) {
+      lastViewportTapAt = 0;
+      lastViewportTapPos = null;
+      fitAllCardsToScreen();
+    } else {
+      lastViewportTapAt = now;
+      lastViewportTapPos = pos;
+    }
   });
 }
 

@@ -148,6 +148,7 @@ async function switchCameraMode(mode) {
     }
 
     if (mode === 'photo') {
+      camEls.shutterPhoto.disabled = false; // 前回の撮影で無効化されたままにならないよう、モード開始時に必ずリセットする
       camEls.videoPhoto.srcObject = camStream;
       camEls.videoPhoto.play().catch(() => {});
       enableTiltGuide(camEls.tiltLayerPhoto, camEls.alignPulsePhoto);

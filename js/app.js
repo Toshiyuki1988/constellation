@@ -50,8 +50,9 @@ document.addEventListener('DOMContentLoaded', () => {
     whenGisReady(() => {
       debugLog('whenGisReady -> initAuth() 呼び出し');
       initAuth(onSignedIn, onSignInFailed);
-      // 既に同意済み・ログイン中なら、ボタンを押させずポップアップなしでサインインを試みる
-      signIn(true);
+      // ページ読み込み直後(ユーザー操作なし)にrequestAccessTokenを呼ぶとポップアップブロックの
+      // 対象になりやすいため、最初のタップ/クリックのタイミングに合わせてサイレント試行する。
+      armAutoSignInOnFirstGesture();
     });
   } else {
     openSettings();
@@ -136,6 +137,23 @@ function onSignInFailed() {
   debugLog('onSignInFailed() 呼び出し');
   els.signInBtn.hidden = false;
   setStatus('「Googleでサインイン」を押してください');
+}
+
+/**
+ * ページ読み込み直後(ユーザー操作なし)にGISのrequestAccessTokenを呼ぶと、ブラウザの
+ * ポップアップブロッカーに阻止されて誤動作しやすい。そのため、画面への最初のタップ/クリック
+ * (どこでもよい)を合図に1回だけサイレントサインインを試みる。既に同意済み・ログイン中なら
+ * ポップアップなしで完了し、未ログインならその1回のタップに紐づく形で正規の同意ポップアップが開く。
+ */
+let autoSignInArmed = false;
+function armAutoSignInOnFirstGesture() {
+  if (autoSignInArmed) return;
+  autoSignInArmed = true;
+  const trigger = () => {
+    debugLog('初回タップでサイレントサインインを試行');
+    signIn(true);
+  };
+  document.addEventListener('pointerdown', trigger, { capture: true, once: true });
 }
 
 function toggleAuthUI(signedIn) {
@@ -278,14 +296,23 @@ function enterSession(id, isYear) {
   renderAllCards();
 }
 
-function handleCreateSession() {
-  const name = window.prompt('新規セッションの名前(展覧会名や作品名など)');
-  if (!name) return;
+async function handleCreateSession() {
+  const useOcr = window.confirm('OCRでセッション名を読み取りますか?\n(キャンセルすると手入力になります)');
+  let name;
+  if (useOcr) {
+    const result = await openCamera('caption');
+    if (!result || result.kind !== 'text' || !result.text.trim()) return;
+    name = result.text.trim();
+  } else {
+    name = window.prompt('新規セッションの名前(展覧会名や作品名など)');
+    if (!name) return;
+    name = name.trim();
+  }
   const session = {
     id: crypto.randomUUID(),
     type: 'session',
     parentId: activeSessionId(),
-    name: name.trim(),
+    name,
     createdAt: new Date().toISOString(),
   };
   state.sessions.push(session);
@@ -341,15 +368,12 @@ function editGuideHexHtml(mediaType) {
   const hex = (action, label) =>
     `<div class="star-card-hex star-card-hex--${action}" data-action="${action}">` +
     `<span class="star-card-hex-strut star-card-hex-strut--${action}"></span>${label}</div>`;
-  if (mediaType === 'session') return hex('title', 'Title') + hex('delete', 'Delete');
+  const astrHex = '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>';
+  if (mediaType === 'session') {
+    return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
+  }
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
-  return (
-    captionHex +
-    hex('edit', 'Edit') +
-    '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>' +
-    hex('depth', 'Depth') +
-    hex('delete', 'Delete')
-  );
+  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
 }
 
 /**
@@ -380,8 +404,8 @@ function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
   const isSessionCard = mediaType === 'session';
-  // テクストカードは常時展開、それ以外はキャプションが入るまでメモ欄を隠しておく
-  const hasMemo = !isSessionCard && (isTextCard || Boolean(card.memo));
+  // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
+  const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
   el.className = 'star-card' + (isTextCard ? ' star-card--text' : '') + (isSessionCard ? ' star-card--session' : '');
   el.dataset.id = card.id;
@@ -394,17 +418,22 @@ function renderCard(card) {
   if (isSessionCard) {
     const refSession = getSessionById(card.refSessionId);
     const childCount = state.cards.filter((c) => c.sessionId === card.refSessionId).length;
-    const thumbUrls = pickRandomThumbs(collectDescendantImageThumbs(card.refSessionId), 3);
-    const thumbsHtml = thumbUrls
-      .map((url) => `<div class="star-card-session-thumb" style="background-image:url(${url})"></div>`)
-      .join('');
+    const thumbUrls = pickRandomThumbs(collectDescendantImageThumbs(card.refSessionId), 4);
+    const thumbsHtml = thumbUrls.length
+      ? `<div class="star-card-session-thumbs">${thumbUrls
+          .map((url) => `<div class="star-card-session-thumb" style="background-image:url(${url})"></div>`)
+          .join('')}</div>`
+      : '';
     el.innerHTML = `
       <div class="star-card-session-body" title="タップで開く">
-        <div class="star-card-session-thumbs">${thumbsHtml}</div>
-        <button class="star-card-title-ocr-btn" title="OCRでタイトルを読み取る" hidden>${CAMERA_ICON_SVG}</button>
-        <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
-        <span class="star-card-session-count">${childCount}件</span>
+        ${thumbsHtml}
+        <div class="star-card-session-text">
+          <button class="star-card-title-ocr-btn" title="OCRでタイトルを読み取る" hidden>${CAMERA_ICON_SVG}</button>
+          <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
+          <span class="star-card-session-count">${childCount}件</span>
+        </div>
       </div>
+      <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
       ${EDIT_GUIDE_HANDLES_HTML}
       ${editGuideHexHtml(mediaType)}
     `;
@@ -449,7 +478,6 @@ function renderCard(card) {
 
   if (isSessionCard) {
     attachTapToOpen(el.querySelector('.star-card-session-body'), () => enterSession(card.refSessionId, false));
-    return;
   }
 
   const memoEl = el.querySelector('.star-card-memo');
@@ -470,7 +498,7 @@ function renderCard(card) {
     }
   });
 
-  if (card.imageFileId) {
+  if (!isSessionCard && card.imageFileId) {
     const mediaEl = el.querySelector('.star-card-media');
     // 概観時はまず軽量サムネイル(あれば)を即表示し、実際にカードが画面内に来たときだけ
     // Driveへ本画像/動画/音声を取りに行く(OneNoteのサムネイル運用と同じ考え方)。
@@ -480,7 +508,11 @@ function renderCard(card) {
     observeMediaForLazyLoad(el, card);
   }
 
-  syncCardHeight(el);
+  // セッションカードはメモが空のままなら、以前どおりユーザーが手動で決めた高さを保つ
+  // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。
+  if (!isSessionCard || card.memo) {
+    syncCardHeight(el);
+  }
 }
 
 /* ---------------- 画像・動画・音声の遅延読み込み ----------------
