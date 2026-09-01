@@ -241,7 +241,7 @@ function attachCardGestures(el) {
   }
 
   el.addEventListener('pointerdown', (event) => {
-    if (event.target.closest('.star-card-handle')) return; // ハンドルは専用リスナーで処理
+    if (event.target.closest('.star-card-handle, .star-card-hex')) return; // ハンドル/編集ガイドのボタンは専用処理
     if (event.target.closest('button, textarea')) return;
     if (pointerId !== null) return; // 既に1点を追跡中なら追加のポインタは無視
 

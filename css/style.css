@@ -310,6 +310,62 @@ html, body {
 .star-card-handle[data-edge="e"] { top: 50%; left: 100%; cursor: ew-resize; }
 .star-card-handle[data-edge="w"] { top: 50%; left: 0; cursor: ew-resize; }
 
+/*
+ * 編集ガイドのSci-Fiパネル(緑のヘックスバッジ)。Direction C案の実装版。
+ * Caption/Edit=キャプション取得・編集、ASTR=カード同士を線で繋ぐ機能(見た目のみ、実装は未定)、
+ * Depth=カードを意図的にぼかす、Delete=削除。
+ */
+.star-card-hex {
+  position: absolute;
+  width: 64px;
+  height: 40px;
+  clip-path: polygon(20% 0%, 80% 0%, 100% 50%, 80% 100%, 20% 100%, 0% 50%);
+  background: #2e7d32;
+  color: #fff;
+  font-family: var(--sans);
+  font-weight: 700;
+  font-size: 11px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+  z-index: 7;
+  cursor: pointer;
+}
+
+.star-card--edit-guide .star-card-hex {
+  display: flex;
+}
+
+.star-card-hex--caption { left: 0; top: 22%; transform: translate(-115%, -50%); }
+.star-card-hex--edit    { left: 0; top: 78%; transform: translate(-115%, -50%); }
+.star-card-hex--depth   { left: 100%; top: 22%; transform: translate(15%, -50%); }
+.star-card-hex--delete  { left: 100%; top: 78%; transform: translate(15%, -50%); }
+.star-card-hex--astr {
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  transform: translate(-50%, -50%);
+  letter-spacing: 0.04em;
+}
+
+.star-card-hex-strut {
+  position: absolute;
+  height: 2px;
+  width: 20px;
+  background: #2e7d32;
+  opacity: 0.7;
+  z-index: 6;
+}
+.star-card-hex-strut--caption, .star-card-hex-strut--edit { right: -20px; top: 50%; transform: translateY(-50%); }
+.star-card-hex-strut--depth, .star-card-hex-strut--delete { left: -20px; top: 50%; transform: translateY(-50%); }
+
+/* Depth: カードを意図的にぼかして視覚的な優先度を下げる */
+.star-card--depth-blurred {
+  filter: blur(3px);
+}
+
 .star-card-media {
   flex: 1;
   background-color: var(--surface-2);

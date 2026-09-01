@@ -320,6 +320,26 @@ const EDIT_GUIDE_HANDLES_HTML = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
   .join('');
 
 /**
+ * 編集ガイドのSci-Fiパネル(緑のヘックスバッジ)。Caption/Editはキャプション取得・メモ編集、
+ * ASTRはカード同士を線で繋ぐ機能(見た目のみのプレースホルダー、実装は未定)、
+ * Depthはカードを意図的にぼかす、Deleteは削除。
+ */
+function editGuideHexHtml(mediaType) {
+  const hex = (action, label) =>
+    `<div class="star-card-hex star-card-hex--${action}" data-action="${action}">` +
+    `<span class="star-card-hex-strut star-card-hex-strut--${action}"></span>${label}</div>`;
+  if (mediaType === 'session') return hex('delete', 'Delete');
+  const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
+  return (
+    captionHex +
+    hex('edit', 'Edit') +
+    '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>' +
+    hex('depth', 'Depth') +
+    hex('delete', 'Delete')
+  );
+}
+
+/**
  * セッションカードはドラッグで動かせるようにするため開閉ボタンを持たず、カード本体が
  * ドラッグ対象になる。そのぶん「ほぼ動かさずに指を離した(=タップ/クリック)」場合だけ
  * onOpen を呼び、ドラッグ操作と区別する。
@@ -368,6 +388,7 @@ function renderCard(card) {
         <span class="star-card-session-count">${childCount}件</span>
       </div>
       ${EDIT_GUIDE_HANDLES_HTML}
+      ${editGuideHexHtml(mediaType)}
     `;
   } else {
     el.innerHTML = `
@@ -377,10 +398,35 @@ function renderCard(card) {
       <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
       <button class="star-card-edit-btn" title="メモを書く">${EDIT_ICON_SVG}</button>
       ${EDIT_GUIDE_HANDLES_HTML}
+      ${editGuideHexHtml(mediaType)}
     `;
   }
   els.content.appendChild(el);
   makeCardInteractive(el);
+
+  if (card.depthBlurred) el.classList.add('star-card--depth-blurred');
+  el.querySelectorAll('.star-card-hex').forEach((hexEl) => {
+    hexEl.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const action = hexEl.dataset.action;
+      if (action === 'delete') deleteCard(card, el);
+      else if (action === 'caption') handleCardCaption(card, el);
+      else if (action === 'edit') {
+        const memoEl = el.querySelector('.star-card-memo');
+        if (memoEl) {
+          memoEl.hidden = false;
+          memoEl.style.pointerEvents = 'auto';
+          memoEl.focus();
+          syncCardHeight(el);
+        }
+      } else if (action === 'astr') {
+        setStatus('ASTR: カード同士を線で繋ぐ機能は準備中です');
+      } else if (action === 'depth') {
+        card.depthBlurred = !card.depthBlurred;
+        el.classList.toggle('star-card--depth-blurred', card.depthBlurred);
+      }
+    });
+  });
 
   if (isSessionCard) {
     el.querySelector('.star-card-delete-btn').addEventListener('click', () => deleteCard(card, el));
