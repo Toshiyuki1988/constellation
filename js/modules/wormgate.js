@@ -53,7 +53,6 @@
       .wormgate-overlay.open { opacity: 1; pointer-events: auto; }
       .wg-backdrop {
         position: absolute; inset: 0;
-        background: radial-gradient(circle at 50% 50%, rgba(10,20,24,0.35), rgba(3,6,8,0.72) 72%);
         backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
       }
       .wg-rig {
@@ -69,7 +68,6 @@
       .wg-ring-outer {
         position: absolute; inset: 0; border-radius: 50%;
         border: 1px solid rgba(85, 230, 247, 0.35);
-        box-shadow: 0 0 24px rgba(85, 230, 247, 0.35), 0 0 70px rgba(85, 230, 247, 0.1);
       }
       .wg-ring-inner {
         position: absolute; inset: 13%; border-radius: 50%;

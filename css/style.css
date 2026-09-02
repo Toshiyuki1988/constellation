@@ -519,6 +519,9 @@ html, body {
 
 .star-card-media {
   flex: 1;
+  /* リサイズ中、メモ欄(固定pxで高さがロックされている)にスペースを取られてflex:1側が
+     0に近い高さまで潰れ、写真が実質消えて見える不具合があった。最低限の高さを保証する。 */
+  min-height: 40px;
   background-color: var(--surface-2);
   /*
    * cover だとカードの縦横比を変えるたびに写真の一部が意図せずクロップされてしまう

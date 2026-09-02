@@ -180,17 +180,26 @@
     }
   }
 
-  /** PCではマウスクリックだけでなく、キーボードの数字キー(テンキー含む)でも入力できる。
-   *  event.key はテンキーの数字でも通常の数字キーと同じ "1"〜"9" になるため、
-   *  Numpad用に特別な分岐をする必要はない。 */
+  /**
+   * event.key はテンキーの数字でも通常の数字キーと同じ "1"〜"9" になる…はずだが、
+   * NumLockがオフだとテンキーはHome/End/矢印キーなど別のキーとして扱われてしまい、
+   * event.keyだけでは拾えない。event.code(NumLockの状態によらず常に"Numpad1"等になる)を
+   * フォールバックにして、NumLockの状態に関係なくテンキーの数字を拾えるようにする。
+   */
+  function digitFromKeyEvent(event) {
+    if (event.key >= '1' && event.key <= '9') return event.key;
+    const m = /^Numpad([1-9])$/.exec(event.code || '');
+    return m ? m[1] : null;
+  }
+
+  /** PCではマウスクリックだけでなく、キーボードの数字キー(テンキー含む)でも入力できる。 */
   function onKeypadKeydown(event) {
     if (event.key === 'Escape') {
       closeModuleKeypad();
       return;
     }
-    if (event.key >= '1' && event.key <= '9') {
-      onDigit(event.key);
-    }
+    const digit = digitFromKeyEvent(event);
+    if (digit) onDigit(digit);
   }
 
   function openModuleKeypad() {
@@ -307,10 +316,11 @@
     const active = document.activeElement;
     const isEditingText = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
     if (isEditingText) return;
-    if (event.key >= '1' && event.key <= '9') {
+    const digit = digitFromKeyEvent(event);
+    if (digit) {
       event.preventDefault();
       openModuleKeypad();
-      onDigit(event.key);
+      onDigit(digit);
     }
   }
 

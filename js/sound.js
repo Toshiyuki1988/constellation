@@ -194,9 +194,9 @@ function playWormGateOpenSound() {
   highpass.type = 'highpass';
   highpass.frequency.value = 400;
   const dryGain = c.createGain();
-  dryGain.gain.value = 0.8;
+  dryGain.gain.value = 0.45;
   const wetGain = c.createGain();
-  wetGain.gain.value = 0.6;
+  wetGain.gain.value = 0.34;
   const convolver = c.createConvolver();
   convolver.buffer = getSoundReverbImpulse(c);
   highpass.connect(dryGain).connect(c.destination);
@@ -215,12 +215,12 @@ function playWormGateOpenSound() {
   bandpass.frequency.value = 2600;
   bandpass.Q.value = 0.6;
   const noiseGain = c.createGain();
-  noiseGain.gain.value = 0.35;
+  noiseGain.gain.value = 0.2;
   src.connect(bandpass).connect(noiseGain).connect(highpass);
   src.start(now);
 
   // 急上昇する3声
-  [[900, 2000, 0.22], [1350, 3000, 0.14], [1800, 4000, 0.09]].forEach(([f0, f1, peak], i) => {
+  [[900, 2000, 0.13], [1350, 3000, 0.08], [1800, 4000, 0.05]].forEach(([f0, f1, peak], i) => {
     const osc = c.createOscillator();
     const gain = c.createGain();
     osc.type = 'sine';
