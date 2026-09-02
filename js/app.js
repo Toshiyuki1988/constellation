@@ -1021,8 +1021,11 @@ async function handleSummaryGenerate(card, el, mode) {
     const direction = (el.querySelector('.star-card-summary-input')?.value || '').trim();
     card.summaryDirection = direction;
     const text = await summarizeSession({ context, mode, direction });
+    // 要約傾向に質問文を入れても素直に回答が返ってくるため、後から見返した時に「何を
+    // 指示して出てきた要約か」が分かるよう、指示文をQ.として冒頭に残しておく。
+    const textWithDirection = direction ? `Q. ${direction}\n\n${text}` : text;
 
-    const newCard = createTextCard(text);
+    const newCard = createTextCard(textWithDirection);
     newCard.summarySourceId = card.id;
     newCard.x = card.x + 260 + (Math.random() * 80 - 20);
     newCard.y = card.y + (Math.random() * 240 - 120);
