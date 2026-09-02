@@ -463,6 +463,7 @@ function createAstrConnection(cardIdA, cardIdB) {
     return;
   }
   state.connections.push({ id: crypto.randomUUID(), sessionId, cardIdA, cardIdB });
+  playAstrConnectSound();
   redrawAsterismLines();
   setStatus('線でつなぎました');
   scheduleAutoSave();

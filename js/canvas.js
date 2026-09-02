@@ -297,6 +297,7 @@ function activateEditGuide(el) {
   el.classList.add('star-card--edit-guide');
   el.dataset.justLifted = '1'; // タップで開くカード種別が、直後のタップで誤って開かないようにする
   if (navigator.vibrate) navigator.vibrate(8);
+  playGuideRevealSound();
 }
 
 function deactivateEditGuide(el) {
@@ -316,11 +317,16 @@ function deactivateEditGuide(el) {
  * どちらも Pointer Capture を使い、ポインタがカードの外まで大きく動いても
  * このカード自身でイベントを受け続けられるようにしている。
  */
+// カード移動音: これだけ動くたびに1回鳴らす。速く動かすほど短時間で閾値に達するため、
+// 自然に「ピッ・・ピ」(遅い)〜「ピルルルル」(速い)の緩急がついた連続音になる。
+const MOVE_TICK_DISTANCE_PX = 42;
+
 function attachCardGestures(el) {
   let pointerId = null; // 現在追跡中の唯一のポインタ(ボディの長押し待ち/移動)
   let pressStart = null; // { x, y }
   let moving = false;
   let lastPos = null;
+  let moveTickAccumDist = 0;
 
   let handleResize = null; // { pointerId, edges, startClientX, startClientY, startWidth, startHeight, startCardX, startCardY }
   let pressTimer = null;
@@ -335,12 +341,14 @@ function attachCardGestures(el) {
   function beginMove(clientX, clientY) {
     moving = true;
     lastPos = { x: clientX, y: clientY };
+    moveTickAccumDist = 0;
     interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
   }
 
   function updateMove(clientX, clientY) {
     const dx = (clientX - lastPos.x) / viewportState.scale;
     const dy = (clientY - lastPos.y) / viewportState.scale;
+    const rawDist = Math.hypot(clientX - lastPos.x, clientY - lastPos.y);
     lastPos = { x: clientX, y: clientY };
     const x = (parseFloat(el.dataset.x) || 0) + dx;
     const y = (parseFloat(el.dataset.y) || 0) + dy;
@@ -349,6 +357,12 @@ function attachCardGestures(el) {
     applyCardTransform(el);
     updateAutoPanPointer(clientX, clientY);
     redrawAsterismLines(); // 繋がっている線をカードの移動に追従させる
+
+    moveTickAccumDist += rawDist;
+    if (moveTickAccumDist >= MOVE_TICK_DISTANCE_PX) {
+      moveTickAccumDist = 0;
+      playCardMoveTickSound();
+    }
   }
 
   function endMove() {
@@ -598,6 +612,7 @@ function attachAstrGesture(el) {
       dragging = true;
       el.classList.add('star-card--astr-glow'); // 押し込んだ元のカードも同じ緑発光にする
       if (navigator.vibrate) navigator.vibrate(8);
+      playAstrPressSound();
       interact(viewportEl).draggable({ enabled: false }).gesturable({ enabled: false });
       updateTempLine(pressStart.x, pressStart.y);
     }, ASTR_LONG_PRESS_MS);
