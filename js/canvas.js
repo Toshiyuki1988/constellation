@@ -185,8 +185,12 @@ function onViewportPinch(event) {
 
 function onViewportWheel(event) {
   event.preventDefault();
-  const delta = -event.deltaY * 0.001;
-  zoomAroundPoint(event.clientX, event.clientY, viewportState.scale + delta);
+  // 加算式(scale + delta)だと、拡大率が低いほど1目盛りあたりの体感変化が大きくなり粗く感じるため、
+  // 常に「今のscaleに対して何%変化するか」が一定になる乗算式(指数)にして、全域で滑らかにした。
+  // Shiftを押している間はさらに細かく調整できるようにする。
+  const sensitivity = event.shiftKey ? 0.00015 : 0.0005;
+  const factor = Math.exp(-event.deltaY * sensitivity);
+  zoomAroundPoint(event.clientX, event.clientY, viewportState.scale * factor);
 }
 
 /* ---------------- 非ガイドモードでのダブルタップ: 全カードが収まるまでズームアウト ---------------- */
