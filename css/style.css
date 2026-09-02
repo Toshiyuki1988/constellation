@@ -469,6 +469,7 @@ html, body {
   transform: translate(-50%, -50%);
   letter-spacing: 0.04em;
 }
+.star-card-hex--totext { left: 50%; top: 100%; transform: translate(-50%, 25%); }
 
 .star-card-hex-strut {
   position: absolute;
@@ -480,6 +481,7 @@ html, body {
 }
 .star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title, .star-card-hex-strut--toggle { right: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--depth, .star-card-hex-strut--delete { left: -20px; top: 50%; transform: translateY(-50%); }
+.star-card-hex-strut--totext { width: 2px; height: 20px; left: 50%; bottom: 100%; transform: translateX(-50%); }
 
 /* Depth: カードを意図的にぼかして視覚的な優先度を下げる */
 .star-card--depth-blurred {

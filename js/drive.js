@@ -154,6 +154,11 @@ async function moveFile(fileId, newParentId) {
   await driveFetch(`/files/${fileId}?${params}`, { method: 'PATCH' });
 }
 
+/** ファイルをゴミ箱を経由せず完全に削除する(容量をその場で解放したい場合に使う) */
+async function deleteFile(fileId) {
+  await driveFetch(`/files/${fileId}`, { method: 'DELETE' });
+}
+
 /**
  * ファイルを認証付きで取得し、表示用の blob URL を返す。
  * (drive.file のファイルは既定で非公開のため、Authorization ヘッダ付きで取得する)
