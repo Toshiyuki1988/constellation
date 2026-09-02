@@ -748,6 +748,8 @@ function infoCardInnerHtml(card) {
       ${parsed ? infoParseResultHtml(parsed) : ''}
       ${card.infoParseError ? infoParseErrorHtml(card) : ''}
     </div>
+    ${EDIT_GUIDE_HANDLES_HTML}
+    ${editGuideHexHtml('info')}
   `;
 }
 
