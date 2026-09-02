@@ -744,7 +744,9 @@ function renderCard(card) {
         event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
       if (!inside) return;
       event.stopPropagation();
-      memoEl.scrollTop += event.deltaY;
+      // deltaYをそのまま使うとマウスの1ノッチで一気に飛んでしまい読んでいた位置を見失うため、
+      // 感度を落として細かく動かせるようにする。
+      memoEl.scrollTop += event.deltaY * 0.35;
     });
   }
 
