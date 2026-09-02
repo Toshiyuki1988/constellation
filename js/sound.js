@@ -5,11 +5,14 @@
 // 前提に、どの音も控えめな音量・穏やかなアタック・低域カットで作ってある
 // (速いアタックは音の高さに関係なく低域を含む「クリック」成分を生みやすいため)。
 //
-// 呼び出し側(js/canvas.js, js/app.js)は以下の4つの関数を呼ぶだけでよい。
-//   playGuideRevealSound()   編集ガイド展開時の「ピッ」
-//   playAstrPressSound()     ASTR長押し確定(線を引き始めた)時の「フィヨン・・・」
-//   playAstrConnectSound()   ASTRで線が繋がった時の「ピーン」
-//   playCardMoveTickSound()  カード移動中の1回ぶんの「ピ」(呼ぶ間隔は呼び出し側が速度に応じて決める)
+// 呼び出し側(js/canvas.js, js/app.js, js/modules/*.js)は以下の関数を呼ぶだけでよい。
+//   playGuideRevealSound()     編集ガイド展開時の「ピッ」
+//   playAstrPressSound()       ASTR長押し確定(線を引き始めた)時の「フィヨン・・・」
+//   playAstrConnectSound()     ASTRで線が繋がった時の「ピーン」
+//   playCardMoveTickSound()    カード移動中の1回ぶんの「ピ」(呼ぶ間隔は呼び出し側が速度に応じて決める)
+//   playWormGateOpenSound()    WormGate起動時の「パァーン」
+//   playWormGateRingTickSound()WormGateのリング回転中の「ピルルル」(呼ぶ間隔は呼び出し側が決める)
+//   playWormGateSelectSound()  WormGateで写真を選んでジャンプする時の「キュッ」
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -180,4 +183,105 @@ function playCardMoveTickSound() {
   osc.connect(gain).connect(highpass);
   osc.start(now);
   osc.stop(now + 0.08);
+}
+
+/** WormGate起動:「パァーン」。ノイズの息+急上昇する3声+広めのリバーブ。 */
+function playWormGateOpenSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 400;
+  const dryGain = c.createGain();
+  dryGain.gain.value = 0.8;
+  const wetGain = c.createGain();
+  wetGain.gain.value = 0.6;
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  highpass.connect(dryGain).connect(c.destination);
+  highpass.connect(wetGain).connect(convolver).connect(c.destination);
+
+  // ノイズの「息」
+  const dur = 0.35;
+  const n = Math.floor(c.sampleRate * dur);
+  const buffer = c.createBuffer(1, n, c.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n) ** 0.7;
+  const src = c.createBufferSource();
+  src.buffer = buffer;
+  const bandpass = c.createBiquadFilter();
+  bandpass.type = 'bandpass';
+  bandpass.frequency.value = 2600;
+  bandpass.Q.value = 0.6;
+  const noiseGain = c.createGain();
+  noiseGain.gain.value = 0.35;
+  src.connect(bandpass).connect(noiseGain).connect(highpass);
+  src.start(now);
+
+  // 急上昇する3声
+  [[900, 2000, 0.22], [1350, 3000, 0.14], [1800, 4000, 0.09]].forEach(([f0, f1, peak], i) => {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(f0, now);
+    osc.frequency.exponentialRampToValueAtTime(f1, now + 0.22);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.05 + i * 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
+    osc.connect(gain).connect(highpass);
+    osc.start(now);
+    osc.stop(now + 0.95);
+  });
+}
+
+/** WormGateのリング回転中の1回ぶんの「ピルルル」ティック(カード移動音と同系統)。 */
+function playWormGateRingTickSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 1760;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.2, now + 0.014);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 900;
+  osc.connect(gain).connect(highpass);
+
+  const dryGain = c.createGain();
+  dryGain.gain.value = 0.85;
+  const wetGain = c.createGain();
+  wetGain.gain.value = 0.18;
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  highpass.connect(dryGain).connect(c.destination);
+  highpass.connect(wetGain).connect(convolver).connect(c.destination);
+
+  osc.start(now);
+  osc.stop(now + 0.07);
+}
+
+/** WormGateで写真を選んでジャンプする:「キュッ」。短く鋭い下降チャープ、タイトでドライ。 */
+function playWormGateSelectSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(2200, now);
+  osc.frequency.exponentialRampToValueAtTime(1100, now + 0.045);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 700;
+  osc.connect(gain).connect(highpass).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.06);
 }

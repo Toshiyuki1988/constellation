@@ -1,0 +1,559 @@
+// CONSTELLATION — Module: WormGate
+//
+// セッション内の写真をリングHUDで指ドラッグして探し、タップでキャンバス上の位置へ
+// ジャンプする検索/ナビゲーション用モジュール。CLAUDE.mdの「モジュール」規約に従い、
+// このファイル全体をIIFEで包んでトップレベルの名前をグローバルへ漏らさない。
+// state / els / activeSessionId() / cardElById() / viewportState などの既存グローバルは
+// 直接参照する(モジュールだからといって完全に独立させる必要はないため)。
+//
+// 起動: キャンバス背景(カードの無い場所)を指1本で円を描くように動かす。
+// 操作: リングをドラッグして回転(写真の上から掴んでも、動かせばドラッグと判定する)。
+//       上のアクティブな写真をもう一度タップでジャンプ。左右スワイプで閉じる。
+
+(function () {
+  'use strict';
+
+  const RING_R = 205; // ring半径(px, リグ中心からの距離)
+  const CHIP_W = 150;
+  const CHIP_H = 104;
+  const TICK_STEP_DEG = 6.5;
+  const DRAG_START_TOLERANCE_PX = 9;
+  const GESTURE_MIN_TURN_DEG = 300;
+  const GESTURE_CLOSE_DIST_PX = 130;
+  const GESTURE_MAX_POINTS = 140;
+
+  let wgEls = null; // このモジュール自身のDOM参照
+  let photos = [];
+  let rotation = 0;
+  let activeIndex = 0;
+
+  /* ---------------- DOM / CSS をこのファイルだけで自己完結させて注入する ---------------- */
+
+  function injectStyles() {
+    const style = document.createElement('style');
+    style.textContent = `
+      .wormgate-overlay {
+        position: fixed; inset: 0; z-index: 120;
+        display: flex; align-items: center; justify-content: center;
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.25s ease-out;
+      }
+      .wormgate-overlay.open { opacity: 1; pointer-events: auto; }
+      .wg-backdrop {
+        position: absolute; inset: 0;
+        background: radial-gradient(circle at 50% 50%, rgba(10,20,24,0.35), rgba(3,6,8,0.72) 72%);
+        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      }
+      .wg-rig {
+        position: relative;
+        width: min(86vw, 560px); height: min(86vw, 560px);
+        transform: scale(0.86);
+        transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+      }
+      .wormgate-overlay.open .wg-rig { transform: scale(1); }
+      .wg-ring-outer {
+        position: absolute; inset: 0; border-radius: 50%;
+        border: 1px solid rgba(85, 230, 247, 0.35);
+        box-shadow: 0 0 24px rgba(85, 230, 247, 0.35), 0 0 70px rgba(85, 230, 247, 0.1);
+      }
+      .wg-ring-inner {
+        position: absolute; inset: 13%; border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .wg-ring-core {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center; text-align: center;
+        font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em;
+        color: #55e6f7; text-transform: uppercase; line-height: 1.9; opacity: 0.85;
+      }
+      .wg-tick {
+        position: absolute; left: 50%; top: 50%; width: 1px; height: 50%;
+        transform-origin: top center;
+      }
+      .wg-tick::after {
+        content: ''; position: absolute; top: 0; left: -0.5px; width: 1px; height: 8px;
+        background: rgba(85, 230, 247, 0.35);
+      }
+      .wg-tick.major::after { height: 13px; background: #55e6f7; opacity: 0.8; }
+      .wg-track { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+      .wg-track.grabbing { cursor: grabbing; }
+      .wg-chip {
+        position: absolute; left: 50%; top: 50%;
+        width: ${CHIP_W}px; height: ${CHIP_H}px;
+        margin: ${-CHIP_H / 2}px 0 0 ${-CHIP_W / 2}px;
+        will-change: transform, opacity;
+      }
+      .wg-chip-photo {
+        width: 100%; height: 100%; border-radius: 6px;
+        background-color: rgba(85, 230, 247, 0.12);
+        background-size: cover; background-position: center;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        position: relative;
+        filter: grayscale(0.6) brightness(0.65) saturate(0.7);
+        transition: filter 0.25s ease-out, box-shadow 0.25s ease-out;
+      }
+      .wg-chip-photo::after {
+        content: ''; position: absolute; inset: 0; border-radius: inherit;
+        background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(0,0,0,0.18) 70%);
+        pointer-events: none;
+      }
+      .wg-chip--active .wg-chip-photo {
+        filter: none;
+        box-shadow: 0 0 0 2px #55e6f7, 0 0 30px rgba(85,230,247,0.55), 0 10px 26px rgba(0,0,0,0.55);
+      }
+      .wg-jump-badge {
+        position: absolute; left: 50%; top: -26px; transform: translateX(-50%);
+        font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: 0.1em;
+        color: #06282c; background: #55e6f7; border-radius: 999px; padding: 3px 9px;
+        white-space: nowrap; opacity: 0; transition: opacity 0.2s ease-out;
+        box-shadow: 0 0 14px rgba(85,230,247,0.55);
+      }
+      .wg-chip--active .wg-jump-badge { opacity: 1; }
+      .wg-reticle { position: absolute; inset: -14px; pointer-events: none; opacity: 0; transition: opacity 0.25s ease-out; }
+      .wg-chip--active .wg-reticle { opacity: 1; }
+      .wg-reticle span { position: absolute; width: 14px; height: 14px; border: 1.5px solid #55e6f7; opacity: 0.9; }
+      .wg-reticle span:nth-child(1) { top: 0; left: 0; border-right: none; border-bottom: none; }
+      .wg-reticle span:nth-child(2) { top: 0; right: 0; border-left: none; border-bottom: none; }
+      .wg-reticle span:nth-child(3) { bottom: 0; left: 0; border-right: none; border-top: none; }
+      .wg-reticle span:nth-child(4) { bottom: 0; right: 0; border-left: none; border-top: none; }
+      .wg-caption {
+        position: absolute; left: 50%; bottom: -26px; transform: translateX(-50%);
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #55e6f7;
+        white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+        opacity: 0; transition: opacity 0.2s ease-out; text-align: center;
+      }
+      .wg-chip--active .wg-caption { opacity: 0.9; }
+      .wg-select-hint {
+        position: absolute; left: 50%; top: 6%; transform: translateX(-50%);
+        font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.08em;
+        color: rgba(85,230,247,0.5); text-transform: uppercase; opacity: 0; transition: opacity 0.2s;
+      }
+      .wormgate-overlay.open .wg-select-hint { opacity: 0.8; }
+      .wg-footer-hint {
+        position: absolute; left: 50%; bottom: -46px; transform: translateX(-50%);
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.02em;
+        color: rgba(255,255,255,0.5); white-space: nowrap;
+      }
+      .wg-empty {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 13px; color: rgba(255,255,255,0.7);
+        text-align: center; white-space: nowrap;
+      }
+      .wg-jump-flash {
+        position: fixed; inset: 0; z-index: 130;
+        background: radial-gradient(circle, rgba(85,230,247,0.9), rgba(85,230,247,0));
+        opacity: 0; pointer-events: none;
+      }
+      .wg-jump-flash.fire { animation: wg-flash 0.5s ease-out; }
+      @keyframes wg-flash { 0% { opacity: 0.9; } 100% { opacity: 0; } }
+      .wormgate-gesture-trail { position: fixed; inset: 0; z-index: 45; pointer-events: none; }
+      .wormgate-gesture-trail path {
+        fill: none; stroke: #55e6f7; stroke-width: 2.5; stroke-linecap: round; opacity: 0.55;
+      }
+      .star-card--wormgate-landed {
+        box-shadow: 0 0 0 3px #55e6f7, 0 20px 44px rgba(0, 0, 0, 0.3) !important;
+        transition: box-shadow 0.15s ease-out;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function buildDom() {
+    const overlay = document.createElement('div');
+    overlay.className = 'wormgate-overlay';
+    overlay.innerHTML = `
+      <div class="wg-backdrop"></div>
+      <div class="wg-rig">
+        <div class="wg-ring-outer"></div>
+        <div class="wg-ring-inner"></div>
+        <div class="wg-ring-core"></div>
+        <div class="wg-select-hint">もう一度タップでジャンプ</div>
+        <div class="wg-ticks"></div>
+        <div class="wg-track"><div class="wg-chips"></div></div>
+        <div class="wg-empty" hidden>このセッションには写真がありません</div>
+        <div class="wg-footer-hint">ドラッグで回転・スワイプで閉じる</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const trail = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    trail.setAttribute('class', 'wormgate-gesture-trail');
+    const trailPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    trail.appendChild(trailPath);
+    document.body.appendChild(trail);
+
+    const flash = document.createElement('div');
+    flash.className = 'wg-jump-flash';
+    document.body.appendChild(flash);
+
+    wgEls = {
+      overlay,
+      rig: overlay.querySelector('.wg-rig'),
+      ringCore: overlay.querySelector('.wg-ring-core'),
+      ticks: overlay.querySelector('.wg-ticks'),
+      track: overlay.querySelector('.wg-track'),
+      chips: overlay.querySelector('.wg-chips'),
+      empty: overlay.querySelector('.wg-empty'),
+      trail,
+      trailPath,
+      flash,
+    };
+  }
+
+  function buildTicks() {
+    for (let i = 0; i < 24; i++) {
+      const tick = document.createElement('div');
+      tick.className = 'wg-tick' + (i % 2 === 0 ? ' major' : '');
+      tick.style.transform = `rotate(${i * 15}deg)`;
+      wgEls.ticks.appendChild(tick);
+    }
+  }
+
+  /* ---------------- セッション内の写真を集める ---------------- */
+
+  function collectSessionPhotos() {
+    const sessionId = activeSessionId();
+    return state.cards.filter((c) => c.sessionId === sessionId && c.mediaType === 'image');
+  }
+
+  /* ---------------- リングの構築・配置 ---------------- */
+
+  function buildChips() {
+    wgEls.chips.innerHTML = '';
+    photos.forEach((card, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'wg-chip';
+      chip.dataset.index = i;
+      const caption = (card.memo || '').trim().replace(/\s+/g, ' ').slice(0, 26);
+      const bg = card.thumbDataUrl ? `background-image:url(${card.thumbDataUrl})` : '';
+      chip.innerHTML = `
+        <div class="wg-jump-badge">タップでジャンプ</div>
+        <div class="wg-chip-photo" style="${bg}"></div>
+        <div class="wg-reticle"><span></span><span></span><span></span><span></span></div>
+        ${caption ? `<div class="wg-caption">${escapeHtml(caption)}</div>` : ''}
+      `;
+      wgEls.chips.appendChild(chip);
+    });
+    wgEls.ringCore.innerHTML = photos.length ? `SESSION<br>${photos.length} PHOTOS` : '';
+    wgEls.empty.hidden = photos.length > 0;
+  }
+
+  function angleOf(i) {
+    let a = (i * (360 / photos.length) + rotation) % 360;
+    if (a < 0) a += 360;
+    return a;
+  }
+
+  function distFromTop(a) {
+    return Math.min(a, 360 - a);
+  }
+
+  function layoutRing() {
+    if (!photos.length) return;
+    let nearest = 0;
+    let nearestDist = 999;
+    const chips = wgEls.chips.children;
+    for (let i = 0; i < photos.length; i++) {
+      const a = angleOf(i);
+      const d = distFromTop(a);
+      if (d < nearestDist) { nearestDist = d; nearest = i; }
+      const rad = (a - 90) * Math.PI / 180;
+      const x = Math.cos(rad) * RING_R;
+      const y = Math.sin(rad) * RING_R;
+      const t = d / 180;
+      const scale = 2.3 - t * 1.55;
+      const opacity = 1 - t * 0.45;
+      const chip = chips[i];
+      chip.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+      chip.style.opacity = opacity;
+      chip.style.zIndex = Math.round((1 - t) * 100);
+    }
+    if (nearest !== activeIndex) {
+      chips[activeIndex] && chips[activeIndex].classList.remove('wg-chip--active');
+      activeIndex = nearest;
+    }
+    chips[activeIndex].classList.add('wg-chip--active');
+  }
+
+  function angleTo(targetIndex) {
+    const base = targetIndex * (360 / photos.length);
+    let delta = (-base) - rotation;
+    delta = ((delta % 360) + 540) % 360 - 180;
+    return rotation + delta;
+  }
+
+  function animateRotationTo(target, duration) {
+    const start = rotation;
+    const diff = target - start;
+    const t0 = performance.now();
+    function step(now) {
+      const t = Math.min(1, (now - t0) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      rotation = start + diff * eased;
+      layoutRing();
+      if (t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  /* ---------------- ドラッグで回転 / タップで選択(移動量で判定) ---------------- */
+
+  let pointerActive = false;
+  let hasDragged = false;
+  let pointerDownClient = null;
+  let pointerDownAngle = 0;
+  let pointerDownRotation = 0;
+  let pointerDownChipIndex = null;
+  let tickAccum = 0;
+
+  function pointerAngle(clientX, clientY) {
+    const rect = wgEls.track.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    return Math.atan2(clientY - cy, clientX - cx) * 180 / Math.PI;
+  }
+
+  function onTrackPointerDown(e) {
+    if (!photos.length) return;
+    soundAudioCtx();
+    pointerActive = true;
+    hasDragged = false;
+    tickAccum = 0;
+    pointerDownClient = { x: e.clientX, y: e.clientY };
+    pointerDownAngle = pointerAngle(e.clientX, e.clientY);
+    pointerDownRotation = rotation;
+    const chipEl = e.target.closest('.wg-chip');
+    pointerDownChipIndex = chipEl ? Number(chipEl.dataset.index) : null;
+    wgEls.track.setPointerCapture(e.pointerId);
+  }
+
+  function onTrackPointerMove(e) {
+    if (!pointerActive) return;
+    const moved = Math.hypot(e.clientX - pointerDownClient.x, e.clientY - pointerDownClient.y);
+    if (!hasDragged && moved < DRAG_START_TOLERANCE_PX) return;
+    if (!hasDragged) {
+      hasDragged = true;
+      wgEls.track.classList.add('grabbing');
+    }
+    const a = pointerAngle(e.clientX, e.clientY);
+    const prevRotation = rotation;
+    rotation = pointerDownRotation + (a - pointerDownAngle);
+    layoutRing();
+    tickAccum += Math.abs(rotation - prevRotation);
+    if (tickAccum >= TICK_STEP_DEG) {
+      tickAccum = 0;
+      playWormGateRingTickSound();
+    }
+  }
+
+  function onTrackPointerEnd() {
+    if (!pointerActive) return;
+    pointerActive = false;
+    wgEls.track.classList.remove('grabbing');
+    if (hasDragged) {
+      animateRotationTo(angleTo(activeIndex), 260);
+    } else if (pointerDownChipIndex !== null) {
+      onChipTap(pointerDownChipIndex);
+    }
+    pointerDownChipIndex = null;
+  }
+
+  function onChipTap(i) {
+    if (i === activeIndex) {
+      playWormGateSelectSound();
+      jumpToCard(photos[i]);
+    } else {
+      animateRotationTo(angleTo(i), 320);
+    }
+  }
+
+  /* ---------------- 選んだ写真のカードへキャンバスをジャンプさせる ---------------- */
+
+  function jumpToCard(card) {
+    const rect = els.viewport.getBoundingClientRect();
+    els.content.classList.add('canvas-content--animated');
+    viewportState.x = rect.width / 2 - (card.x + card.width / 2) * viewportState.scale;
+    viewportState.y = rect.height / 2 - (card.y + card.height / 2) * viewportState.scale;
+    applyViewportTransform();
+    setTimeout(() => els.content.classList.remove('canvas-content--animated'), 400);
+
+    wgEls.flash.classList.remove('fire');
+    void wgEls.flash.offsetWidth;
+    wgEls.flash.classList.add('fire');
+
+    const el = cardElById(card.id);
+    if (el) {
+      el.classList.add('star-card--wormgate-landed');
+      setTimeout(() => el.classList.remove('star-card--wormgate-landed'), 1600);
+    }
+    setStatus('WormGate: 写真の位置へジャンプしました');
+    closeWormgate();
+  }
+
+  /* ---------------- スワイプで左右に閉じる(モジュール共通デザイン言語) ---------------- */
+
+  let swipeStartX = null;
+  let swipeStartY = null;
+  let swipeStartT = 0;
+
+  function onOverlayPointerDown(e) {
+    if (e.target.closest('.wg-chip')) return;
+    swipeStartX = e.clientX;
+    swipeStartY = e.clientY;
+    swipeStartT = performance.now();
+  }
+
+  function onOverlayPointerUp(e) {
+    if (swipeStartX === null) return;
+    const dx = e.clientX - swipeStartX;
+    const dy = e.clientY - swipeStartY;
+    const dt = performance.now() - swipeStartT;
+    swipeStartX = null;
+    if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 500) {
+      flingClose(dx > 0 ? 1 : -1);
+    }
+  }
+
+  function flingClose(dir) {
+    const rig = wgEls.rig;
+    rig.style.transition = 'transform 0.35s ease-in, opacity 0.35s ease-in';
+    rig.style.transform = `translateX(${dir * 900}px) rotate(${dir * 24}deg) scale(0.7)`;
+    rig.style.opacity = '0';
+    setTimeout(() => {
+      closeWormgate();
+      rig.style.transition = '';
+      rig.style.transform = '';
+      rig.style.opacity = '';
+    }, 340);
+  }
+
+  /* ---------------- 開閉 ---------------- */
+
+  function openWormgate() {
+    photos = collectSessionPhotos();
+    rotation = 0;
+    activeIndex = 0;
+    buildChips();
+    layoutRing();
+    playWormGateOpenSound();
+    wgEls.overlay.classList.add('open');
+  }
+
+  function closeWormgate() {
+    wgEls.overlay.classList.remove('open');
+  }
+
+  /* ---------------- キャンバス背景で円を描くジェスチャーで起動 ---------------- */
+
+  let gestureTracking = false;
+  let gesturePts = [];
+
+  function pathFromPoints(pts) {
+    if (!pts.length) return '';
+    return 'M' + pts.map((p) => `${p.x},${p.y}`).join(' L');
+  }
+
+  function totalSignedTurn(pts) {
+    if (pts.length < 6) return 0;
+    let cx = 0;
+    let cy = 0;
+    pts.forEach((p) => { cx += p.x; cy += p.y; });
+    cx /= pts.length;
+    cy /= pts.length;
+    let total = 0;
+    let prevAngle = Math.atan2(pts[0].y - cy, pts[0].x - cx);
+    for (let i = 1; i < pts.length; i++) {
+      const a = Math.atan2(pts[i].y - cy, pts[i].x - cx);
+      let d = a - prevAngle;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      total += d;
+      prevAngle = a;
+    }
+    return (total * 180) / Math.PI;
+  }
+
+  let gesturePanStart = null; // { x, y } ジェスチャー開始時点のviewportState(円と判定した場合、この位置まで戻す)
+  let gestureLastPoint = null;
+
+  /**
+   * 背景の1本指ドラッグは、canvas.js側のinteract.jsが既に「パン」として処理している。
+   * 円を描いている最中も裏でパンが同時に走ると、キャンバスがグルグル動いて見えてしまう。
+   * そこで、ジェスチャーが円かどうか分かるまでの間だけinteract.js側のパン/ピンチを止め、
+   * 代わりにこちらで同じ見た目のパンをその場で再現しておく。指を離した時点で:
+   *   円だった → ここまでのパン分を打ち消してWormGateを開く(見た目は動かなかったことになる)
+   *   円でなかった → そのまま普通にパンした状態として確定する(通常操作と同じ結果)
+   */
+  function onCanvasPointerDown(e) {
+    if (gestureTracking) return; // 追跡中に別の指が触れても無視する
+    if (e.target !== els.viewport) return; // カードの上からは起動しない(背景のみ)
+    if (wgEls.overlay.classList.contains('open')) return;
+    soundAudioCtx();
+    gestureTracking = true;
+    gesturePts = [{ x: e.clientX, y: e.clientY }];
+    gestureLastPoint = { x: e.clientX, y: e.clientY };
+    gesturePanStart = { x: viewportState.x, y: viewportState.y };
+    interact(els.viewport).draggable({ enabled: false }).gesturable({ enabled: false });
+  }
+
+  function onCanvasPointerMove(e) {
+    if (!gestureTracking) return;
+    const dx = e.clientX - gestureLastPoint.x;
+    const dy = e.clientY - gestureLastPoint.y;
+    gestureLastPoint = { x: e.clientX, y: e.clientY };
+    viewportState.x += dx;
+    viewportState.y += dy;
+    applyViewportTransform();
+
+    gesturePts.push({ x: e.clientX, y: e.clientY });
+    if (gesturePts.length > GESTURE_MAX_POINTS) gesturePts.shift();
+    wgEls.trailPath.setAttribute('d', pathFromPoints(gesturePts));
+  }
+
+  function onCanvasPointerEnd() {
+    if (!gestureTracking) return;
+    gestureTracking = false;
+    interact(els.viewport).draggable({ enabled: true }).gesturable({ enabled: true });
+
+    const turn = totalSignedTurn(gesturePts);
+    const first = gesturePts[0];
+    const last = gesturePts[gesturePts.length - 1];
+    const closedEnough = first && last && Math.hypot(first.x - last.x, first.y - last.y) < GESTURE_CLOSE_DIST_PX;
+    if (Math.abs(turn) > GESTURE_MIN_TURN_DEG && closedEnough) {
+      viewportState.x = gesturePanStart.x;
+      viewportState.y = gesturePanStart.y;
+      applyViewportTransform();
+      openWormgate();
+    }
+    gesturePts = [];
+    wgEls.trailPath.setAttribute('d', '');
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  /* ---------------- 初期化 ---------------- */
+
+  document.addEventListener('DOMContentLoaded', () => {
+    injectStyles();
+    buildDom();
+    buildTicks();
+
+    wgEls.track.addEventListener('pointerdown', onTrackPointerDown);
+    wgEls.track.addEventListener('pointermove', onTrackPointerMove);
+    wgEls.track.addEventListener('pointerup', onTrackPointerEnd);
+    wgEls.track.addEventListener('pointercancel', onTrackPointerEnd);
+
+    wgEls.overlay.addEventListener('pointerdown', onOverlayPointerDown);
+    wgEls.overlay.addEventListener('pointerup', onOverlayPointerUp);
+
+    els.viewport.addEventListener('pointerdown', onCanvasPointerDown);
+    els.viewport.addEventListener('pointermove', onCanvasPointerMove);
+    els.viewport.addEventListener('pointerup', onCanvasPointerEnd);
+    els.viewport.addEventListener('pointercancel', onCanvasPointerEnd);
+  });
+})();
