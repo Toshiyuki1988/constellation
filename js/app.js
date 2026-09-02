@@ -1485,23 +1485,11 @@ async function handleImageSelected(event) {
   event.target.value = '';
   if (!file) return;
 
-  const card = await createCardFromCapture({
+  await createCardFromCapture({
     blob: file,
     filename: `${Date.now()}-${file.name}`,
     mediaType: 'image',
   });
-  if (!card) return;
-
-  try {
-    const ocrText = await ocrImage(file);
-    if (ocrText && !ocrText.includes('(テキストなし)')) {
-      card.memo = ocrText;
-      renderAllCards();
-      scheduleAutoSave();
-    }
-  } catch (err) {
-    console.warn('Gemini OCR に失敗しました', err);
-  }
 }
 
 /** アプリ内蔵カメラ(js/camera.js)を開き、撮影結果をカードとして追加する */
@@ -1510,21 +1498,11 @@ async function handleOpenCamera(mode) {
   if (!result) return;
 
   if (result.kind === 'photo') {
-    const card = await createCardFromCapture({
+    await createCardFromCapture({
       blob: result.blob,
       filename: `${Date.now()}-photo.jpg`,
       mediaType: 'image',
     });
-    if (!card) return;
-    try {
-      const ocrText = await ocrImage(result.blob);
-      if (ocrText && !ocrText.includes('(テキストなし)')) {
-        card.memo = ocrText;
-        renderAllCards();
-      }
-    } catch (err) {
-      console.warn('Gemini OCR に失敗しました', err);
-    }
   } else if (result.kind === 'text') {
     createTextCard(result.text);
   } else if (result.kind === 'video') {

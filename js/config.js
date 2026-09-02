@@ -21,7 +21,9 @@ const CONFIG = {
   // 使用する Gemini モデル名。無料枠の対象モデルは変わることがあるため
   // https://ai.google.dev/gemini-api/docs/models で最新の無料枠対象モデル名を確認してください。
   // (2026-08: gemini-2.5-flash が新規利用不可になったため gemini-3.6-flash に変更)
-  GEMINI_MODEL: 'gemini-3.6-flash',
+  // (2026-09: gemini-3.6-flashの無料枠が「1日20リクエスト」しかなく、OCR中心の使い方と
+  //  相性が悪いことが実機で判明。多少の精度低下と引き換えに無料枠が大きいgemini-3.5-flash-liteへ変更)
+  GEMINI_MODEL: 'gemini-3.5-flash-lite',
 
   // OAuthスコープ。どちらも「アプリが作成したものだけ」にアクセスする
   // 非機微(non-sensitive寄り)スコープで統一している(ユーザーのDrive全体・既存カレンダー全体は見えない)。
