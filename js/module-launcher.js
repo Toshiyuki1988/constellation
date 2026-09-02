@@ -127,7 +127,7 @@
             <line x1="100" y1="0" x2="0" y2="100" />
           </svg>
           <div class="module-keypad-grid">
-            ${[1, 2, 3, 4, 5, 6, 7, 8, 9]
+            ${[7, 8, 9, 4, 5, 6, 1, 2, 3]
               .map((n) => `<button class="module-keypad-btn${n === 5 ? ' module-keypad-btn--center' : ''}" data-digit="${n}">${n}</button>`)
               .join('')}
           </div>
@@ -180,6 +180,19 @@
     }
   }
 
+  /** PCではマウスクリックだけでなく、キーボードの数字キー(テンキー含む)でも入力できる。
+   *  event.key はテンキーの数字でも通常の数字キーと同じ "1"〜"9" になるため、
+   *  Numpad用に特別な分岐をする必要はない。 */
+  function onKeypadKeydown(event) {
+    if (event.key === 'Escape') {
+      closeModuleKeypad();
+      return;
+    }
+    if (event.key >= '1' && event.key <= '9') {
+      onDigit(event.key);
+    }
+  }
+
   function openModuleKeypad() {
     soundAudioCtx();
     if (!kpEls) {
@@ -189,10 +202,12 @@
     enteredDigits = '';
     updateSlots();
     kpEls.overlay.classList.add('open');
+    document.addEventListener('keydown', onKeypadKeydown);
   }
 
   function closeModuleKeypad() {
     if (!kpEls) return;
+    document.removeEventListener('keydown', onKeypadKeydown);
     kpEls.overlay.classList.remove('open');
   }
 
