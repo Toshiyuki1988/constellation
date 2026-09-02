@@ -1428,14 +1428,27 @@ function pasteCardFromClipboard() {
 }
 
 document.addEventListener('keydown', (event) => {
-  const isMod = event.ctrlKey || event.metaKey;
-  if (!isMod) return;
   const active = document.activeElement;
   const isEditingText = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
-  if (isEditingText) return; // テキスト編集中は通常のコピー/カット/ペーストに任せる
+  if (isEditingText) return; // テキスト編集中は通常の編集操作に任せる
 
-  const key = event.key.toLowerCase();
   const guideEl = getEditGuideCard();
+
+  // 編集ガイド表示中のカードは、PCのDeleteキーでも(ヘックスのDeleteボタンと同じ確認フローで)削除できる
+  if (event.key === 'Delete' && guideEl) {
+    const card = getCardById(guideEl.dataset.id);
+    if (!card) return;
+    event.preventDefault();
+    if (!confirmDeleteCard(card)) return;
+    removeCardFromState(card, guideEl);
+    deactivateEditGuide(guideEl);
+    setStatus('削除しました(Drive上のファイル本体は残ります)');
+    return;
+  }
+
+  const isMod = event.ctrlKey || event.metaKey;
+  if (!isMod) return;
+  const key = event.key.toLowerCase();
 
   if (key === 'c' && guideEl) {
     const card = getCardById(guideEl.dataset.id);
