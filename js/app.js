@@ -897,8 +897,8 @@ async function handleInfoCardParse(card, el) {
       card.infoParsed = result;
       card.infoParseError = null;
       setStatus('展覧会情報を解析しました。カレンダーに同期中…');
-      await syncInfoCardCalendar(card);
-      setStatus('展覧会情報を解析し、カレンダーに同期しました');
+      const synced = await syncInfoCardCalendar(card);
+      if (synced) setStatus('展覧会情報を解析し、カレンダーに同期しました');
     }
   } catch (err) {
     console.error(err);
@@ -934,9 +934,9 @@ async function handleInfoCardManualFix(card, el) {
   };
   card.infoParseError = null;
   setStatus('手動入力の内容で確定しました。カレンダーに同期中…');
-  await syncInfoCardCalendar(card);
+  const synced = await syncInfoCardCalendar(card);
   rerenderCardInPlace(card, el);
-  setStatus('手動入力の内容で確定し、カレンダーに同期しました');
+  if (synced) setStatus('手動入力の内容で確定し、カレンダーに同期しました');
   scheduleAutoSave();
   refreshInfoTicker();
 }
@@ -1006,7 +1006,7 @@ function computeVisitableBlocks(parsed) {
  * 失敗してもインフォカード自体の解析結果は失わない(ベストエフォート、エラーはコンソールのみ)。
  */
 async function syncInfoCardCalendar(card) {
-  if (!card.infoParsed) return;
+  if (!card.infoParsed) return false;
   try {
     state.exhibitionCalendarId = await ensureExhibitionCalendar(state.exhibitionCalendarId);
     const existing = await listCardCalendarEvents(state.exhibitionCalendarId, card.id);
@@ -1023,9 +1023,11 @@ async function syncInfoCardCalendar(card) {
         extendedProperties: { private: { constellationCardId: String(card.id) } },
       });
     }
+    return true;
   } catch (err) {
     console.error(err);
-    setStatus('カレンダー同期に失敗しました(コンソールを確認)');
+    setStatus(`カレンダー同期に失敗しました: ${err.message}`);
+    return false;
   }
 }
 
