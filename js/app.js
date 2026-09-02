@@ -201,8 +201,16 @@ function toggleAuthUI(signedIn) {
   els.toolInfo.disabled = !signedIn;
 }
 
-function setStatus(message) {
+// エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
+// 定型メッセージがすぐ上書きしてしまわないよう、一定時間だけ保護する。
+let importantStatusUntil = 0;
+const IMPORTANT_STATUS_HOLD_MS = 6000;
+
+/** @param {string} message @param {{important?: boolean}} [opts] */
+function setStatus(message, opts) {
+  if (!opts?.important && Date.now() < importantStatusUntil) return;
   els.status.textContent = message;
+  if (opts?.important) importantStatusUntil = Date.now() + IMPORTANT_STATUS_HOLD_MS;
 }
 
 /* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ---------------- */
@@ -892,7 +900,7 @@ async function handleInfoCardParse(card, el) {
     if (result.error) {
       card.infoParsed = null;
       card.infoParseError = { message: result.error, partial: result.partial || {} };
-      setStatus('解析できませんでした。空欄だけ手動で補ってください');
+      setStatus('解析できませんでした。空欄だけ手動で補ってください', { important: true });
     } else {
       card.infoParsed = result;
       card.infoParseError = null;
@@ -903,7 +911,7 @@ async function handleInfoCardParse(card, el) {
   } catch (err) {
     console.error(err);
     card.infoParseError = { message: '通信に失敗しました', partial: {} };
-    setStatus('解析に失敗しました(コンソールを確認)');
+    setStatus('解析に失敗しました(コンソールを確認)', { important: true });
   }
   infoCardParseInFlight.delete(card.id);
   rerenderCardInPlace(card, el);
@@ -1027,7 +1035,7 @@ async function syncInfoCardCalendar(card) {
   } catch (err) {
     console.error(err);
     debugLog('カレンダー同期エラー: ' + err.message);
-    setStatus(`カレンダー同期に失敗しました: ${err.message}`);
+    setStatus(`カレンダー同期に失敗しました: ${err.message}`, { important: true });
     return false;
   }
 }
@@ -1610,7 +1618,7 @@ async function handleSave() {
     setStatus('自動保存しました');
   } catch (err) {
     console.error(err);
-    setStatus('自動保存に失敗しました(コンソールを確認)');
+    setStatus('自動保存に失敗しました(コンソールを確認)', { important: true });
   }
 }
 
