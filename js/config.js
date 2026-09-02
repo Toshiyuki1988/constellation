@@ -34,8 +34,12 @@ const CONFIG = {
   // データの保存先フォルダ名(ユーザーのマイドライブ直下に作成される)
   APP_FOLDER_NAME: 'Constellation',
 
-  // 全カード情報をまとめて保存する JSON ファイル名
+  // 全カード情報をまとめて保存する JSON ファイル名(APP_FOLDER_NAME直下、メディアとは別置き)
   DATA_FILE_NAME: 'constellation-data.json',
+
+  // メディア(画像・動画・音声)を置くフォルダ名(APP_FOLDER_NAME直下)。
+  // この下に「年セッション名/セッション名/.../ファイル」という入れ子構造でアップロードする。
+  MEDIA_FOLDER_NAME: 'media',
 
   // インフォメーションカードの「鑑賞可能日」を同期する専用Googleカレンダーの名前
   EXHIBITION_CALENDAR_NAME: '展覧会',

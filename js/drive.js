@@ -40,6 +40,38 @@ async function findOrCreateAppFolder() {
   return created.id;
 }
 
+/** 指定した親フォルダの直下から、名前が一致するサブフォルダを探し、無ければ作成してIDを返す */
+async function findOrCreateSubfolder(name, parentId) {
+  const escaped = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const q = encodeURIComponent(
+    `name='${escaped}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`
+  );
+  const res = await driveFetch(`/files?q=${q}&fields=files(id,name)&spaces=drive`);
+  const { files } = await res.json();
+  if (files && files.length > 0) return files[0].id;
+
+  const createRes = await driveFetch('/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+    }),
+  });
+  const created = await createRes.json();
+  return created.id;
+}
+
+/** Drive上のフォルダの表示名を変更する(セッション名編集にDrive側のフォルダ名を追従させる用途) */
+async function renameDriveFolder(folderId, newName) {
+  await driveFetch(`/files/${folderId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName }),
+  });
+}
+
 async function findDataFile(folderId) {
   const q = encodeURIComponent(
     `name='${CONFIG.DATA_FILE_NAME}' and '${folderId}' in parents and trashed=false`

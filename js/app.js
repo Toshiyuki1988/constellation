@@ -3,6 +3,9 @@
 const state = {
   folderId: null,
   fileId: null,
+  // メディア(画像・動画・音声)の入れ子フォルダのルート(Constellation/media)。
+  // 実際のアップロード先は resolveSessionMediaFolderId() が年/セッションごとのサブフォルダを解決する。
+  mediaFolderId: null,
   cards: [],
   // セッション(年 / 展覧会 / 作品などの入れ子)。フラット配列 + parentId でツリーを表現する。
   // { id, type: 'year'|'session', parentId, name, year(yearのみ), createdAt }
@@ -229,6 +232,7 @@ async function onSignedIn() {
   setStatus('Google Driveと同期中…');
   try {
     state.folderId = await findOrCreateAppFolder();
+    state.mediaFolderId = await findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId);
     const { fileId, data } = await loadData(state.folderId);
     state.fileId = fileId;
     state.cards = data.cards || [];
@@ -1148,6 +1152,27 @@ function breadcrumbPathTo(sessionId) {
   return path;
 }
 
+/**
+ * カードが属するセッション(年→...→対象セッション)の階層を、Drive上の入れ子フォルダとして
+ * 解決する(Constellation/media/<年名>/<セッション名>/.../)。各セッションが最初にメディアを
+ * 持った時だけDrive側にフォルダを作成し、そのIDをsession.driveMediaFolderIdとしてキャッシュする
+ * (以後は同じフォルダを使い回し、Driveへの問い合わせを毎回は行わない)。
+ */
+async function resolveSessionMediaFolderId(sessionId) {
+  const path = breadcrumbPathTo(sessionId);
+  let parentId = state.mediaFolderId;
+  for (const id of path) {
+    const session = getSessionById(id);
+    if (!session) continue;
+    if (!session.driveMediaFolderId) {
+      session.driveMediaFolderId = await findOrCreateSubfolder(session.name, parentId);
+      scheduleAutoSave();
+    }
+    parentId = session.driveMediaFolderId;
+  }
+  return parentId;
+}
+
 /** 現在の年タブ内で、今日鑑賞可能なインフォメーションカードを集める(階層をまたいだ全年横断はしない) */
 function collectVisitableInfoCards() {
   const currentYearId = state.breadcrumb[0];
@@ -1342,8 +1367,12 @@ function startSessionTitleEdit(card, el) {
 
   function commit() {
     const newName = input.value.trim();
-    if (newName) {
+    if (newName && newName !== refSession.name) {
       refSession.name = newName;
+      // Driveに既にメディアフォルダを作成済みなら、名前もそこに追従させる(ベストエフォート)
+      if (refSession.driveMediaFolderId) {
+        renameDriveFolder(refSession.driveMediaFolderId, newName).catch((err) => console.error('Driveフォルダのリネームに失敗', err));
+      }
       scheduleAutoSave();
     }
     const span = document.createElement('span');
@@ -1706,7 +1735,8 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
 /** createCardFromCapture()が即座に表示したカードの実体を、裏でDriveへアップロードする */
 async function uploadCardFileInBackground(card, blob, filename) {
   try {
-    const fileId = await uploadFile(state.folderId, blob, filename);
+    const folderId = await resolveSessionMediaFolderId(card.sessionId);
+    const fileId = await uploadFile(folderId, blob, filename);
     card.imageFileId = fileId;
     card.uploadPending = false;
     const el = cardElById(card.id);
