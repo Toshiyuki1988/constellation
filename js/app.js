@@ -735,10 +735,15 @@ function renderCard(card) {
     });
     // メモ欄は既定でpointer-events:noneなので(カード移動を優先するため)、通常はホイールも
     // メモ欄まで届かずカード自身(ひいてはキャンバスのズーム)に流れてしまう。写真付きカードの
-    // メモ欄は最大高さ+内部スクロールにしてあるので、カーソルがメモ欄の範囲内にある時だけ
+    // メモ欄だけ最大高さ+内部スクロールにしてあるので、カーソルがメモ欄の範囲内にある時だけ
     // ホイールでメモ欄自体をスクロールできるようにする(キャンバスのズームには渡さない)。
+    // hasMediaのチェックが無いと、テキストカードなどmax-heightの掛かっていないメモ欄でも
+    // わずかなサブピクセルの誤差でscrollHeightがclientHeightよりわずかに大きく判定されることが
+    // あり、そのたびにホイールズームを奪ってしまうバグがあった(リサイズでsyncCardHeight()が
+    // 再計算されるとこの誤差が解消されるため「リサイズすると直る」という症状になっていた)。
+    const hasMedia = Boolean(el.querySelector('.star-card-media'));
     el.addEventListener('wheel', (event) => {
-      if (memoEl.hidden || memoEl.scrollHeight <= memoEl.clientHeight) return;
+      if (!hasMedia || memoEl.hidden || memoEl.scrollHeight - memoEl.clientHeight < 4) return;
       const rect = memoEl.getBoundingClientRect();
       const inside =
         event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
