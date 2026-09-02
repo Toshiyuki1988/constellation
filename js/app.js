@@ -97,6 +97,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled);
+
+  els.viewport.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  });
+  els.viewport.addEventListener('drop', handleViewportDrop);
 });
 
 /* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ---------------- */
@@ -1714,6 +1720,80 @@ async function handleImageSelected(event) {
   });
 }
 
+/**
+ * キャンバスへ画像をドラッグ&ドロップした時、ドロップした位置に写真カードを作る。
+ * OSのファイル(エクスプローラー等)からのドロップなら dataTransfer.files に実体が入るので
+ * そのまま使う。Googleフォトのようなウェブページ上の画像をドラッグした場合はファイル実体が
+ * 取れず、代わりにURL(text/uri-list や text/html 内のimg src)だけが渡ってくることが多いので、
+ * そのURLを直接fetchしてみる(ホスト側がCORSを許可していない場合は失敗し、その旨を伝える)。
+ */
+async function handleViewportDrop(event) {
+  event.preventDefault();
+  if (!state.folderId) return; // サインイン前は何もしない
+  const dt = event.dataTransfer;
+  if (!dt) return;
+
+  const pos = clientToContent(event.clientX, event.clientY);
+  const imageFiles = Array.from(dt.files || []).filter((f) => f.type.startsWith('image/'));
+
+  if (imageFiles.length > 0) {
+    for (const file of imageFiles) {
+      await createCardFromCapture({
+        blob: file,
+        filename: `${Date.now()}-${file.name}`,
+        mediaType: 'image',
+        x: pos.x,
+        y: pos.y,
+      });
+      playAstrConnectSound();
+    }
+    return;
+  }
+
+  const url = extractDroppedImageUrl(dt);
+  if (!url) {
+    setStatus('画像を認識できませんでした');
+    return;
+  }
+
+  setStatus('画像を取得中…');
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('画像として認識できませんでした');
+    await createCardFromCapture({
+      blob,
+      filename: `${Date.now()}-dropped.${extensionForImageMime(blob.type)}`,
+      mediaType: 'image',
+      x: pos.x,
+      y: pos.y,
+    });
+    playAstrConnectSound();
+  } catch (err) {
+    console.error(err);
+    debugLog('ドロップ画像の取得に失敗: ' + err.message);
+    setStatus('この画像は取得できませんでした(ブラウザのセキュリティ制限の可能性があります)', { important: true });
+  }
+}
+
+/** ドロップされたデータから画像URLを推定する(text/uri-list、または text/html 内のimg src) */
+function extractDroppedImageUrl(dataTransfer) {
+  const uriList = dataTransfer.getData('text/uri-list');
+  if (uriList) {
+    const line = uriList.split('\n').map((s) => s.trim()).find((s) => s && !s.startsWith('#'));
+    if (line) return line;
+  }
+  const html = dataTransfer.getData('text/html');
+  if (html) {
+    const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (match) return match[1];
+  }
+  const plain = dataTransfer.getData('text/plain');
+  if (plain && /^https?:\/\//i.test(plain.trim())) return plain.trim();
+  return null;
+}
+
 /** アプリ内蔵カメラ(js/camera.js)を開き、撮影結果をカードとして追加する */
 async function handleOpenCamera(mode) {
   const result = await openCamera(mode);
@@ -1807,13 +1887,13 @@ function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
  * 差し込む。動画・音声はローカルサムネイルが無いため、この最適化の恩恵は薄いが、同じ
  * 経路に揃えて実装をシンプルに保っている。
  */
-async function createCardFromCapture({ blob, filename, mediaType, memo }) {
+async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) {
   const thumbDataUrl = mediaType === 'image' ? await generateThumbnail(blob) : null;
 
   const card = {
     id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
+    x: x ?? 40,
+    y: y ?? 40,
     width: 220,
     height: 260,
     memo: memo || '',
