@@ -519,29 +519,39 @@
 
   let gesturePanStart = null; // { x, y } ジェスチャー開始時点のviewportState(円と判定した場合、この位置まで戻す)
   let gestureLastPoint = null;
+  let gesturePointerId = null;
 
   /**
    * 背景の1本指ドラッグは、canvas.js側のinteract.jsが既に「パン」として処理している。
    * 円を描いている最中も裏でパンが同時に走ると、キャンバスがグルグル動いて見えてしまう。
-   * そこで、ジェスチャーが円かどうか分かるまでの間だけinteract.js側のパン/ピンチを止め、
-   * 代わりにこちらで同じ見た目のパンをその場で再現しておく。指を離した時点で:
+   * そこで、ジェスチャーが円かどうか分かるまでの間だけinteract.js側の「パン(draggable)」だけを
+   * 止め、代わりにこちらで同じ見た目のパンをその場で再現しておく(ピンチ=gesturableは止めない。
+   * 止めてしまうと、1本指で触れた直後に2本目が乗ってきてもピンチが一切効かなくなるバグになる)。
+   * 指を離した時点で:
    *   円だった → ここまでのパン分を打ち消してWormGateを開く(見た目は動かなかったことになる)
    *   円でなかった → そのまま普通にパンした状態として確定する(通常操作と同じ結果)
+   * 途中で2本目の指が乗ってきた(=ピンチしようとしている)場合は、円の判定をせずただちに
+   * 中断し、interact.js側の通常のピンチ処理に譲る。
    */
   function onCanvasPointerDown(e) {
-    if (gestureTracking) return; // 追跡中に別の指が触れても無視する
+    if (gestureTracking) {
+      // 追跡中に2本目の指が乗ってきた = ピンチしようとしている。円の判定はせず中断する
+      abortGesture();
+      return;
+    }
     if (e.target !== els.viewport) return; // カードの上からは起動しない(背景のみ)
     if (wgEls.overlay.classList.contains('open')) return;
     soundAudioCtx();
     gestureTracking = true;
+    gesturePointerId = e.pointerId;
     gesturePts = [{ x: e.clientX, y: e.clientY }];
     gestureLastPoint = { x: e.clientX, y: e.clientY };
     gesturePanStart = { x: viewportState.x, y: viewportState.y };
-    interact(els.viewport).draggable({ enabled: false }).gesturable({ enabled: false });
+    interact(els.viewport).draggable({ enabled: false });
   }
 
   function onCanvasPointerMove(e) {
-    if (!gestureTracking) return;
+    if (!gestureTracking || e.pointerId !== gesturePointerId) return;
     const dx = e.clientX - gestureLastPoint.x;
     const dy = e.clientY - gestureLastPoint.y;
     gestureLastPoint = { x: e.clientX, y: e.clientY };
@@ -554,10 +564,18 @@
     wgEls.trailPath.setAttribute('d', pathFromPoints(gesturePts));
   }
 
-  function onCanvasPointerEnd() {
-    if (!gestureTracking) return;
+  /** 2本目の指が乗ってきた等で、円の判定をせずに追跡だけをやめる(パンは今の位置で確定させる) */
+  function abortGesture() {
     gestureTracking = false;
-    interact(els.viewport).draggable({ enabled: true }).gesturable({ enabled: true });
+    gesturePts = [];
+    wgEls.trailPath.setAttribute('d', '');
+    interact(els.viewport).draggable({ enabled: true });
+  }
+
+  function onCanvasPointerEnd(e) {
+    if (!gestureTracking || e.pointerId !== gesturePointerId) return;
+    gestureTracking = false;
+    interact(els.viewport).draggable({ enabled: true });
 
     const turn = totalSignedTurn(gesturePts);
     const first = gesturePts[0];
