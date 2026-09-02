@@ -92,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
   els.toolInfo.addEventListener('click', createInfoCard);
-  els.toolSummary.addEventListener('click', createSummaryCard);
+  els.toolSummary.addEventListener('click', () => createSummaryCard());
   els.infoTicker.addEventListener('click', () => {
     const card = infoTickerItems[infoTickerIndex];
     if (card) jumpToInfoCard(card);
@@ -592,7 +592,10 @@ function editGuideHexHtml(mediaType) {
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
   // 写真の中の文字をOCRで抜き出す機能。画像のみ。「写真を残してメモに追記」「写真を破棄してテクストカード化」の2択
   const extractHex = mediaType === 'image' ? hex('extract', 'Extract') : '';
-  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex;
+  // この写真に接続された状態のサマリーカードを新規作成するショートカット。画像のみ(サマリーが
+  // 画像を見るのは接続された写真だけなので、動画・音声カードに置いても意味を持たないため)。
+  const summonHex = mediaType === 'image' ? hex('summon', 'Summon') : '';
+  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex + summonHex;
 }
 
 /**
@@ -711,8 +714,10 @@ function renderCard(card) {
         scheduleAutoSave();
       } else if (action === 'extract') {
         handleCardExtract(card, el);
+      } else if (action === 'summon') {
+        handleSummonSummary(card);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon') scheduleAutoSave();
     });
   });
 
@@ -968,11 +973,11 @@ function wireSummaryCard(card, el) {
   });
 }
 
-function createSummaryCard() {
+function createSummaryCard(x, y) {
   const card = {
     id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
+    x: x ?? 40,
+    y: y ?? 40,
     width: 260,
     height: 200,
     mediaType: 'summary',
@@ -987,6 +992,16 @@ function createSummaryCard() {
   setStatus('サマリーカードを追加しました');
   scheduleAutoSave();
   return card;
+}
+
+/**
+ * 写真カードの編集ガイド「Summon」: この写真に接続された状態のサマリーカードを新規作成する
+ * ショートカット(通常の「サマリーカードを作る→ASTRで写真を手動接続する」の2手順を1手順に)。
+ */
+function handleSummonSummary(card) {
+  if (card.mediaType !== 'image') return;
+  const summaryCard = createSummaryCard(card.x - 260 - (Math.random() * 80 - 20), card.y + (Math.random() * 240 - 120));
+  createAstrConnection(card.id, summaryCard.id); // 効果音・発光演出・保存もここで行われる
 }
 
 /**
