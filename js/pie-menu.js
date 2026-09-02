@@ -22,17 +22,28 @@ let pieState = null; // 開いている間だけ存在する
  *        呼び出すたびに現在のツール一覧を返す関数(サインイン状態などを反映するため遅延評価する)
  * @param {() => boolean} isEnabled 長押しメニューを起動してよい状態かどうか
  */
+// 背景に今触れている指の数。2本以上になったら(ピンチ/WormGateのツイスト等の別ジェスチャー
+// とみなし)長押し判定を即座に中断する。指ごとに別々の長押しタイマーが並行して走ってしまうと、
+// 両方のタイマーが発火してパイメニューが2つ重なって生成される不具合になっていたため。
+let pieActivePointerCount = 0;
+
 function initPieMenu(viewportEl, getTools, isEnabled) {
   viewportEl.addEventListener('pointerdown', (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pieActivePointerCount++;
+    if (pieActivePointerCount > 1) {
+      cancelPieLongPress();
+      return;
+    }
     if (!isEnabled() || pieState) return;
     if (event.target.closest('.star-card')) return; // 既存カード上の長押しは対象外
 
+    cancelPieLongPress(); // 念のため既存のタイマーがあれば消してから1本だけにする
     pieLongPressStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
     pieLongPressTimer = setTimeout(() => {
       pieLongPressTimer = null;
       const tools = getTools();
-      if (tools.length > 0) openPieMenu(pieLongPressStart.x, pieLongPressStart.y, tools, pieLongPressStart.pointerId);
+      if (tools.length > 0 && !pieState) openPieMenu(pieLongPressStart.x, pieLongPressStart.y, tools, pieLongPressStart.pointerId);
     }, PIE_LONG_PRESS_MS);
   });
 
@@ -43,7 +54,10 @@ function initPieMenu(viewportEl, getTools, isEnabled) {
   });
 
   ['pointerup', 'pointercancel'].forEach((type) => {
-    viewportEl.addEventListener(type, cancelPieLongPress);
+    viewportEl.addEventListener(type, () => {
+      pieActivePointerCount = Math.max(0, pieActivePointerCount - 1);
+      cancelPieLongPress();
+    });
   });
 }
 

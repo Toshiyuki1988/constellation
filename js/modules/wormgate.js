@@ -32,8 +32,8 @@
 
   const TICK_STEP_DEG = 6.5;
   const DRAG_START_TOLERANCE_PX = 9;
-  const TWIST_MIN_ROTATION_DEG = 300; // これだけ回転が積算されたら起動
-  const TWIST_MAX_DIST_RATIO_DEVIATION = 0.3; // 2点間の距離が開始時から±30%を超えたらピンチとみなし打ち切る
+  const TWIST_MIN_ROTATION_DEG = 240; // これだけ回転が積算されたら起動(片手で無理なく回せる量に調整)
+  const TWIST_MAX_DIST_RATIO_DEVIATION = 0.5; // 2点間の距離が開始時から±50%を超えたらピンチとみなし打ち切る
 
   let wgEls = null; // このモジュール自身のDOM参照
   let photos = [];
@@ -479,6 +479,11 @@
     playWormGateOpenSound();
     wgEls.overlay.classList.add('open');
   }
+
+  // PC(マウス)では2本指ツイストが使えないため、CONSTELLATION PIE(js/app.jsのbuildPieTools())
+  // からも呼べるよう、この1関数だけを最小限の公開窓口として外に出す
+  // (本格的な登録APIは作らない、というモジュール規約に沿った最小限の妥協)。
+  window.openWormGate = openWormgate;
 
   // 開いている間に画面サイズが変わったら(スマホの画面回転など)、リング半径・写真サイズを
   // 測り直して再配置する
