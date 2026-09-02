@@ -23,6 +23,9 @@ html, body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* スマホでキャンバス端までパン/スワイプした際に、ブラウザ標準のpull-to-refresh
+     (下端バウンスでのページリロード)が誤発火するのを防ぐ */
+  overscroll-behavior: none;
 }
 
 .toolbar {

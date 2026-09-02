@@ -21,6 +21,17 @@ function soundAudioCtx() {
   return soundCtx;
 }
 
+// カメラ起動・ファイル選択ダイアログなどでページが一時的にバックグラウンド化すると、
+// スマホのブラウザはAudioContextを自動でsuspendする。soundAudioCtx()内のresume()は
+// 非同期で完了を待たずに音を鳴らそうとするため、復帰直後の1回目の効果音だけが
+// 「たまに無音になる」不具合があった。フォアグラウンド復帰のタイミングで先んじて
+// resumeしておくことで、実際に音を鳴らす時点では既にrunning状態になっているようにする。
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && soundCtx && soundCtx.state === 'suspended') {
+    soundCtx.resume();
+  }
+});
+
 // 合成リバーブ用のインパルス応答(白色ノイズの指数減衰)。初回だけ生成してキャッシュする。
 let soundReverbBuffer = null;
 function getSoundReverbImpulse(c) {

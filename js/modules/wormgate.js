@@ -52,8 +52,10 @@
       }
       .wormgate-overlay.open { opacity: 1; pointer-events: auto; }
       .wg-backdrop {
+        /* 写真プレビュー特化のため、ぼかし(backdrop-filter)ではなく暗い単色オーバーレイで
+           背後のキャンバスを退かせる。リング上の写真そのものが主役になるようにする。 */
         position: absolute; inset: 0;
-        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+        background: rgba(6, 10, 12, 0.88);
       }
       .wg-rig {
         position: relative;
@@ -115,14 +117,6 @@
         filter: none;
         box-shadow: 0 0 0 2px #55e6f7, 0 0 30px rgba(85,230,247,0.55), 0 10px 26px rgba(0,0,0,0.55);
       }
-      .wg-jump-badge {
-        position: absolute; left: 50%; top: -26px; transform: translateX(-50%);
-        font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: 0.1em;
-        color: #06282c; background: #55e6f7; border-radius: 999px; padding: 3px 9px;
-        white-space: nowrap; opacity: 0; transition: opacity 0.2s ease-out;
-        box-shadow: 0 0 14px rgba(85,230,247,0.55);
-      }
-      .wg-chip--active .wg-jump-badge { opacity: 1; }
       .wg-reticle { position: absolute; inset: -14px; pointer-events: none; opacity: 0; transition: opacity 0.25s ease-out; }
       .wg-chip--active .wg-reticle { opacity: 1; }
       .wg-reticle span { position: absolute; width: 14px; height: 14px; border: 1.5px solid #55e6f7; opacity: 0.9; }
@@ -271,7 +265,6 @@
       const caption = (card.memo || '').trim().replace(/\s+/g, ' ').slice(0, 26);
       const bg = card.thumbDataUrl ? `background-image:url(${card.thumbDataUrl})` : '';
       chip.innerHTML = `
-        <div class="wg-jump-badge">タップでジャンプ</div>
         <div class="wg-chip-photo" style="${bg}"></div>
         <div class="wg-reticle"><span></span><span></span><span></span><span></span></div>
         ${caption ? `<div class="wg-caption">${escapeHtml(caption)}</div>` : ''}
@@ -313,10 +306,38 @@
       chip.style.zIndex = Math.round((1 - t) * 100);
     }
     if (nearest !== activeIndex) {
-      chips[activeIndex] && chips[activeIndex].classList.remove('wg-chip--active');
+      const prevChip = chips[activeIndex];
+      if (prevChip) {
+        prevChip.classList.remove('wg-chip--active');
+        // 非アクティブに戻す時は元画質を手放し、サムネイルに戻して軽量に保つ
+        const prevCard = photos[activeIndex];
+        const prevPhotoEl = prevChip.querySelector('.wg-chip-photo');
+        if (prevPhotoEl && prevCard && prevCard.thumbDataUrl) {
+          prevPhotoEl.style.backgroundImage = `url(${prevCard.thumbDataUrl})`;
+        }
+      }
       activeIndex = nearest;
     }
     chips[activeIndex].classList.add('wg-chip--active');
+  }
+
+  // 12時位置(アクティブ)のチップだけ、回転が止まったタイミングで元画質(またはそれに
+  // 近い画質)に差し替える。ドラッグ中は毎フレームactiveIndexが動くためここでは呼ばず、
+  // スナップアニメーション完了時・初期表示時にのみ呼ぶことで、通信は都度1枚に抑える。
+  // getFileBlobUrlCached()はDrive取得結果をBlobURLとしてキャッシュするため、一度見た
+  // 写真を再度アクティブにした時は通信なしで即座に差し替わる。
+  let activeFullImageToken = 0;
+  function refreshActiveFullImage() {
+    const card = photos[activeIndex];
+    const chip = wgEls.chips.children[activeIndex];
+    if (!chip || !card || !card.imageFileId) return;
+    const token = ++activeFullImageToken;
+    getFileBlobUrlCached(card.imageFileId).then((url) => {
+      if (token !== activeFullImageToken) return; // 古い読み込みが遅れて返ってきた場合は無視
+      if (Number(chip.dataset.index) !== activeIndex) return;
+      const photoEl = chip.querySelector('.wg-chip-photo');
+      if (photoEl) photoEl.style.backgroundImage = `url(${url})`;
+    }).catch((err) => console.warn('WormGate: 元画質の取得に失敗', err));
   }
 
   function angleTo(targetIndex) {
@@ -326,7 +347,7 @@
     return rotation + delta;
   }
 
-  function animateRotationTo(target, duration) {
+  function animateRotationTo(target, duration, onDone) {
     const start = rotation;
     const diff = target - start;
     const t0 = performance.now();
@@ -336,6 +357,7 @@
       rotation = start + diff * eased;
       layoutRing();
       if (t < 1) requestAnimationFrame(step);
+      else if (onDone) onDone();
     }
     requestAnimationFrame(step);
   }
@@ -395,7 +417,7 @@
     pointerActive = false;
     wgEls.track.classList.remove('grabbing');
     if (hasDragged) {
-      animateRotationTo(angleTo(activeIndex), 260);
+      animateRotationTo(angleTo(activeIndex), 260, refreshActiveFullImage);
     } else if (pointerDownChipIndex !== null) {
       onChipTap(pointerDownChipIndex);
     }
@@ -407,7 +429,7 @@
       playWormGateSelectSound();
       jumpToCard(photos[i]);
     } else {
-      animateRotationTo(angleTo(i), 320);
+      animateRotationTo(angleTo(i), 320, refreshActiveFullImage);
     }
   }
 
@@ -480,6 +502,7 @@
     computeGeometry();
     buildChips();
     layoutRing();
+    refreshActiveFullImage();
     playWormGateOpenSound();
     wgEls.overlay.classList.add('open');
   }
