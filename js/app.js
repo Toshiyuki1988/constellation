@@ -729,8 +729,7 @@ function infoCardInnerHtml(card) {
   const parsed = card.infoParsed;
   const expanded = Boolean(card.infoExpanded);
   const visitable = parsed ? isExhibitionVisitableOn(parsed, new Date()) : false;
-  const firstLine = (card.memo || '').split('\n').map((l) => l.replace(/：/g, '').trim()).find((l) => l);
-  const displayTitle = (parsed && parsed.title) || firstLine || '(無題のインフォメーション)';
+  const displayTitle = (parsed && parsed.title) || '(無題のインフォメーション)';
   const displayVenue = parsed && parsed.venue;
 
   const badgeClass = !parsed ? 'unparsed' : visitable ? 'visitable' : 'closed';
@@ -743,10 +742,7 @@ function infoCardInnerHtml(card) {
       ${displayVenue ? `<p class="star-card-info-venue">${escapeHtml(displayVenue)}</p>` : ''}
     </div>
     <div class="star-card-info-body" ${expanded ? '' : 'hidden'}>
-      <p class="star-card-info-label">情報テキスト(「：」で挟んだ範囲が解析対象)</p>
-      <textarea class="star-card-info-text" placeholder="：会場名・会期・時間などを貼り付け：">${escapeHtml(card.memo || '')}</textarea>
-      <button class="star-card-info-ocr-btn" title="カメラでOCRして追記">${CAMERA_ICON_SVG}<span>OCRで追記</span></button>
-      <p class="star-card-info-label">展覧会ページURL(任意・分かれば優先して読み取ります)</p>
+      <p class="star-card-info-label">展覧会ページURL</p>
       <input type="text" class="star-card-info-url" placeholder="https://..." value="${escapeHtml(card.infoUrl || '')}">
       <button class="star-card-info-parse-btn">解析する</button>
       ${parsed ? infoParseResultHtml(parsed) : ''}
@@ -789,32 +785,15 @@ function infoParseErrorHtml(card) {
 }
 
 function wireInfoCard(card, el) {
-  const textEl = el.querySelector('.star-card-info-text');
   const urlEl = el.querySelector('.star-card-info-url');
-  const ocrBtn = el.querySelector('.star-card-info-ocr-btn');
   const parseBtn = el.querySelector('.star-card-info-parse-btn');
   const fixBtn = el.querySelector('.star-card-info-fix-btn');
 
-  if (textEl) {
-    textEl.addEventListener('pointerdown', (e) => e.stopPropagation());
-    textEl.addEventListener('input', () => {
-      card.memo = textEl.value;
-      syncCardHeight(el);
-      scheduleAutoSave();
-    });
-  }
   if (urlEl) {
     urlEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     urlEl.addEventListener('input', () => {
       card.infoUrl = urlEl.value;
       scheduleAutoSave();
-    });
-  }
-  if (ocrBtn) {
-    ocrBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    ocrBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      handleInfoCardOcr(card, el);
     });
   }
   if (parseBtn) {
@@ -875,32 +854,19 @@ function toggleInfoCardExpanded(card, el) {
   scheduleAutoSave();
 }
 
-/** インフォメーションカードの📷ボタン: OCRだけ起動し、結果をテキスト欄に追記する */
-async function handleInfoCardOcr(card, el) {
-  const result = await openCamera('caption');
-  if (!result || result.kind !== 'text') return;
-  card.memo = card.memo ? `${card.memo}\n${result.text}` : result.text;
-  rerenderCardInPlace(card, el);
-  setStatus('OCR結果を追記しました');
-  scheduleAutoSave();
-}
-
 async function handleInfoCardParse(card, el) {
-  const textEl = el.querySelector('.star-card-info-text');
   const urlEl = el.querySelector('.star-card-info-url');
-  const text = (textEl ? textEl.value : card.memo) || '';
   const url = ((urlEl ? urlEl.value : card.infoUrl) || '').trim();
-  card.memo = text;
   card.infoUrl = url;
 
-  if (!text.trim()) {
-    setStatus('情報テキストを入力してください');
+  if (!url) {
+    setStatus('展覧会ページURLを入力してください');
     return;
   }
 
   setStatus('展覧会情報を解析中…');
   try {
-    const result = await parseExhibitionInfo(text, url || undefined);
+    const result = await parseExhibitionInfo(url);
     if (result.error) {
       card.infoParsed = null;
       card.infoParseError = { message: result.error, partial: result.partial || {} };
