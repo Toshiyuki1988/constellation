@@ -988,8 +988,11 @@ function createSummaryCard() {
  * セッション(と入れ子の子セッション全て)にあるカードのテキストを、見出し付きの1つの文章に
  * まとめる。サマリーカード自身と、過去にサマリーから生成されたテクストカード
  * (card.summarySourceId持ち)は、要約が要約を再帰的に参照しないよう対象から除く。
+ * sources配列(呼び出し側が空配列を渡す)に、本文中の[出典N]タグの順でcard.idを積んでいく。
+ * Geminiに「どの出典を一番参考にしたか」を番号で答えさせ、後から実際のカードへ引き当てる
+ * (=最も参考にしたカードへ自動でASTR接続する)ための下ごしらえ。
  */
-function collectSessionTextContext(sessionId, depth = 0) {
+function collectSessionTextContext(sessionId, sources, depth = 0) {
   if (depth > 10) return ''; // 循環参照などに備えた保険
   const session = getSessionById(sessionId);
   if (!session) return '';
@@ -999,13 +1002,14 @@ function collectSessionTextContext(sessionId, depth = 0) {
     .filter((c) => c.sessionId === sessionId)
     .forEach((c) => {
       if (c.mediaType === 'session') {
-        const nested = collectSessionTextContext(c.refSessionId, depth + 1);
+        const nested = collectSessionTextContext(c.refSessionId, sources, depth + 1);
         if (nested) lines.push(nested);
       } else if (c.mediaType === 'summary' || c.summarySourceId) {
         // 要約カード自身と、過去に要約から生成されたテクストカードは参照しない
       } else if (c.memo && c.memo.trim()) {
         const label = c.mediaType === 'text' ? 'テキスト' : c.mediaType === 'info' ? 'インフォ' : 'キャプション/メモ';
-        lines.push(`${indent}- [${label}] ${c.memo.trim()}`);
+        sources.push(c.id);
+        lines.push(`${indent}- [出典${sources.length}][${label}] ${c.memo.trim()}`);
       }
     });
   return lines.join('\n');
@@ -1051,14 +1055,15 @@ async function handleSummaryGenerate(card, el, mode) {
 
   setStatus('要約を作成中…');
   try {
-    const context = collectSessionTextContext(card.sessionId);
+    const sources = [];
+    const context = collectSessionTextContext(card.sessionId, sources);
     const direction = (el.querySelector('.star-card-summary-input')?.value || '').trim();
     card.summaryDirection = direction;
     const images = collectConnectedImageParts(card.id);
-    const text = await summarizeSession({ context, mode, direction, images });
+    const { answer, mostRelevantSource } = await summarizeSession({ context, mode, direction, images });
     // 要約傾向に質問文を入れても素直に回答が返ってくるため、後から見返した時に「何を
     // 指示して出てきた要約か」が分かるよう、指示文をQ.として冒頭に残しておく。
-    const textWithDirection = direction ? `Q. ${direction}\n\n${text}` : text;
+    const textWithDirection = direction ? `Q. ${direction}\n\n${answer}` : answer;
 
     const newCard = createTextCard(textWithDirection);
     newCard.summarySourceId = card.id;
@@ -1071,6 +1076,13 @@ async function handleSummaryGenerate(card, el, mode) {
       applyCardTransform(newEl);
     }
     createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
+
+    // Geminiが「最も参考にした出典」を番号で答えていれば、そのカードへも別途ASTR接続する
+    // (=どの記録が根拠になったかを、線でたどれるようにする)
+    if (mostRelevantSource && sources[mostRelevantSource - 1]) {
+      const sourceCardId = sources[mostRelevantSource - 1];
+      if (sourceCardId !== newCard.id) createAstrConnection(sourceCardId, newCard.id);
+    }
     setStatus(`${mode === 'education' ? 'Education' : 'Academic'}の要約を作成しました`);
   } catch (err) {
     console.error(err);

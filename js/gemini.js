@@ -113,14 +113,17 @@ async function parseExhibitionInfo(text) {
 }
 
 /**
- * サマリーカード用: セッション全体のテキスト情報(collectSessionTextContext()で組み立てた文章)
- * から、視点(mode)と任意の傾向指示(direction)に沿って要約を1本書かせる。既定では画像は
- * 送らない(枚数の多いセッションで無料枠をすぐ消費してしまうため)。サマリーカードにASTRで
- * 手動接続された写真カードがある場合だけ、その写真(imagesで渡す)も見て要約させる
- * (動画・音声は呼び出し側で除外済みの前提)。
+ * サマリーカード用: セッション全体のテキスト情報(collectSessionTextContext()で組み立てた文章、
+ * 本文中に[出典N]タグが埋め込まれている)から、視点(mode)と任意の傾向指示(direction)に沿って
+ * 要約を1本書かせる。既定では画像は送らない(枚数の多いセッションで無料枠をすぐ消費してしまう
+ * ため)。サマリーカードにASTRで手動接続された写真カードがある場合だけ、その写真(imagesで
+ * 渡す)も見て要約させる(動画・音声は呼び出し側で除外済みの前提)。
+ * 回答と同時に、本文中の[出典N]タグのうち最も参考にした番号(mostRelevantSource、1始まり)も
+ * 答えさせる(呼び出し側でsources[mostRelevantSource-1]から実際のcard.idへ引き当て、その
+ * カードへASTR接続する用途)。特に無ければnull。
  * @param {{context: string, mode: 'education'|'academic', direction?: string,
  *   images?: {base64: string, mimeType?: string}[]}} params
- * @returns {Promise<string>} 要約テキスト
+ * @returns {Promise<{answer: string, mostRelevantSource: number|null}>}
  */
 async function summarizeSession({ context, mode, direction, images }) {
   const styleInstruction =
@@ -153,13 +156,29 @@ async function summarizeSession({ context, mode, direction, images }) {
   }
 
   const prompt =
-    '以下は、ある美術展覧会・セッションの記録(タイトルと、鑑賞メモ・キャプションなどのテキスト)です。\n\n' +
+    '以下は、ある美術展覧会・セッションの記録(タイトルと、鑑賞メモ・キャプションなどのテキスト)です。' +
+    '各行の[出典N]は、後で参照するための番号です。\n\n' +
     `${context}\n\n` +
     `${taskInstruction}\n${styleInstruction}\n` +
-    '前置き・見出し・箇条書き記号は使わず、自然な文章で200〜400字程度にまとめてください。';
+    '本文は前置き・見出し・箇条書き記号は使わず、自然な文章で200〜400字程度にまとめてください。\n\n' +
+    '出力は次のJSON形式だけにしてください(前置き・説明・コードブロックの記号は一切付けないこと)。\n' +
+    '{\n' +
+    '  "answer": "本文",\n' +
+    '  "mostRelevantSource": 本文を書く上で最も参考にした[出典N]の番号(整数)。特に無ければnull\n' +
+    '}';
 
   const raw = await askGemini({ prompt, images });
-  return raw.trim();
+  const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '');
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed.answer === 'string') {
+      const idx = Number.isInteger(parsed.mostRelevantSource) ? parsed.mostRelevantSource : null;
+      return { answer: parsed.answer.trim(), mostRelevantSource: idx };
+    }
+  } catch (err) {
+    // JSONとして解析できなかった場合は、生のテキストをそのまま本文として使う(出典の紐付けは諦める)
+  }
+  return { answer: cleaned, mostRelevantSource: null };
 }
 
 function blobToBase64(blob) {
