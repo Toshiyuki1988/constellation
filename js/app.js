@@ -842,10 +842,14 @@ function createInfoCard() {
   return card;
 }
 
-/** カード1枚を丸ごと作り直す(要素を差し替える)簡易ヘルパー。編集ガイド表示中ならそれも引き継ぐ。 */
+/**
+ * カード1枚を丸ごと作り直す(要素を差し替える)簡易ヘルパー。編集ガイド表示中ならそれも引き継ぐ。
+ * 渡されたoldElだけでなく、同じcard.idを持つ要素を全て消してから作り直す(二重クリックなどで
+ * 一時的に同じカードの要素が複数存在してしまった場合の保険)。
+ */
 function rerenderCardInPlace(card, oldEl) {
   const wasEditGuide = oldEl.classList.contains('star-card--edit-guide');
-  oldEl.remove();
+  els.content.querySelectorAll(`.star-card[data-id="${CSS.escape(String(card.id))}"]`).forEach((node) => node.remove());
   renderCard(card);
   const newEl = cardElById(card.id);
   if (wasEditGuide && newEl) activateEditGuide(newEl);
@@ -858,7 +862,13 @@ function toggleInfoCardExpanded(card, el) {
   scheduleAutoSave();
 }
 
+// 解析中に同じカードへ二重にGeminiを呼んでしまう(=カードが二重描画される、APIも無駄に消費する)
+// のを防ぐための進行中フラグ集合。
+const infoCardParseInFlight = new Set();
+
 async function handleInfoCardParse(card, el) {
+  if (infoCardParseInFlight.has(card.id)) return;
+
   const textEl = el.querySelector('.star-card-info-text');
   const text = (textEl ? textEl.value : card.memo) || '';
   card.memo = text;
@@ -867,6 +877,10 @@ async function handleInfoCardParse(card, el) {
     setStatus('展覧会ページの本文を貼り付けてください');
     return;
   }
+
+  infoCardParseInFlight.add(card.id);
+  const parseBtn = el.querySelector('.star-card-info-parse-btn');
+  if (parseBtn) { parseBtn.disabled = true; parseBtn.textContent = '解析中…'; }
 
   setStatus('展覧会情報を解析中…');
   try {
@@ -885,6 +899,7 @@ async function handleInfoCardParse(card, el) {
     card.infoParseError = { message: '通信に失敗しました', partial: {} };
     setStatus('解析に失敗しました(コンソールを確認)');
   }
+  infoCardParseInFlight.delete(card.id);
   rerenderCardInPlace(card, el);
   scheduleAutoSave();
   refreshInfoTicker();
