@@ -317,15 +317,26 @@
         }
       }
       activeIndex = nearest;
+      // 発光・トンボ(アクティブ表示)が付いた瞬間をトリガーに読み込みを予約する。
+      // ドラッグ中に指を素早く動かすと一瞬だけ何枚も通過するため、即座には読まず、
+      // このactiveIndexのまま少し留まったら(=通過ではなく実際に見ている)読み込む。
+      scheduleActiveFullImage();
     }
     chips[activeIndex].classList.add('wg-chip--active');
   }
 
-  // 12時位置(アクティブ)のチップだけ、回転が止まったタイミングで元画質(またはそれに
-  // 近い画質)に差し替える。ドラッグ中は毎フレームactiveIndexが動くためここでは呼ばず、
-  // スナップアニメーション完了時・初期表示時にのみ呼ぶことで、通信は都度1枚に抑える。
+  // 12時位置(アクティブ)のチップの元画質(またはそれに近い画質)を読み込む。
   // getFileBlobUrlCached()はDrive取得結果をBlobURLとしてキャッシュするため、一度見た
   // 写真を再度アクティブにした時は通信なしで即座に差し替わる。
+  let activeHoverTimer = null;
+  function scheduleActiveFullImage() {
+    if (activeHoverTimer) clearTimeout(activeHoverTimer);
+    const indexAtSchedule = activeIndex;
+    activeHoverTimer = setTimeout(() => {
+      activeHoverTimer = null;
+      if (activeIndex === indexAtSchedule) refreshActiveFullImage();
+    }, 120);
+  }
   let activeFullImageToken = 0;
   function refreshActiveFullImage() {
     const card = photos[activeIndex];
