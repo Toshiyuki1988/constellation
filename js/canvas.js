@@ -382,6 +382,11 @@ function attachCardGestures(el) {
     if (event.target.closest('button, textarea, input')) return;
     if (pointerId !== null) return; // 既に1点を追跡中なら追加のポインタは無視
 
+    // iOSなどはAudioContextの生成/再開がユーザー操作に直接紐づく同期呼び出しでないと
+    // 無音のまま失敗する。長押しタイマー(setTimeout)経由で鳴らす前に、ここで今のジェスチャーに
+    // 直接乗せて解錠しておく。
+    soundAudioCtx();
+
     pointerId = event.pointerId;
     pressStart = { x: event.clientX, y: event.clientY };
     try {
@@ -598,6 +603,7 @@ function attachAstrGesture(el) {
 
   hexEl.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
+    soundAudioCtx(); // 長押し確定音・接続音がiOS等で無音にならないよう、このジェスチャーで解錠しておく
     if (pointerId !== null) return;
     pointerId = event.pointerId;
     pressStart = { x: event.clientX, y: event.clientY };

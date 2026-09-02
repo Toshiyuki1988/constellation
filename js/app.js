@@ -158,6 +158,9 @@ function armAutoSignInOnFirstGesture() {
   const trigger = () => {
     debugLog('初回タップでサイレントサインインを試行');
     signIn(true);
+    // iOS等はAudioContextの生成/再開がユーザー操作に直接紐づいていないと無音になる。
+    // 個々のジェスチャー内でも解錠しているが、ここでも保険として解錠しておく。
+    soundAudioCtx();
   };
   document.addEventListener('pointerdown', trigger, { capture: true, once: true });
 }
@@ -409,14 +412,16 @@ function hideAutoLink(sessionId, cardIdA, cardIdB) {
   scheduleAutoSave();
 }
 
-/** 削除確認つきで1本の線を描く(自動線・手動線共通)。当たり判定を広く取った透明な線を重ねる。 */
+/** 削除確認つきで1本の線を描く(自動線・手動線共通)。当たり判定を広く取った透明な線を重ねる。
+ *  見えている方の線要素を返す(接続直後の発光演出などで、後から特定の線を掴むために使う)。 */
 function drawDeletableAsterismLine(elA, elB, className, onDelete) {
-  drawAsterismLine(elA, elB, className);
+  const line = drawAsterismLine(elA, elB, className);
   const hit = drawAsterismLine(elA, elB, 'asterism-line-hit');
   hit.addEventListener('click', (event) => {
     event.stopPropagation();
     if (window.confirm('この線を削除しますか?')) onDelete();
   });
+  return line;
 }
 
 /** 現在のセッションの線(自動の見た順+手動接続)をすべて描き直す */
@@ -445,8 +450,17 @@ function redrawAsterismLines() {
       const elA = cardElById(conn.cardIdA);
       const elB = cardElById(conn.cardIdB);
       if (!elA || !elB) return;
-      drawDeletableAsterismLine(elA, elB, 'asterism-line--manual', () => removeAstrConnection(conn.id));
+      const line = drawDeletableAsterismLine(elA, elB, 'asterism-line--manual', () => removeAstrConnection(conn.id));
+      line.dataset.connectionId = conn.id; // 接続直後の発光演出でこの線を後から特定するため
     });
+}
+
+/** 接続が成立した瞬間、「ピーン」の発音に合わせてその線を一瞬明るく光らせる(CSSアニメーション任せ)。 */
+function flashConnectedLine(connectionId) {
+  const line = asterismSvg.querySelector(`[data-connection-id="${CSS.escape(String(connectionId))}"]`);
+  if (!line) return;
+  line.classList.add('asterism-line--connect-flash');
+  setTimeout(() => line.classList.remove('asterism-line--connect-flash'), 850);
 }
 
 /** ASTRガイドのドラッグ&ドロップから呼ぶ(js/canvas.js) */
@@ -462,9 +476,11 @@ function createAstrConnection(cardIdA, cardIdB) {
     setStatus('既につながっています');
     return;
   }
-  state.connections.push({ id: crypto.randomUUID(), sessionId, cardIdA, cardIdB });
+  const connection = { id: crypto.randomUUID(), sessionId, cardIdA, cardIdB };
+  state.connections.push(connection);
   playAstrConnectSound();
   redrawAsterismLines();
+  flashConnectedLine(connection.id);
   setStatus('線でつなぎました');
   scheduleAutoSave();
 }

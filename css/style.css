@@ -224,6 +224,26 @@ html, body {
   cursor: pointer;
 }
 
+/* ASTRで接続が成立した瞬間、「ピーン」の発音に合わせてその線を一瞬明るく光らせてから、
+   通常の線の見た目へなめらかに戻す(js/app.jsのflashConnectedLine()が付け外しする)。 */
+@keyframes asterism-connect-flash {
+  0% {
+    stroke: #2e7d32;
+    stroke-width: 3.5;
+    opacity: 1;
+    filter: drop-shadow(0 0 7px rgba(46, 125, 50, 0.85));
+  }
+  100% {
+    stroke: var(--muted);
+    stroke-width: 2;
+    opacity: 0.75;
+    filter: drop-shadow(0 0 0 rgba(46, 125, 50, 0));
+  }
+}
+.asterism-line--connect-flash {
+  animation: asterism-connect-flash 0.8s ease-out forwards;
+}
+
 .tool-btn.active {
   background: var(--text);
   color: #fff;
