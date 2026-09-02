@@ -486,6 +486,35 @@ html, body {
   filter: blur(3px);
 }
 
+/* Driveへのアップロードがバックグラウンドで進行中(まだサムネイルだけ)であることを控えめに示す */
+.star-card--upload-pending {
+  opacity: 0.7;
+}
+.star-card--upload-pending .star-card-media {
+  outline: 1px dashed var(--line);
+  outline-offset: -1px;
+}
+
+/* Driveへのアップロードが失敗し、この端末を離れると写真の実体が失われる状態を分かるようにする */
+.star-card--upload-failed .star-card-media {
+  outline: 1px dashed var(--rust);
+  outline-offset: -1px;
+}
+.star-card--upload-failed::after {
+  content: '⚠ Drive未保存';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #fff;
+  background: var(--rust);
+  padding: 2px 6px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 5;
+}
+
 .star-card-media {
   flex: 1;
   background-color: var(--surface-2);

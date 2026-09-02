@@ -713,15 +713,19 @@ function renderCard(card) {
     wireInfoCard(card, el);
   }
 
-  if (!isSessionCard && card.imageFileId) {
+  if (!isSessionCard && (card.imageFileId || card.thumbDataUrl)) {
     const mediaEl = el.querySelector('.star-card-media');
     // 概観時はまず軽量サムネイル(あれば)を即表示し、実際にカードが画面内に来たときだけ
     // Driveへ本画像/動画/音声を取りに行く(OneNoteのサムネイル運用と同じ考え方)。
     if (mediaType === 'image' && card.thumbDataUrl) {
       mediaEl.style.backgroundImage = `url(${card.thumbDataUrl})`;
     }
-    observeMediaForLazyLoad(el, card);
+    // Driveアップロードがバックグラウンドで進行中でまだimageFileIdが無い場合、本体取得は
+    // アップロード完了時(uploadCardFileInBackground)に改めてobserveMediaForLazyLoad()を呼ぶ。
+    if (card.imageFileId) observeMediaForLazyLoad(el, card);
   }
+  if (card.uploadPending) el.classList.add('star-card--upload-pending');
+  if (card.uploadFailed) el.classList.add('star-card--upload-failed');
 
   // セッションカードはメモが空のままなら、以前どおりユーザーが手動で決めた高さを保つ
   // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。
@@ -1662,19 +1666,17 @@ function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
   });
 }
 
-/** Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラの両経路から使う */
+/**
+ * Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラ・クリップボード
+ * 貼り付けの各経路から使う。
+ * 画像はローカルで一瞬で作れるサムネイルだけを待ってすぐカードを表示し、Driveへのフル
+ * サイズアップロードはバックグラウンドで進める(=Ctrl+Vや撮影直後の「ワンクッション」を
+ * 無くすための最適化)。アップロード完了時にuploadCardFileInBackground()がimageFileIdを
+ * 差し込む。動画・音声はローカルサムネイルが無いため、この最適化の恩恵は薄いが、同じ
+ * 経路に揃えて実装をシンプルに保っている。
+ */
 async function createCardFromCapture({ blob, filename, mediaType, memo }) {
-  setStatus('アップロード中…');
-  const thumbPromise = mediaType === 'image' ? generateThumbnail(blob) : Promise.resolve(null);
-  let fileId;
-  try {
-    fileId = await uploadFile(state.folderId, blob, filename);
-  } catch (err) {
-    console.error(err);
-    setStatus('アップロードに失敗しました');
-    return null;
-  }
-  const thumbDataUrl = await thumbPromise;
+  const thumbDataUrl = mediaType === 'image' ? await generateThumbnail(blob) : null;
 
   const card = {
     id: crypto.randomUUID(),
@@ -1685,17 +1687,46 @@ async function createCardFromCapture({ blob, filename, mediaType, memo }) {
     memo: memo || '',
     tags: [],
     mediaType,
-    imageFileId: fileId,
+    imageFileId: null,
     thumbDataUrl,
+    uploadPending: true,
     sessionId: activeSessionId(),
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
-  setStatus('追加しました');
-  scheduleAutoSave();
+  setStatus('追加しました。アップロード中…');
+  scheduleAutoSave(); // アップロード完了前にタブを閉じても、カードの存在自体は残るように
+
+  uploadCardFileInBackground(card, blob, filename);
   return card;
+}
+
+/** createCardFromCapture()が即座に表示したカードの実体を、裏でDriveへアップロードする */
+async function uploadCardFileInBackground(card, blob, filename) {
+  try {
+    const fileId = await uploadFile(state.folderId, blob, filename);
+    card.imageFileId = fileId;
+    card.uploadPending = false;
+    const el = cardElById(card.id);
+    if (el) {
+      el.classList.remove('star-card--upload-pending');
+      observeMediaForLazyLoad(el, card);
+    }
+    scheduleAutoSave();
+  } catch (err) {
+    console.error(err);
+    card.uploadPending = false;
+    card.uploadFailed = true;
+    const el = cardElById(card.id);
+    if (el) {
+      el.classList.remove('star-card--upload-pending');
+      el.classList.add('star-card--upload-failed');
+    }
+    setStatus('アップロードに失敗しました(カードは残りますがDriveには保存されていません)', { important: true });
+    scheduleAutoSave();
+  }
 }
 
 async function handleSave() {
