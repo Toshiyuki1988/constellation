@@ -869,6 +869,82 @@ html, body {
 }
 .star-card-info-resync-btn:hover { border-color: var(--text); }
 
+/* ---------------- サマリーカード ---------------- */
+.star-card--summary {
+  padding: 10px 12px 12px;
+  padding-top: 30px;
+}
+
+/* ヘッダーの特注ヘックスタブ。カード上辺にまたがる形で2つ並べる(編集ガイドのヘックスと同じ意匠) */
+.star-card-summary-head {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -62%);
+  display: flex;
+  gap: 6px;
+  z-index: 4;
+}
+.star-card-summary-btn {
+  position: relative;
+  width: 104px;
+  height: 38px;
+  clip-path: polygon(12% 0%, 88% 0%, 100% 38%, 88% 100%, 12% 100%, 0% 38%);
+  background: var(--text);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-family: var(--sans);
+  font-weight: 700;
+  font-size: 10px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.22);
+  transition: transform 0.12s ease-out, background 0.12s ease-out;
+}
+.star-card-summary-btn:hover:not(:disabled) { background: #2e7d32; transform: translateY(-1px); }
+.star-card-summary-btn:disabled { opacity: 0.55; cursor: default; }
+.star-card-summary-btn .emoji { font-size: 12.5px; line-height: 1; }
+
+.star-card-summary-session {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 2px;
+}
+.star-card-summary-session .dot { width: 5px; height: 5px; border-radius: 50%; background: #2e7d32; flex: none; }
+
+.star-card-summary-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin: 8px 0 5px;
+}
+
+.star-card-summary-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 7px 8px;
+  background: var(--bg);
+  pointer-events: auto;
+}
+
 /* WormGateのジャンプ着地演出と同じ視覚言語(緑のリング)を、こちらは基本機能側で独自に持つ */
 .star-card--landed {
   box-shadow: 0 0 0 3px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3) !important;

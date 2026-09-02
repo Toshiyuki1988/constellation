@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolAudio = document.getElementById('tool-audio');
   els.toolSession = document.getElementById('tool-session');
   els.toolInfo = document.getElementById('tool-info');
+  els.toolSummary = document.getElementById('tool-summary');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
@@ -91,6 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
   els.toolInfo.addEventListener('click', createInfoCard);
+  els.toolSummary.addEventListener('click', createSummaryCard);
   els.infoTicker.addEventListener('click', () => {
     const card = infoTickerItems[infoTickerIndex];
     if (card) jumpToInfoCard(card);
@@ -208,6 +210,7 @@ function toggleAuthUI(signedIn) {
   els.toolAudio.disabled = !signedIn;
   els.toolSession.disabled = !signedIn;
   els.toolInfo.disabled = !signedIn;
+  els.toolSummary.disabled = !signedIn;
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
@@ -478,8 +481,8 @@ function redrawAsterismLines() {
   if (!asterismSvg) return;
   asterismSvg.innerHTML = '';
   const currentId = activeSessionId();
-  // インフォメーションカードはリマインダー用途のため、見た順の自動線から除外する
-  const sessionCards = state.cards.filter((c) => c.sessionId === currentId && c.mediaType !== 'info');
+  // インフォメーションカード・サマリーカードは見た順(鑑賞順)の一部ではないため、自動線から除外する
+  const sessionCards = state.cards.filter((c) => c.sessionId === currentId && c.mediaType !== 'info' && c.mediaType !== 'summary');
 
   // 自動: 追加した順(見た順)に隣同士をつなぐ。ただしhideAutoLink()で個別に消されたペアは除く
   const sorted = sessionCards.slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -571,6 +574,11 @@ function editGuideHexHtml(mediaType) {
   if (mediaType === 'info') {
     return hex('toggle', '開閉') + hex('depth', 'Depth') + hex('delete', 'Delete');
   }
+  // サマリーカードは移動(ドラッグ)と要約傾向の入力(カード本体)だけでよく、
+  // 出力先への接続はボタン操作で自動生成されるためASTRは持たない。Deleteのみ。
+  if (mediaType === 'summary') {
+    return hex('delete', 'Delete');
+  }
   const astrHex = '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>';
   if (mediaType === 'session') {
     return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
@@ -610,6 +618,7 @@ function renderCard(card) {
   const isTextCard = mediaType === 'text';
   const isSessionCard = mediaType === 'session';
   const isInfoCard = mediaType === 'info';
+  const isSummaryCard = mediaType === 'summary';
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
@@ -617,7 +626,8 @@ function renderCard(card) {
     'star-card' +
     (isTextCard ? ' star-card--text' : '') +
     (isSessionCard ? ' star-card--session' : '') +
-    (isInfoCard ? ' star-card--info' : '');
+    (isInfoCard ? ' star-card--info' : '') +
+    (isSummaryCard ? ' star-card--summary' : '');
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
   el.dataset.y = String(card.y);
@@ -649,6 +659,8 @@ function renderCard(card) {
     `;
   } else if (isInfoCard) {
     el.innerHTML = infoCardInnerHtml(card);
+  } else if (isSummaryCard) {
+    el.innerHTML = summaryCardInnerHtml(card);
   } else {
     el.innerHTML = `
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
@@ -725,6 +737,9 @@ function renderCard(card) {
 
   if (isInfoCard) {
     wireInfoCard(card, el);
+  }
+  if (isSummaryCard) {
+    wireSummaryCard(card, el);
   }
 
   if (!isSessionCard && (card.imageFileId || card.thumbDataUrl)) {
@@ -880,6 +895,133 @@ function createInfoCard() {
   setStatus('インフォメーションカードを追加しました');
   scheduleAutoSave();
   return card;
+}
+
+/* ---------------- サマリーカード(基本機能) ----------------
+ * セッション全体(タイトル・入れ子の子セッションを含む全カードのテキスト)をGeminiに読ませ、
+ * 「👦 Education(やさしく)」「🎓 Academic(学術的に)」の2つの視点で要約を作らせる。
+ * 押すたびにGeminiを1回呼び、結果はテクストカードとして新規に生成し、ASTRの手動接続と同じ
+ * 仕組み(createAstrConnection)でこのサマリーカードに繋げる(効果音・発光演出もそこに乗る)。
+ * 画像は送らない(セッションによっては大量の写真を毎回送ることになり、無料枠をすぐ消費して
+ * しまうため。テキスト情報だけで要約する)。 */
+
+function summaryCardInnerHtml(card) {
+  const session = getSessionById(card.sessionId);
+  return `
+    <div class="star-card-summary-head">
+      <button class="star-card-summary-btn" data-summary-mode="education" title="小中学生にも分かるように要約"><span class="emoji">👦</span>Education</button>
+      <button class="star-card-summary-btn" data-summary-mode="academic" title="学術的な視点で要約"><span class="emoji">🎓</span>Academic</button>
+    </div>
+    <p class="star-card-summary-session"><span class="dot"></span>SESSION: ${escapeHtml(session ? session.name : '(不明)')}</p>
+    <p class="star-card-summary-label">要約の傾向(任意)</p>
+    <textarea class="star-card-summary-input" placeholder="例: フェミニズム的視点で／ポストインターネット的視点で">${escapeHtml(card.summaryDirection || '')}</textarea>
+    ${EDIT_GUIDE_HANDLES_HTML}
+    ${editGuideHexHtml('summary')}
+  `;
+}
+
+function wireSummaryCard(card, el) {
+  const inputEl = el.querySelector('.star-card-summary-input');
+  if (inputEl) {
+    inputEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    inputEl.addEventListener('input', () => {
+      card.summaryDirection = inputEl.value;
+      scheduleAutoSave();
+    });
+  }
+  el.querySelectorAll('.star-card-summary-btn').forEach((btn) => {
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleSummaryGenerate(card, el, btn.dataset.summaryMode);
+    });
+  });
+}
+
+function createSummaryCard() {
+  const card = {
+    id: crypto.randomUUID(),
+    x: 40,
+    y: 40,
+    width: 260,
+    height: 200,
+    mediaType: 'summary',
+    summaryDirection: '',
+    imageFileId: null,
+    sessionId: activeSessionId(),
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  redrawAsterismLines();
+  setStatus('サマリーカードを追加しました');
+  scheduleAutoSave();
+  return card;
+}
+
+/**
+ * セッション(と入れ子の子セッション全て)にあるカードのテキストを、見出し付きの1つの文章に
+ * まとめる。サマリーカード自身と、過去にサマリーから生成されたテクストカード
+ * (card.summarySourceId持ち)は、要約が要約を再帰的に参照しないよう対象から除く。
+ */
+function collectSessionTextContext(sessionId, depth = 0) {
+  if (depth > 10) return ''; // 循環参照などに備えた保険
+  const session = getSessionById(sessionId);
+  if (!session) return '';
+  const indent = '  '.repeat(depth);
+  const lines = [`${indent}■ ${session.name}`];
+  state.cards
+    .filter((c) => c.sessionId === sessionId)
+    .forEach((c) => {
+      if (c.mediaType === 'session') {
+        const nested = collectSessionTextContext(c.refSessionId, depth + 1);
+        if (nested) lines.push(nested);
+      } else if (c.mediaType === 'summary' || c.summarySourceId) {
+        // 要約カード自身と、過去に要約から生成されたテクストカードは参照しない
+      } else if (c.memo && c.memo.trim()) {
+        const label = c.mediaType === 'text' ? 'テキスト' : c.mediaType === 'info' ? 'インフォ' : 'キャプション/メモ';
+        lines.push(`${indent}- [${label}] ${c.memo.trim()}`);
+      }
+    });
+  return lines.join('\n');
+}
+
+const summaryInFlight = new Set();
+
+async function handleSummaryGenerate(card, el, mode) {
+  if (mode !== 'education' && mode !== 'academic') return;
+  if (summaryInFlight.has(card.id)) return;
+  summaryInFlight.add(card.id);
+  const btns = el.querySelectorAll('.star-card-summary-btn');
+  btns.forEach((b) => { b.disabled = true; });
+
+  setStatus('要約を作成中…');
+  try {
+    const context = collectSessionTextContext(card.sessionId);
+    const direction = (el.querySelector('.star-card-summary-input')?.value || '').trim();
+    card.summaryDirection = direction;
+    const text = await summarizeSession({ context, mode, direction });
+
+    const newCard = createTextCard(text);
+    newCard.summarySourceId = card.id;
+    newCard.x = card.x + 260 + (Math.random() * 80 - 20);
+    newCard.y = card.y + (Math.random() * 240 - 120);
+    const newEl = cardElById(newCard.id);
+    if (newEl) {
+      newEl.dataset.x = String(newCard.x);
+      newEl.dataset.y = String(newCard.y);
+      applyCardTransform(newEl);
+    }
+    createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
+    setStatus(`${mode === 'education' ? 'Education' : 'Academic'}の要約を作成しました`);
+  } catch (err) {
+    console.error(err);
+    debugLog('サマリー生成エラー: ' + err.message);
+    setStatus(`要約に失敗しました: ${err.message}`, { important: true });
+  } finally {
+    summaryInFlight.delete(card.id);
+    btns.forEach((b) => { b.disabled = false; });
+  }
 }
 
 /**

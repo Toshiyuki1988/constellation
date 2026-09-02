@@ -106,6 +106,30 @@ async function parseExhibitionInfo(text) {
   return parsed;
 }
 
+/**
+ * サマリーカード用: セッション全体のテキスト情報(collectSessionTextContext()で組み立てた文章)
+ * から、視点(mode)と任意の傾向指示(direction)に沿って要約を1本書かせる。画像は送らない
+ * (枚数の多いセッションで無料枠をすぐ消費してしまうため、テキスト情報のみを参照する)。
+ * @param {{context: string, mode: 'education'|'academic', direction?: string}} params
+ * @returns {Promise<string>} 要約テキスト
+ */
+async function summarizeSession({ context, mode, direction }) {
+  const styleInstruction =
+    mode === 'education'
+      ? '小学生・中学生にも分かるように、やさしい言葉と短い文で説明してください。専門用語はできるだけ避け、使う場合は簡単な説明を添えてください。'
+      : '学術的な文体で、批評・美術史的な視点を踏まえて記述してください。必要に応じて専門用語を使って構いません。';
+  const directionInstruction = direction && direction.trim() ? `\n特に次の視点・傾向を意識して書いてください: ${direction.trim()}` : '';
+
+  const prompt =
+    '以下は、ある美術展覧会・セッションの記録(タイトルと、鑑賞メモ・キャプションなどのテキスト)です。\n\n' +
+    `${context}\n\n` +
+    `この内容をもとに、展覧会全体の要約を書いてください。${styleInstruction}${directionInstruction}\n` +
+    '前置き・見出し・箇条書き記号は使わず、自然な文章で200〜400字程度にまとめてください。';
+
+  const raw = await askGemini({ prompt });
+  return raw.trim();
+}
+
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
