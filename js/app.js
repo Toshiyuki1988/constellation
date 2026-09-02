@@ -1807,7 +1807,10 @@ async function handleCardCaption(card, el) {
  * 写真カードの編集ガイド「Extract」: 写真に写っている文字をOCRで抜き出す。抽出は1回だけ行い、
  * その後どう使うかを2択で確認する。
  * - OK(破棄): mediaTypeをimageからtextへ完全に作り替え、Drive上の元画像も削除する(元に戻せない)
- * - キャンセル(残す): 写真はそのまま、メモ欄に抽出した文字を追記するだけ
+ * - キャンセル(残す): 元の写真カードには一切触れず、抽出した文字だけを新しいテクストカードとして
+ *   作る(サマリーカードの出力と同じ経路: createAstrConnection()で星座線を繋ぎ、効果音・発光
+ *   演出も乗る)。以前は写真カード自身のメモ欄に追記していたが、長文だとメモ欄がスクロール
+ *   形式になり読みにくくなるため、別カードに分ける形に変更した。
  */
 async function handleCardExtract(card, el) {
   if (card.mediaType !== 'image') return;
@@ -1836,7 +1839,7 @@ async function handleCardExtract(card, el) {
   const discard = window.confirm(
     `文字を検出しました:\n\n${preview}\n\n` +
     '「OK」: 写真を破棄し、この文字だけのテクストカードに完全変換します(元に戻せません)\n' +
-    '「キャンセル」: 写真は残したまま、メモ欄にこの文字を追記します'
+    '「キャンセル」: 元の写真カードはそのまま残し、抽出した文字を新しいテクストカードとして作ります'
   );
 
   if (discard) {
@@ -1857,15 +1860,19 @@ async function handleCardExtract(card, el) {
       debugLog('Extract: 元画像のDrive削除に失敗: ' + err.message);
     });
   } else {
-    card.memo = card.memo ? `${card.memo}\n\n${text}` : text;
-    const memoEl = el.querySelector('.star-card-memo');
-    if (memoEl) {
-      memoEl.value = card.memo;
-      memoEl.hidden = false;
+    // 元の写真カードには触れず、抽出した文字だけを新しいテクストカードとして出す
+    // (サマリーカードの出力と同じ配置・接続の仕方)
+    const newCard = createTextCard(text);
+    newCard.x = card.x + 260 + (Math.random() * 80 - 20);
+    newCard.y = card.y + (Math.random() * 240 - 120);
+    const newEl = cardElById(newCard.id);
+    if (newEl) {
+      newEl.dataset.x = String(newCard.x);
+      newEl.dataset.y = String(newCard.y);
+      applyCardTransform(newEl);
     }
-    syncCardHeight(el);
-    setStatus('メモ欄に文字を抽出しました');
-    scheduleAutoSave();
+    createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
+    setStatus('抽出した文字を新しいテクストカードにしました');
   }
 }
 
