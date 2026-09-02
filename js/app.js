@@ -770,7 +770,7 @@ function infoCardInnerHtml(card) {
 function infoParseResultHtml(parsed) {
   const closedLabels = { 0: '日', 1: '月', 2: '火', 3: '水', 4: '木', 5: '金', 6: '土' };
   const closedChips = (parsed.closedWeekdays || []).map((d) => `<span class="chip closed">${closedLabels[d] || d}</span>`).join('');
-  const exceptionChips = (parsed.exceptions || [])
+  const exceptionChips = resolveDisplayExceptions(parsed.exceptions || [])
     .map((ex) => `<span class="chip ${ex.type === 'open' ? 'exception' : 'closed'}">${escapeHtml(ex.startDate || '')}〜${escapeHtml(ex.endDate || '')}${ex.type === 'open' ? '開廊' : '休廊'}</span>`)
     .join('');
   return `
@@ -985,6 +985,18 @@ function formatDateYMD(date) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+/**
+ * Geminiの解析結果が、同じ日にopenとclosedの矛盾したexceptionを両方含めてしまうことがある
+ * (例: 期間限定で開廊するopen exceptionの期間内の曜日を、休廊曜日だからと個別にclosedでも
+ * 列挙してしまう)。カード上の「例外」チップ表示でもisExhibitionVisitableOn()と同じ「open優先」
+ * ルールで解決し、矛盾したチップが両方表示されて紛らわしくならないようにする。
+ */
+function resolveDisplayExceptions(exceptions) {
+  const opens = exceptions.filter((ex) => ex.type === 'open' && ex.startDate && ex.endDate);
+  const overlapsOpen = (ex) => opens.some((o) => !(ex.endDate < o.startDate || ex.startDate > o.endDate));
+  return exceptions.filter((ex) => ex.type === 'open' || !ex.startDate || !ex.endDate || !overlapsOpen(ex));
 }
 
 function isExhibitionVisitableOn(parsed, date) {
