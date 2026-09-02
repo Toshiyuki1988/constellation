@@ -224,15 +224,6 @@ html, body {
   cursor: pointer;
 }
 
-/*
- * ASTRを長押しして線を引いている間、つながろうとしている2枚(押し込んだ元のカードと、
- * 今指/カーソルが乗っている先のカード)を同じ緑の発光で示す。.star-card--edit-guide の
- * 通常のリングより後に書くことで、ドラッグ中は発光の方を優先して見せる。
- */
-.star-card--astr-glow {
-  box-shadow: 0 0 0 3px #2e7d32, 0 0 26px 8px rgba(46, 125, 50, 0.65);
-}
-
 .tool-btn.active {
   background: var(--text);
   color: #fff;
@@ -314,6 +305,17 @@ html, body {
   box-shadow: 0 0 0 2px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3);
   transition: box-shadow 0.12s ease-out;
   z-index: 5;
+}
+
+/*
+ * ASTRを長押しして線を引いている間、つながろうとしている2枚(押し込んだ元のカードと、
+ * 今指/カーソルが乗っている先のカード)を同じ緑の発光で示す。押し込んだ元のカードは
+ * 常に .star-card--edit-guide も同時に持っているため、box-shadowの同点カスケードで
+ * 上のルールに負けないよう、ここでは !important で確実に上書きする。
+ */
+.star-card--astr-glow {
+  box-shadow: 0 0 0 3px #2e7d32, 0 0 26px 8px rgba(46, 125, 50, 0.65) !important;
+  z-index: 6;
 }
 
 /*
