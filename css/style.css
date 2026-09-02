@@ -823,6 +823,21 @@ html, body {
   cursor: pointer;
 }
 
+.star-card-info-resync-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.star-card-info-resync-btn:hover { border-color: var(--text); }
+
 /* WormGateのジャンプ着地演出と同じ視覚言語(緑のリング)を、こちらは基本機能側で独自に持つ */
 .star-card--landed {
   box-shadow: 0 0 0 3px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3) !important;

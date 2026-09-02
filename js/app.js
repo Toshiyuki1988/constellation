@@ -780,6 +780,7 @@ function infoParseResultHtml(parsed) {
       ${closedChips ? `<div class="row"><b>休廊日</b><span class="chip-row">${closedChips}</span></div>` : ''}
       ${exceptionChips ? `<div class="row"><b>例外</b><span class="chip-row">${exceptionChips}</span></div>` : ''}
     </div>
+    <button class="star-card-info-resync-btn" title="Geminiを呼ばず、この解析結果だけをカレンダーに反映し直す">カレンダーに同期</button>
   `;
 }
 
@@ -804,6 +805,7 @@ function wireInfoCard(card, el) {
   const textEl = el.querySelector('.star-card-info-text');
   const parseBtn = el.querySelector('.star-card-info-parse-btn');
   const fixBtn = el.querySelector('.star-card-info-fix-btn');
+  const resyncBtn = el.querySelector('.star-card-info-resync-btn');
 
   if (textEl) {
     textEl.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -825,6 +827,13 @@ function wireInfoCard(card, el) {
     fixBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       handleInfoCardManualFix(card, el);
+    });
+  }
+  if (resyncBtn) {
+    resyncBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    resyncBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleInfoCardResync(card, el);
     });
   }
 }
@@ -948,6 +957,25 @@ async function handleInfoCardManualFix(card, el) {
   if (synced) setStatus('手動入力の内容で確定し、カレンダーに同期しました');
   scheduleAutoSave();
   refreshInfoTicker();
+}
+
+/**
+ * 既に解析済みのカードを、Geminiを呼ばずに(=無料枠を消費せずに)カレンダーへ同期し直す。
+ * Gemini無料枠が1日20リクエストしかなく、複数のインフォカードを一度に登録すると
+ * すぐ枯渇しうるため、「再解析はしたくないが、カレンダー同期だけやり直したい」場合の入口。
+ */
+async function handleInfoCardResync(card, el) {
+  if (!card.infoParsed || infoCardParseInFlight.has(card.id)) return;
+  infoCardParseInFlight.add(card.id);
+  const resyncBtn = el.querySelector('.star-card-info-resync-btn');
+  if (resyncBtn) { resyncBtn.disabled = true; resyncBtn.textContent = '同期中…'; }
+
+  setStatus('カレンダーに同期中…');
+  const synced = await syncInfoCardCalendar(card);
+  infoCardParseInFlight.delete(card.id);
+  if (resyncBtn) { resyncBtn.disabled = false; resyncBtn.textContent = 'カレンダーに同期'; }
+  if (synced) setStatus('カレンダーに同期しました');
+  scheduleAutoSave();
 }
 
 /* ---- 「今日は鑑賞可能か」の判定(ローカルJSのみ、API不要) ---- */
