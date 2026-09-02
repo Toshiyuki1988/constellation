@@ -570,9 +570,9 @@ function editGuideHexHtml(mediaType) {
     return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
   }
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
-  // 写真の中の文字をOCRで抜き出し、テクストカードに作り直す(元の写真は破棄する)機能。画像のみ。
-  const toTextHex = mediaType === 'image' ? hex('totext', 'ToText') : '';
-  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + toTextHex;
+  // 写真の中の文字をOCRで抜き出す機能。画像のみ。「写真を残してメモに追記」「写真を破棄してテクストカード化」の2択
+  const extractHex = mediaType === 'image' ? hex('extract', 'Extract') : '';
+  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex;
 }
 
 /**
@@ -685,10 +685,10 @@ function renderCard(card) {
         card.depthBlurred = !card.depthBlurred;
         el.classList.toggle('star-card--depth-blurred', card.depthBlurred);
         scheduleAutoSave();
-      } else if (action === 'totext') {
-        handleCardToText(card, el);
+      } else if (action === 'extract') {
+        handleCardExtract(card, el);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'totext') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract') scheduleAutoSave();
     });
   });
 
@@ -1633,29 +1633,42 @@ async function handleCardCaption(card, el) {
 }
 
 /**
- * 写真カードの編集ガイド「ToText」: 写真に写っている文字をOCRで抜き出し、そのままテクスト
- * カードに作り替える(mediaTypeをimageからtextへ変える)。元の写真はDrive上から完全に削除
- * (破棄)する。カードの変換自体は先に確定させ、Drive上の元ファイル削除は成功しても失敗しても
- * カード変換の結果には影響させない(削除だけベストエフォート、失敗時はdebugLogとコンソールへ)。
+ * 写真カードの編集ガイド「Extract」: 写真に写っている文字をOCRで抜き出す。抽出は1回だけ行い、
+ * その後どう使うかを2択で確認する。
+ * - OK(破棄): mediaTypeをimageからtextへ完全に作り替え、Drive上の元画像も削除する(元に戻せない)
+ * - キャンセル(残す): 写真はそのまま、メモ欄に抽出した文字を追記するだけ
  */
-async function handleCardToText(card, el) {
+async function handleCardExtract(card, el) {
   if (card.mediaType !== 'image') return;
   if (!card.imageFileId) {
-    setStatus(card.uploadPending ? 'アップロード中です。少し待ってから試してください' : '画像が読み込めないため変換できません');
+    setStatus(card.uploadPending ? 'アップロード中です。少し待ってから試してください' : '画像が読み込めないため抽出できません');
     return;
   }
-  if (!window.confirm('写真の文字をテクストカードに変換します。元の写真は削除されます。よろしいですか?')) return;
 
   setStatus('文字を読み取り中…');
+  let text;
   try {
     const blobUrl = await getFileBlobUrlCached(card.imageFileId);
     const blob = await (await fetch(blobUrl)).blob();
-    const text = await ocrImage(blob);
-    if (!text || text.includes('(テキストなし)')) {
-      setStatus('文字を検出できませんでした。写真はそのまま残しています');
-      return;
-    }
+    text = await ocrImage(blob);
+  } catch (err) {
+    console.error(err);
+    setStatus(`抽出に失敗しました: ${err.message}`, { important: true });
+    return;
+  }
+  if (!text || text.includes('(テキストなし)')) {
+    setStatus('文字を検出できませんでした');
+    return;
+  }
 
+  const preview = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  const discard = window.confirm(
+    `文字を検出しました:\n\n${preview}\n\n` +
+    '「OK」: 写真を破棄し、この文字だけのテクストカードに完全変換します(元に戻せません)\n' +
+    '「キャンセル」: 写真は残したまま、メモ欄にこの文字を追記します'
+  );
+
+  if (discard) {
     const oldFileId = card.imageFileId;
     card.mediaType = 'text';
     card.memo = text;
@@ -1670,11 +1683,18 @@ async function handleCardToText(card, el) {
 
     deleteFile(oldFileId).catch((err) => {
       console.error('元画像の削除に失敗', err);
-      debugLog('ToText: 元画像のDrive削除に失敗: ' + err.message);
+      debugLog('Extract: 元画像のDrive削除に失敗: ' + err.message);
     });
-  } catch (err) {
-    console.error(err);
-    setStatus(`変換に失敗しました: ${err.message}`, { important: true });
+  } else {
+    card.memo = card.memo ? `${card.memo}\n\n${text}` : text;
+    const memoEl = el.querySelector('.star-card-memo');
+    if (memoEl) {
+      memoEl.value = card.memo;
+      memoEl.hidden = false;
+    }
+    syncCardHeight(el);
+    setStatus('メモ欄に文字を抽出しました');
+    scheduleAutoSave();
   }
 }
 
