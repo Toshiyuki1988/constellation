@@ -910,8 +910,9 @@ async function handleInfoCardParse(card, el) {
     }
   } catch (err) {
     console.error(err);
-    card.infoParseError = { message: '通信に失敗しました', partial: {} };
-    setStatus('解析に失敗しました(コンソールを確認)', { important: true });
+    debugLog('展覧会情報の解析エラー: ' + err.message);
+    card.infoParseError = { message: `通信に失敗しました: ${err.message}`, partial: {} };
+    setStatus(`解析に失敗しました: ${err.message}`, { important: true });
   }
   infoCardParseInFlight.delete(card.id);
   rerenderCardInPlace(card, el);
