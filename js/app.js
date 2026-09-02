@@ -1026,6 +1026,7 @@ async function syncInfoCardCalendar(card) {
     return true;
   } catch (err) {
     console.error(err);
+    debugLog('カレンダー同期エラー: ' + err.message);
     setStatus(`カレンダー同期に失敗しました: ${err.message}`);
     return false;
   }
