@@ -82,10 +82,13 @@ async function parseExhibitionInfo(text) {
     '- 「◯月◯日〜◯日は開廊/特別開館」のような期間指定 → その期間**全体をまとめて1つ**のexceptionにtype:"open"として列挙\n' +
     '- 「◯月◯日は開館」のような単発1日だけの例外 → startDateとendDateを同じ日付にしてexceptionsへ列挙\n' +
     '- 「臨時休館」「特別休館日」のような単発の休みの記載も同様にtype:"closed"で列挙\n' +
-    '重要: exceptionsはclosedWeekdaysだけでは表現できない「例外」だけを書く場所です。' +
+    '重要: exceptionsは「closedWeekdaysや会期だけからは判断できない、状態が変わる日」だけを書く場所です。' +
     'ある期間が丸ごと開廊する例外を1つのopen exceptionとして書いたら、その期間に含まれる個々の日付について' +
     '(closedWeekdaysに該当する曜日だからといって)重複してclosed exceptionを追加しないでください。同じ日付に' +
     'open と closed の両方のexceptionを付けるのは矛盾なので禁止です。' +
+    'また、定休日の記載が無い(closedWeekdaysが空)のに会期全体をまるごと1つのopen exceptionにする、' +
+    'といった「休廊日パターンを何も上書きしていない」exceptionsも書かないでください。本文に例外的な' +
+    '開閉の記載が無ければ、exceptionsは空配列のままにしてください。' +
     '読み取れない項目はnullにしてください。案内文:\n\n' + text;
 
   const raw = await askGemini({ prompt });
