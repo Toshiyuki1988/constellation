@@ -127,13 +127,34 @@ async function summarizeSession({ context, mode, direction, images }) {
     mode === 'education'
       ? '小学生・中学生にも分かるように、やさしい言葉と短い文で説明してください。専門用語はできるだけ避け、使う場合は簡単な説明を添えてください。'
       : '学術的な文体で、批評・美術史的な視点を踏まえて記述してください。必要に応じて専門用語を使って構いません。';
-  const directionInstruction = direction && direction.trim() ? `\n特に次の視点・傾向を意識して書いてください: ${direction.trim()}` : '';
-  const imagesInstruction = images && images.length > 0 ? '\n添付した写真の内容(構図・被写体・印象など)も踏まえて書いてください。' : '';
+  const hasDirection = Boolean(direction && direction.trim());
+  const hasImages = Boolean(images && images.length > 0);
+
+  // 「展覧会全体の要約」を常に主題にしてdirection/imagesを付け足しにすると、Geminiが前置きの
+  // 総括を書いてから付け足しに軽く触れるだけになりがちだった(ユーザー報告: 出力の8割が前置き)。
+  // direction/imagesがある時は、そちらを主題そのものに差し替え、セッションの記録は主題を
+  // 掘り下げるための背景情報という位置づけに変える。
+  let taskInstruction;
+  if (hasDirection && hasImages) {
+    taskInstruction =
+      `添付した写真に写っている作品を中心に取り上げながら、次の問い・視点に直接答える形で書いてください: 「${direction.trim()}」\n` +
+      'セッションの記録は、その問いを掘り下げるための背景情報としてのみ使い、展覧会全体を前置きとして総括しないでください。';
+  } else if (hasImages) {
+    taskInstruction =
+      '添付した写真に写っている作品を中心に取り上げて書いてください。セッションの記録は背景情報として' +
+      '必要な範囲でのみ使い、展覧会全体を前置きとして総括しないでください。';
+  } else if (hasDirection) {
+    taskInstruction =
+      `次の問い・視点に直接答える形で書いてください: 「${direction.trim()}」\n` +
+      'セッションの記録は、その問いを掘り下げるための背景情報としてのみ使い、展覧会全体を前置きとして総括しないでください。';
+  } else {
+    taskInstruction = '展覧会全体の要約を書いてください。';
+  }
 
   const prompt =
     '以下は、ある美術展覧会・セッションの記録(タイトルと、鑑賞メモ・キャプションなどのテキスト)です。\n\n' +
     `${context}\n\n` +
-    `この内容をもとに、展覧会全体の要約を書いてください。${styleInstruction}${directionInstruction}${imagesInstruction}\n` +
+    `${taskInstruction}\n${styleInstruction}\n` +
     '前置き・見出し・箇条書き記号は使わず、自然な文章で200〜400字程度にまとめてください。';
 
   const raw = await askGemini({ prompt, images });
