@@ -296,11 +296,30 @@
     }
   }
 
+  /**
+   * PCでは、キーパッドをまだ開いていない状態で数字キー(1〜9、テンキー含む)を押しただけでも、
+   * キーパッドが開いてその数字が1桁目として入力された状態になる(PIEメニュー経由で
+   * 開く手間を省ける)。メモ・タイトルなどのテキスト編集中は数字入力を奪わないよう除外する。
+   */
+  function onGlobalDigitKeydown(event) {
+    if (kpEls && kpEls.overlay.classList.contains('open')) return; // 開いている間はonKeypadKeydownに任せる
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const active = document.activeElement;
+    const isEditingText = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
+    if (isEditingText) return;
+    if (event.key >= '1' && event.key <= '9') {
+      event.preventDefault();
+      openModuleKeypad();
+      onDigit(event.key);
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     els.viewport.addEventListener('pointerdown', onLauncherPointerDown);
     els.viewport.addEventListener('pointermove', onLauncherPointerMove);
     els.viewport.addEventListener('pointerup', onLauncherPointerUp);
     els.viewport.addEventListener('pointercancel', onLauncherPointerUp);
+    document.addEventListener('keydown', onGlobalDigitKeydown);
   });
 
   window.registerModuleCode = registerModuleCode;
