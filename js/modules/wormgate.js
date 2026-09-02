@@ -148,6 +148,20 @@
         font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.02em;
         color: rgba(255,255,255,0.5); white-space: nowrap;
       }
+      /* スワイプでの終了操作とは別に、確実に閉じられる手段(全モジュール共通の意匠にする予定)。
+         PCのマウスドラッグはスワイプ判定に乗りにくいことがあるため、押せば必ず閉じる。 */
+      .wg-close-btn {
+        position: absolute; top: 18px; right: 18px; z-index: 5;
+        width: 34px; height: 34px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(20, 30, 34, 0.45);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(85, 230, 247, 0.3);
+        color: rgba(255, 255, 255, 0.85);
+        font-size: 15px; line-height: 1; cursor: pointer;
+        transition: background 0.15s ease-out, transform 0.15s ease-out;
+      }
+      .wg-close-btn:hover { background: rgba(85, 230, 247, 0.25); transform: scale(1.06); }
       .wg-empty {
         position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 13px; color: rgba(255,255,255,0.7);
@@ -173,6 +187,7 @@
     overlay.className = 'wormgate-overlay';
     overlay.innerHTML = `
       <div class="wg-backdrop"></div>
+      <button class="wg-close-btn" title="閉じる">✕</button>
       <div class="wg-rig">
         <div class="wg-ring-outer"></div>
         <div class="wg-ring-inner"></div>
@@ -181,10 +196,15 @@
         <div class="wg-ticks"></div>
         <div class="wg-track"><div class="wg-chips"></div></div>
         <div class="wg-empty" hidden>このセッションには写真がありません</div>
-        <div class="wg-footer-hint">ドラッグで回転・スワイプで閉じる</div>
+        <div class="wg-footer-hint">ドラッグで回転・スワイプ、または✕で閉じる</div>
       </div>
     `;
     document.body.appendChild(overlay);
+    overlay.querySelector('.wg-close-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
+    overlay.querySelector('.wg-close-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeWormgate();
+    });
 
     const flash = document.createElement('div');
     flash.className = 'wg-jump-flash';
