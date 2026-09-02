@@ -1470,6 +1470,40 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+function extensionForImageMime(mimeType) {
+  if (!mimeType) return 'png';
+  if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return 'jpg';
+  if (mimeType.includes('webp')) return 'webp';
+  if (mimeType.includes('gif')) return 'gif';
+  return 'png';
+}
+
+/**
+ * OSクリップボードに画像がある状態でCtrl+Vすると、写真カードとして直接追加する。
+ * カード自体のコピー&ペースト(cardClipboard、上のkeydownハンドラ)とは別の経路で、
+ * こちらはブラウザ標準の`paste`イベント(clipboardData)を使う。
+ */
+document.addEventListener('paste', async (event) => {
+  if (!state.folderId) return; // サインイン前は何もしない
+  const active = document.activeElement;
+  const isEditingText = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
+  if (isEditingText) return; // テキスト欄への通常のペーストを妨げない
+
+  const items = event.clipboardData && event.clipboardData.items;
+  if (!items) return;
+  const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
+  if (!imageItem) return;
+
+  event.preventDefault();
+  const blob = imageItem.getAsFile();
+  if (!blob) return;
+  await createCardFromCapture({
+    blob,
+    filename: `${Date.now()}-clipboard.${extensionForImageMime(blob.type)}`,
+    mediaType: 'image',
+  });
+});
+
 /** セッション配下(入れ子を含む)のカード数・子セッション数を数える(削除確認の文言に使う) */
 function countSessionContents(sessionId) {
   let cardCount = 0;
