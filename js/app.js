@@ -86,12 +86,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 /* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ---------------- */
 
-// モジュール(js/modules/wormgate.js)のHUD風アイコン。ツールバーには対応するボタンが
-// 無いため、他のようにボタンから拝借せずここに直接持つ。
-const WORMGATE_PIE_ICON_SVG =
+// モジュール共通のキーパッド(js/module-launcher.js)のHUD風アイコン。ツールバーには
+// 対応するボタンが無いため、他のようにボタンから拝借せずここに直接持つ。
+const MODULE_KEYPAD_PIE_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" ' +
-  'stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>' +
-  '<path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/></svg>';
+  'stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/>' +
+  '<circle cx="9" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="8" r="0.6" fill="currentColor" stroke="none"/>' +
+  '<circle cx="9" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="0.6" fill="currentColor" stroke="none"/>' +
+  '<circle cx="9" cy="16" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="16" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="16" r="0.6" fill="currentColor" stroke="none"/></svg>';
 
 function buildPieTools() {
   return [
@@ -100,8 +102,9 @@ function buildPieTools() {
     { label: 'OCR', icon: els.toolOcr.querySelector('svg').outerHTML, action: () => handleOpenCamera('caption') },
     { label: '動画撮影', icon: els.toolVideo.querySelector('svg').outerHTML, action: () => handleOpenCamera('video') },
     { label: '音声録音', icon: els.toolAudio.querySelector('svg').outerHTML, action: () => handleOpenCamera('audio') },
-    // PCのマウスでは2本指ツイストが使えないため、WormGateへの確実な入口としてここにも置く
-    { label: 'WormGate', icon: WORMGATE_PIE_ICON_SVG, action: () => { if (window.openWormGate) window.openWormGate(); } },
+    // PCのマウスでは背景2本指ダブルタップが使えないため、モジュール共通キーパッドへの
+    // 確実な入口としてここにも置く(個々のモジュールへの専用項目は増やさない)
+    { label: 'キーパッド', icon: MODULE_KEYPAD_PIE_ICON_SVG, action: () => { if (window.openModuleKeypad) window.openModuleKeypad(); } },
   ];
 }
 

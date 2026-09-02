@@ -6,12 +6,13 @@
 // state / els / activeSessionId() / cardElById() / viewportState などの既存グローバルは
 // 直接参照する(モジュールだからといって完全に独立させる必要はないため)。
 //
-// 起動: キャンバス背景(カードの無い場所)を2本指で押さえ、2本の距離をあまり変えずに
-//       ひねるように回す(ツイスト)。1本指パン・2本指ピンチいずれとも指の本数/動きの質が
-//       構造的に異なるため、既存のinteract.js(canvas.js側のパン・ピンチ)には一切
-//       手を触れず、ただの傍観者としてポインタイベントを見るだけで判定できる。
-//       (以前は1本指で円を描く方式だったが、interact.jsのパン/ピンチと衝突しやすく、
-//       誤起動やピンチが効かなくなる不具合が出たためこの方式に変更した)
+// 起動: js/module-launcher.js(モジュール共通の起動基盤)経由。背景を2本指でダブルタップ
+//       するとキーパッドHUDが開き、"123" と入力するとこのWormGateが起動する
+//       (PCではCONSTELLATION PIEの「キーパッド」項目からも同じキーパッドを開ける)。
+//       このモジュール自身は registerModuleCode('123', openWormgate) で登録するだけでよい。
+//       (以前は1本指で円を描く/2本指でひねる、といった専用ジェスチャーを試したが、
+//       既存のパン/ピンチ/長押しメニューと衝突を繰り返したため、起動ジェスチャーは
+//       module-launcher.js に一本化した)
 // 操作: リングをドラッグして回転(写真の上から掴んでも、動かせばドラッグと判定する)。
 //       上のアクティブな写真をもう一度タップでジャンプ。左右スワイプで閉じる。
 
@@ -32,8 +33,6 @@
 
   const TICK_STEP_DEG = 6.5;
   const DRAG_START_TOLERANCE_PX = 9;
-  const TWIST_MIN_ROTATION_DEG = 240; // これだけ回転が積算されたら起動(片手で無理なく回せる量に調整)
-  const TWIST_MAX_DIST_RATIO_DEVIATION = 0.5; // 2点間の距離が開始時から±50%を超えたらピンチとみなし打ち切る
 
   let wgEls = null; // このモジュール自身のDOM参照
   let photos = [];
@@ -163,14 +162,6 @@
       }
       .wg-jump-flash.fire { animation: wg-flash 0.5s ease-out; }
       @keyframes wg-flash { 0% { opacity: 0.9; } 100% { opacity: 0; } }
-      .wormgate-twist-hint {
-        position: fixed; width: 64px; height: 64px; margin: -32px 0 0 -32px;
-        border-radius: 50%; pointer-events: none; z-index: 45;
-        border: 1px solid rgba(85, 230, 247, 0.4);
-        background: conic-gradient(#55e6f7 0deg, rgba(85, 230, 247, 0.12) 0deg);
-        opacity: 0; transition: opacity 0.15s ease-out;
-      }
-      .wormgate-twist-hint.show { opacity: 1; }
       .star-card--wormgate-landed {
         box-shadow: 0 0 0 3px #55e6f7, 0 20px 44px rgba(0, 0, 0, 0.3) !important;
         transition: box-shadow 0.15s ease-out;
@@ -197,10 +188,6 @@
     `;
     document.body.appendChild(overlay);
 
-    const twistHint = document.createElement('div');
-    twistHint.className = 'wormgate-twist-hint';
-    document.body.appendChild(twistHint);
-
     const flash = document.createElement('div');
     flash.className = 'wg-jump-flash';
     document.body.appendChild(flash);
@@ -213,7 +200,6 @@
       track: overlay.querySelector('.wg-track'),
       chips: overlay.querySelector('.wg-chips'),
       empty: overlay.querySelector('.wg-empty'),
-      twistHint,
       flash,
     };
   }
@@ -480,10 +466,9 @@
     wgEls.overlay.classList.add('open');
   }
 
-  // PC(マウス)では2本指ツイストが使えないため、CONSTELLATION PIE(js/app.jsのbuildPieTools())
-  // からも呼べるよう、この1関数だけを最小限の公開窓口として外に出す
-  // (本格的な登録APIは作らない、というモジュール規約に沿った最小限の妥協)。
-  window.openWormGate = openWormgate;
+  // 起動ジェスチャーはjs/module-launcher.js(背景2本指ダブルタップ→キーパッド)に一本化した。
+  // このモジュールはコード("123")を登録するだけでよい。
+  registerModuleCode('123', openWormgate);
 
   // 開いている間に画面サイズが変わったら(スマホの画面回転など)、リング半径・写真サイズを
   // 測り直して再配置する
@@ -495,94 +480,6 @@
 
   function closeWormgate() {
     wgEls.overlay.classList.remove('open');
-  }
-
-  /* ---------------- キャンバス背景を2本指でツイストして起動 ----------------
-   * canvas.js側のinteract.jsは一切いじらない(disable/enableもしない)。ただの
-   * 傍観者としてポインタイベントを見て、2点間の「距離」と「角度」を自分で計算するだけ。
-   * 1本指パン・2本指ピンチとは指の本数/動きの質が構造的に違うため、これで衝突しない。 */
-
-  const activePointers = new Map(); // pointerId -> { x, y }(背景で押されている指)
-  let twistBaseDist = 0;
-  let twistLastAngle = 0;
-  let twistTotalRotation = 0;
-  let twistBroken = false; // 距離が変わりすぎた(ピンチ寄り)/指が3本以上になったら、以降は判定しない
-
-  function pointDist(a, b) {
-    return Math.hypot(b.x - a.x, b.y - a.y);
-  }
-  function pointAngle(a, b) {
-    return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
-  }
-
-  function updateTwistHint(show, midpoint, progress) {
-    const el = wgEls.twistHint;
-    if (!show) {
-      el.classList.remove('show');
-      return;
-    }
-    el.classList.add('show');
-    el.style.left = `${midpoint.x}px`;
-    el.style.top = `${midpoint.y}px`;
-    const deg = Math.min(360, Math.abs(progress) * 360);
-    el.style.background = `conic-gradient(#55e6f7 ${deg}deg, rgba(85,230,247,0.12) ${deg}deg)`;
-  }
-
-  function onCanvasPointerDown(e) {
-    if (e.target !== els.viewport) return; // カードの上からは起動しない(背景のみ)
-    if (wgEls.overlay.classList.contains('open')) return;
-    soundAudioCtx();
-    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (activePointers.size === 2) {
-      const [a, b] = Array.from(activePointers.values());
-      twistBaseDist = pointDist(a, b);
-      twistLastAngle = pointAngle(a, b);
-      twistTotalRotation = 0;
-      twistBroken = false;
-    } else if (activePointers.size > 2) {
-      twistBroken = true; // 3本目が乗ったら判定しない
-      updateTwistHint(false);
-    }
-  }
-
-  function onCanvasPointerMove(e) {
-    if (!activePointers.has(e.pointerId)) return;
-    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (activePointers.size !== 2 || twistBroken) return;
-
-    const [a, b] = Array.from(activePointers.values());
-    const dist = pointDist(a, b);
-    const angle = pointAngle(a, b);
-    const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-
-    if (Math.abs(dist / twistBaseDist - 1) > TWIST_MAX_DIST_RATIO_DEVIATION) {
-      // 2点間の距離が変わりすぎた = ピンチ操作とみなし、以降このジェスチャーでは判定しない
-      twistBroken = true;
-      updateTwistHint(false);
-      return;
-    }
-
-    let delta = angle - twistLastAngle;
-    while (delta > 180) delta -= 360;
-    while (delta < -180) delta += 360;
-    twistTotalRotation += delta;
-    twistLastAngle = angle;
-
-    updateTwistHint(true, midpoint, twistTotalRotation / TWIST_MIN_ROTATION_DEG);
-
-    if (Math.abs(twistTotalRotation) > TWIST_MIN_ROTATION_DEG) {
-      twistBroken = true; // 連続で開いてしまわないよう即座に判定を止める
-      updateTwistHint(false);
-      openWormgate();
-    }
-  }
-
-  function onCanvasPointerEnd(e) {
-    activePointers.delete(e.pointerId);
-    if (activePointers.size < 2) {
-      twistBroken = false;
-      updateTwistHint(false);
-    }
   }
 
   function escapeHtml(str) {
@@ -605,10 +502,5 @@
 
     wgEls.overlay.addEventListener('pointerdown', onOverlayPointerDown);
     wgEls.overlay.addEventListener('pointerup', onOverlayPointerUp);
-
-    els.viewport.addEventListener('pointerdown', onCanvasPointerDown);
-    els.viewport.addEventListener('pointermove', onCanvasPointerMove);
-    els.viewport.addEventListener('pointerup', onCanvasPointerEnd);
-    els.viewport.addEventListener('pointercancel', onCanvasPointerEnd);
   });
 })();
