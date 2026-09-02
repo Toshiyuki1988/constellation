@@ -992,11 +992,13 @@ function isExhibitionVisitableOn(parsed, date) {
   const ymd = formatDateYMD(date);
   if (ymd < parsed.startDate || ymd > parsed.endDate) return false;
   const exceptions = parsed.exceptions || [];
-  for (const ex of exceptions) {
-    if (ex.startDate && ex.endDate && ymd >= ex.startDate && ymd <= ex.endDate) {
-      return ex.type === 'open';
-    }
-  }
+  const matchesType = (type) =>
+    exceptions.some((ex) => ex.type === type && ex.startDate && ex.endDate && ymd >= ex.startDate && ymd <= ex.endDate);
+  // Geminiの解析結果が、同じ日付にopenとclosedの矛盾したexceptionを両方含めてしまうことがある
+  // (例: 「休廊日+期間限定で開廊」の期間中の日を、休廊日の曜日だからと個別にclosedでも列挙してしまう)。
+  // そのため単純な最初にマッチしたもの勝ちにはせず、明示的なopenの記載を優先する。
+  if (matchesType('open')) return true;
+  if (matchesType('closed')) return false;
   const closedWeekdays = parsed.closedWeekdays || [];
   return !closedWeekdays.includes(date.getDay());
 }

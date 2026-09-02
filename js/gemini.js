@@ -76,9 +76,16 @@ async function parseExhibitionInfo(text) {
     '  "closedWeekdays": [0=日曜〜6=土曜の整数の配列。定休の曜日だけを入れる],\n' +
     '  "exceptions": [{"type": "open または closed", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "note": "補足(任意)"}]\n' +
     '}\n' +
-    '会期中に「祝日は休廊」のような記載がある場合は、closedWeekdaysに含めず、該当する具体的な祝日の' +
-    '日付をexceptionsにtype:"closed"として個別に列挙してください(日本の祝日カレンダーの知識を使って構いません)。' +
-    '「◯月◯日〜◯日は開廊」のような例外もexceptionsにtype:"open"として列挙してください。' +
+    'closedWeekdaysには「毎週◯曜日定休」のような曜日パターンだけを入れ、それ以外の例外は全てexceptionsで表現してください。' +
+    '具体的には次のような記載を、本文全体から見落とさず探して反映してください。\n' +
+    '- 「祝日は休廊」→ 該当する具体的な祝日の日付をexceptionsにtype:"closed"として個別に列挙(日本の祝日カレンダーの知識を使って構いません)\n' +
+    '- 「◯月◯日〜◯日は開廊/特別開館」のような期間指定 → その期間**全体をまとめて1つ**のexceptionにtype:"open"として列挙\n' +
+    '- 「◯月◯日は開館」のような単発1日だけの例外 → startDateとendDateを同じ日付にしてexceptionsへ列挙\n' +
+    '- 「臨時休館」「特別休館日」のような単発の休みの記載も同様にtype:"closed"で列挙\n' +
+    '重要: exceptionsはclosedWeekdaysだけでは表現できない「例外」だけを書く場所です。' +
+    'ある期間が丸ごと開廊する例外を1つのopen exceptionとして書いたら、その期間に含まれる個々の日付について' +
+    '(closedWeekdaysに該当する曜日だからといって)重複してclosed exceptionを追加しないでください。同じ日付に' +
+    'open と closed の両方のexceptionを付けるのは矛盾なので禁止です。' +
     '読み取れない項目はnullにしてください。案内文:\n\n' + text;
 
   const raw = await askGemini({ prompt });
