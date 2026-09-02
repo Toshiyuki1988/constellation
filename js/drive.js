@@ -145,6 +145,15 @@ async function uploadFile(folderId, blob, filename) {
   return created.id;
 }
 
+/** 既存ファイルを別のフォルダへ移動する(旧フラット構造→新しい入れ子フォルダ構造への移行用) */
+async function moveFile(fileId, newParentId) {
+  const res = await driveFetch(`/files/${fileId}?fields=parents`);
+  const { parents } = await res.json();
+  const params = new URLSearchParams({ addParents: newParentId });
+  if (parents && parents.length > 0) params.set('removeParents', parents.join(','));
+  await driveFetch(`/files/${fileId}?${params}`, { method: 'PATCH' });
+}
+
 /**
  * ファイルを認証付きで取得し、表示用の blob URL を返す。
  * (drive.file のファイルは既定で非公開のため、Authorization ヘッダ付きで取得する)

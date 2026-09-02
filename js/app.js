@@ -1173,6 +1173,39 @@ async function resolveSessionMediaFolderId(sessionId) {
   return parentId;
 }
 
+/**
+ * 2026年9月の入れ子フォルダ構造導入より前にアップロード済みだった(Constellation/直下に
+ * フラットなままの)メディアファイルを、対応するセッションの入れ子フォルダへ移動する
+ * 一度きりの移行処理。ブラウザのコンソールから `migrateExistingMediaToFolders()` を実行する。
+ */
+async function migrateExistingMediaToFolders() {
+  const targets = state.cards.filter((c) => c.imageFileId && ['image', 'video', 'audio'].includes(c.mediaType));
+  if (targets.length === 0) {
+    setStatus('移行対象のメディアはありません');
+    return;
+  }
+  if (!window.confirm(`${targets.length}件のメディアファイルを、Drive上で新しいフォルダ構造へ移動します。よろしいですか?`)) {
+    return;
+  }
+
+  let done = 0;
+  let failed = 0;
+  for (const card of targets) {
+    setStatus(`移行中… (${done}/${targets.length})`);
+    try {
+      const folderId = await resolveSessionMediaFolderId(card.sessionId);
+      await moveFile(card.imageFileId, folderId);
+    } catch (err) {
+      console.error('移行に失敗:', card.id, err);
+      failed++;
+    }
+    done++;
+  }
+  setStatus(`移行完了(${done - failed}/${targets.length}件成功${failed ? `、${failed}件失敗(コンソール参照)` : ''})`, { important: true });
+  scheduleAutoSave();
+}
+window.migrateExistingMediaToFolders = migrateExistingMediaToFolders;
+
 /** 現在の年タブ内で、今日鑑賞可能なインフォメーションカードを集める(階層をまたいだ全年横断はしない) */
 function collectVisitableInfoCards() {
   const currentYearId = state.breadcrumb[0];
