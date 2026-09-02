@@ -719,8 +719,10 @@ function renderCard(card) {
 }
 
 /* ---------------- インフォメーションカード(基本機能) ----------------
- * 展覧会の会期・開廊時間・休廊日を「：」で挟んだテキスト(手入力/OCR)、または任意の公式ページ
- * URLから、Geminiで一度だけ構造化データに解析する(js/gemini.js の parseExhibitionInfo())。
+ * 展覧会の会期・開廊時間・休廊日のテキスト(ウェブサイトからのコピペ/手入力)を、
+ * Geminiで一度だけ構造化データに解析する(js/gemini.js の parseExhibitionInfo())。
+ * URL入力は、TOKYO ART BEATなどクライアントサイドレンダリングのサイトではGeminiの
+ * url_contextツールが本文を取得できず解析に失敗するため廃止し、コピペのみにした。
  * 以降「今日は鑑賞可能か」はローカルJSだけで判定し、APIを再度呼ぶ必要はない。
  * ヘッダーのティッカーに、現在の年タブ内で「今日鑑賞可能」な展覧会をローテーション表示し、
  * タップでそのカードへジャンプする。ASTR(自動線・手動接続とも)は搭載しない、リマインダー用途。 */
@@ -742,8 +744,8 @@ function infoCardInnerHtml(card) {
       ${displayVenue ? `<p class="star-card-info-venue">${escapeHtml(displayVenue)}</p>` : ''}
     </div>
     <div class="star-card-info-body" ${expanded ? '' : 'hidden'}>
-      <p class="star-card-info-label">展覧会ページURL</p>
-      <input type="text" class="star-card-info-url" placeholder="https://..." value="${escapeHtml(card.infoUrl || '')}">
+      <p class="star-card-info-label">展覧会ページの本文をコピペ</p>
+      <textarea class="star-card-info-text" placeholder="会場名・会期・時間などのテキストを貼り付け">${escapeHtml(card.memo || '')}</textarea>
       <button class="star-card-info-parse-btn">解析する</button>
       ${parsed ? infoParseResultHtml(parsed) : ''}
       ${card.infoParseError ? infoParseErrorHtml(card) : ''}
@@ -787,14 +789,15 @@ function infoParseErrorHtml(card) {
 }
 
 function wireInfoCard(card, el) {
-  const urlEl = el.querySelector('.star-card-info-url');
+  const textEl = el.querySelector('.star-card-info-text');
   const parseBtn = el.querySelector('.star-card-info-parse-btn');
   const fixBtn = el.querySelector('.star-card-info-fix-btn');
 
-  if (urlEl) {
-    urlEl.addEventListener('pointerdown', (e) => e.stopPropagation());
-    urlEl.addEventListener('input', () => {
-      card.infoUrl = urlEl.value;
+  if (textEl) {
+    textEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    textEl.addEventListener('input', () => {
+      card.memo = textEl.value;
+      syncCardHeight(el);
       scheduleAutoSave();
     });
   }
@@ -824,7 +827,6 @@ function createInfoCard() {
     memo: '',
     tags: [],
     mediaType: 'info',
-    infoUrl: '',
     infoParsed: null,
     infoParseError: null,
     infoExpanded: true,
@@ -857,18 +859,18 @@ function toggleInfoCardExpanded(card, el) {
 }
 
 async function handleInfoCardParse(card, el) {
-  const urlEl = el.querySelector('.star-card-info-url');
-  const url = ((urlEl ? urlEl.value : card.infoUrl) || '').trim();
-  card.infoUrl = url;
+  const textEl = el.querySelector('.star-card-info-text');
+  const text = (textEl ? textEl.value : card.memo) || '';
+  card.memo = text;
 
-  if (!url) {
-    setStatus('展覧会ページURLを入力してください');
+  if (!text.trim()) {
+    setStatus('展覧会ページの本文を貼り付けてください');
     return;
   }
 
   setStatus('展覧会情報を解析中…');
   try {
-    const result = await parseExhibitionInfo(url);
+    const result = await parseExhibitionInfo(text);
     if (result.error) {
       card.infoParsed = null;
       card.infoParseError = { message: result.error, partial: result.partial || {} };

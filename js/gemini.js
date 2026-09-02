@@ -50,19 +50,21 @@ async function ocrImage(blob) {
 }
 
 /**
- * インフォメーションカードの展覧会公式ページURLから、会期・開廊時間・休廊日を構造化データ
- * として抽出する。一度パースすれば「今日は鑑賞可能か」は以降ローカルJSだけで判定でき、
- * APIを再度呼ぶ必要はない。祝日による休廊も、曜日パターン(closedWeekdays)には含めず、
- * 具体的な日付のexceptionとして個別に列挙してもらう(実行時に祝日カレンダーを別途持たずに
- * 済ませるため)。
- * @param {string} url 展覧会公式ページのURL
+ * インフォメーションカードに貼り付けられた展覧会案内文(コピペテキスト)から、会期・開廊時間・
+ * 休廊日を構造化データとして抽出する。一度パースすれば「今日は鑑賞可能か」は以降ローカルJS
+ * だけで判定でき、APIを再度呼ぶ必要はない。祝日による休廊も、曜日パターン(closedWeekdays)
+ * には含めず、具体的な日付のexceptionとして個別に列挙してもらう(実行時に祝日カレンダーを
+ * 別途持たずに済ませるため)。
+ * URL入力(url_contextツールでの取得)は、TOKYO ART BEATなどクライアントサイドレンダリング
+ * のサイトで本文が取得できず解析に失敗するため廃止した。ウェブページからのコピペを想定。
+ * @param {string} text 案内文(展覧会ページ本文のコピペ、または手入力)
  * @returns {Promise<object>} 成功時は {title, venue, startDate, endDate, openTime, closeTime,
  *   closedWeekdays, exceptions}。会期を読み取れなかった場合は {error, partial} を返す
  *   (partialは読み取れた項目だけを含む)。ネットワーク/APIエラー自体は例外として投げる。
  */
-async function parseExhibitionInfo(url) {
+async function parseExhibitionInfo(text) {
   const prompt =
-    `以下の展覧会・ギャラリーの公式ページ(${url})の内容を読み取り、` +
+    '以下は美術展覧会・ギャラリーの案内文です。' +
     '次のJSON形式だけを出力してください(前置き・説明・コードブロックの記号は一切付けないこと)。\n' +
     '{\n' +
     '  "title": "展覧会名(アーティスト名を含む)",\n' +
@@ -77,12 +79,9 @@ async function parseExhibitionInfo(url) {
     '会期中に「祝日は休廊」のような記載がある場合は、closedWeekdaysに含めず、該当する具体的な祝日の' +
     '日付をexceptionsにtype:"closed"として個別に列挙してください(日本の祝日カレンダーの知識を使って構いません)。' +
     '「◯月◯日〜◯日は開廊」のような例外もexceptionsにtype:"open"として列挙してください。' +
-    '読み取れない項目はnullにしてください。';
+    '読み取れない項目はnullにしてください。案内文:\n\n' + text;
 
-  const raw = await askGemini({
-    prompt,
-    tools: [{ google_search: {} }, { url_context: {} }],
-  });
+  const raw = await askGemini({ prompt });
   const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '');
 
   let parsed;
