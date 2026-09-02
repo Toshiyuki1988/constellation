@@ -13,9 +13,18 @@
 (function () {
   'use strict';
 
-  const RING_R = 205; // ring半径(px, リグ中心からの距離)
-  const CHIP_W = 150;
-  const CHIP_H = 104;
+  // 以下は .wg-rig の基準サイズ(560px, デスクトップ想定)における値。実際のサイズは
+  // .wg-rig がCSSの min(vw, vh, 560px) で画面に応じて縮むため、リング半径・写真サイズも
+  // computeGeometry() でその都度スケールし直す(固定pxのままだと、リグ自体は縮んでいても
+  // リング/写真は縮まず、スマホで画面外にはみ出て見切れてしまう)。
+  const RIG_BASE_SIZE = 560;
+  const RING_R_BASE = 205; // ring半径(px, リグ中心からの距離)
+  const CHIP_W_BASE = 150;
+  const CHIP_H_BASE = 104;
+  let ringR = RING_R_BASE;
+  let chipW = CHIP_W_BASE;
+  let chipH = CHIP_H_BASE;
+
   const TICK_STEP_DEG = 6.5;
   const DRAG_START_TOLERANCE_PX = 9;
   const GESTURE_MIN_TURN_DEG = 300;
@@ -46,7 +55,10 @@
       }
       .wg-rig {
         position: relative;
-        width: min(86vw, 560px); height: min(86vw, 560px);
+        /* 幅だけでなく高さも制約しないと、横は収まっていても縦が短い画面(スマホの実効
+           高さや横向き)で見切れる。バッジ・ヒント文言がリングの外側にはみ出る分の
+           余白も見込んで、86vwよりやや控えめな78%を基準にする。 */
+        width: min(78vw, 78vh, 560px); height: min(78vw, 78vh, 560px);
         transform: scale(0.86);
         transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2);
       }
@@ -78,9 +90,9 @@
       .wg-track { position: absolute; inset: 0; touch-action: none; cursor: grab; }
       .wg-track.grabbing { cursor: grabbing; }
       .wg-chip {
+        /* width/height/marginはリグの実サイズに応じてcomputeGeometry()がインラインで
+           設定する(画面サイズごとに変わるため、ここでは固定値を持たない)。 */
         position: absolute; left: 50%; top: 50%;
-        width: ${CHIP_W}px; height: ${CHIP_H}px;
-        margin: ${-CHIP_H / 2}px 0 0 ${-CHIP_W / 2}px;
         will-change: transform, opacity;
       }
       .wg-chip-photo {
@@ -219,12 +231,34 @@
 
   /* ---------------- リングの構築・配置 ---------------- */
 
+  /** .wg-rig の実サイズ(画面幅/高さに応じて変わる)に合わせて、リング半径・写真サイズを
+   *  スケールし直す。開いた時と、開いている間にリサイズ/画面回転された時に呼ぶ。 */
+  function computeGeometry() {
+    // offsetWidth/Heightを使う(getBoundingClientRectだと開閉アニメーションのtransform:scale
+    // の影響を受け、開く途中の縮んだ状態で測ってしまうことがあるため)
+    const size = Math.min(wgEls.rig.offsetWidth, wgEls.rig.offsetHeight) || RIG_BASE_SIZE;
+    const scale = size / RIG_BASE_SIZE;
+    ringR = RING_R_BASE * scale;
+    chipW = CHIP_W_BASE * scale;
+    chipH = CHIP_H_BASE * scale;
+    Array.from(wgEls.chips.children).forEach((chip) => {
+      chip.style.width = `${chipW}px`;
+      chip.style.height = `${chipH}px`;
+      chip.style.marginLeft = `${-chipW / 2}px`;
+      chip.style.marginTop = `${-chipH / 2}px`;
+    });
+  }
+
   function buildChips() {
     wgEls.chips.innerHTML = '';
     photos.forEach((card, i) => {
       const chip = document.createElement('div');
       chip.className = 'wg-chip';
       chip.dataset.index = i;
+      chip.style.width = `${chipW}px`;
+      chip.style.height = `${chipH}px`;
+      chip.style.marginLeft = `${-chipW / 2}px`;
+      chip.style.marginTop = `${-chipH / 2}px`;
       const caption = (card.memo || '').trim().replace(/\s+/g, ' ').slice(0, 26);
       const bg = card.thumbDataUrl ? `background-image:url(${card.thumbDataUrl})` : '';
       chip.innerHTML = `
@@ -259,8 +293,8 @@
       const d = distFromTop(a);
       if (d < nearestDist) { nearestDist = d; nearest = i; }
       const rad = (a - 90) * Math.PI / 180;
-      const x = Math.cos(rad) * RING_R;
-      const y = Math.sin(rad) * RING_R;
+      const x = Math.cos(rad) * ringR;
+      const y = Math.sin(rad) * ringR;
       const t = d / 180;
       const scale = 2.3 - t * 1.55;
       const opacity = 1 - t * 0.45;
@@ -434,11 +468,20 @@
     photos = collectSessionPhotos();
     rotation = 0;
     activeIndex = 0;
+    computeGeometry();
     buildChips();
     layoutRing();
     playWormGateOpenSound();
     wgEls.overlay.classList.add('open');
   }
+
+  // 開いている間に画面サイズが変わったら(スマホの画面回転など)、リング半径・写真サイズを
+  // 測り直して再配置する
+  window.addEventListener('resize', () => {
+    if (!wgEls || !wgEls.overlay.classList.contains('open')) return;
+    computeGeometry();
+    layoutRing();
+  });
 
   function closeWormgate() {
     wgEls.overlay.classList.remove('open');
