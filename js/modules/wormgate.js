@@ -6,7 +6,12 @@
 // state / els / activeSessionId() / cardElById() / viewportState などの既存グローバルは
 // 直接参照する(モジュールだからといって完全に独立させる必要はないため)。
 //
-// 起動: キャンバス背景(カードの無い場所)を指1本で円を描くように動かす。
+// 起動: キャンバス背景(カードの無い場所)を2本指で押さえ、2本の距離をあまり変えずに
+//       ひねるように回す(ツイスト)。1本指パン・2本指ピンチいずれとも指の本数/動きの質が
+//       構造的に異なるため、既存のinteract.js(canvas.js側のパン・ピンチ)には一切
+//       手を触れず、ただの傍観者としてポインタイベントを見るだけで判定できる。
+//       (以前は1本指で円を描く方式だったが、interact.jsのパン/ピンチと衝突しやすく、
+//       誤起動やピンチが効かなくなる不具合が出たためこの方式に変更した)
 // 操作: リングをドラッグして回転(写真の上から掴んでも、動かせばドラッグと判定する)。
 //       上のアクティブな写真をもう一度タップでジャンプ。左右スワイプで閉じる。
 
@@ -27,9 +32,8 @@
 
   const TICK_STEP_DEG = 6.5;
   const DRAG_START_TOLERANCE_PX = 9;
-  const GESTURE_MIN_TURN_DEG = 300;
-  const GESTURE_CLOSE_DIST_PX = 130;
-  const GESTURE_MAX_POINTS = 140;
+  const TWIST_MIN_ROTATION_DEG = 300; // これだけ回転が積算されたら起動
+  const TWIST_MAX_DIST_RATIO_DEVIATION = 0.3; // 2点間の距離が開始時から±30%を超えたらピンチとみなし打ち切る
 
   let wgEls = null; // このモジュール自身のDOM参照
   let photos = [];
@@ -159,10 +163,14 @@
       }
       .wg-jump-flash.fire { animation: wg-flash 0.5s ease-out; }
       @keyframes wg-flash { 0% { opacity: 0.9; } 100% { opacity: 0; } }
-      .wormgate-gesture-trail { position: fixed; inset: 0; z-index: 45; pointer-events: none; }
-      .wormgate-gesture-trail path {
-        fill: none; stroke: #55e6f7; stroke-width: 2.5; stroke-linecap: round; opacity: 0.55;
+      .wormgate-twist-hint {
+        position: fixed; width: 64px; height: 64px; margin: -32px 0 0 -32px;
+        border-radius: 50%; pointer-events: none; z-index: 45;
+        border: 1px solid rgba(85, 230, 247, 0.4);
+        background: conic-gradient(#55e6f7 0deg, rgba(85, 230, 247, 0.12) 0deg);
+        opacity: 0; transition: opacity 0.15s ease-out;
       }
+      .wormgate-twist-hint.show { opacity: 1; }
       .star-card--wormgate-landed {
         box-shadow: 0 0 0 3px #55e6f7, 0 20px 44px rgba(0, 0, 0, 0.3) !important;
         transition: box-shadow 0.15s ease-out;
@@ -189,11 +197,9 @@
     `;
     document.body.appendChild(overlay);
 
-    const trail = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    trail.setAttribute('class', 'wormgate-gesture-trail');
-    const trailPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    trail.appendChild(trailPath);
-    document.body.appendChild(trail);
+    const twistHint = document.createElement('div');
+    twistHint.className = 'wormgate-twist-hint';
+    document.body.appendChild(twistHint);
 
     const flash = document.createElement('div');
     flash.className = 'wg-jump-flash';
@@ -207,8 +213,7 @@
       track: overlay.querySelector('.wg-track'),
       chips: overlay.querySelector('.wg-chips'),
       empty: overlay.querySelector('.wg-empty'),
-      trail,
-      trailPath,
+      twistHint,
       flash,
     };
   }
@@ -487,108 +492,92 @@
     wgEls.overlay.classList.remove('open');
   }
 
-  /* ---------------- キャンバス背景で円を描くジェスチャーで起動 ---------------- */
+  /* ---------------- キャンバス背景を2本指でツイストして起動 ----------------
+   * canvas.js側のinteract.jsは一切いじらない(disable/enableもしない)。ただの
+   * 傍観者としてポインタイベントを見て、2点間の「距離」と「角度」を自分で計算するだけ。
+   * 1本指パン・2本指ピンチとは指の本数/動きの質が構造的に違うため、これで衝突しない。 */
 
-  let gestureTracking = false;
-  let gesturePts = [];
+  const activePointers = new Map(); // pointerId -> { x, y }(背景で押されている指)
+  let twistBaseDist = 0;
+  let twistLastAngle = 0;
+  let twistTotalRotation = 0;
+  let twistBroken = false; // 距離が変わりすぎた(ピンチ寄り)/指が3本以上になったら、以降は判定しない
 
-  function pathFromPoints(pts) {
-    if (!pts.length) return '';
-    return 'M' + pts.map((p) => `${p.x},${p.y}`).join(' L');
+  function pointDist(a, b) {
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  function pointAngle(a, b) {
+    return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
   }
 
-  function totalSignedTurn(pts) {
-    if (pts.length < 6) return 0;
-    let cx = 0;
-    let cy = 0;
-    pts.forEach((p) => { cx += p.x; cy += p.y; });
-    cx /= pts.length;
-    cy /= pts.length;
-    let total = 0;
-    let prevAngle = Math.atan2(pts[0].y - cy, pts[0].x - cx);
-    for (let i = 1; i < pts.length; i++) {
-      const a = Math.atan2(pts[i].y - cy, pts[i].x - cx);
-      let d = a - prevAngle;
-      while (d > Math.PI) d -= Math.PI * 2;
-      while (d < -Math.PI) d += Math.PI * 2;
-      total += d;
-      prevAngle = a;
-    }
-    return (total * 180) / Math.PI;
-  }
-
-  let gesturePanStart = null; // { x, y } ジェスチャー開始時点のviewportState(円と判定した場合、この位置まで戻す)
-  let gestureLastPoint = null;
-  let gesturePointerId = null;
-
-  /**
-   * 背景の1本指ドラッグは、canvas.js側のinteract.jsが既に「パン」として処理している。
-   * 円を描いている最中も裏でパンが同時に走ると、キャンバスがグルグル動いて見えてしまう。
-   * そこで、ジェスチャーが円かどうか分かるまでの間だけinteract.js側の「パン(draggable)」だけを
-   * 止め、代わりにこちらで同じ見た目のパンをその場で再現しておく(ピンチ=gesturableは止めない。
-   * 止めてしまうと、1本指で触れた直後に2本目が乗ってきてもピンチが一切効かなくなるバグになる)。
-   * 指を離した時点で:
-   *   円だった → ここまでのパン分を打ち消してWormGateを開く(見た目は動かなかったことになる)
-   *   円でなかった → そのまま普通にパンした状態として確定する(通常操作と同じ結果)
-   * 途中で2本目の指が乗ってきた(=ピンチしようとしている)場合は、円の判定をせずただちに
-   * 中断し、interact.js側の通常のピンチ処理に譲る。
-   */
-  function onCanvasPointerDown(e) {
-    if (gestureTracking) {
-      // 追跡中に2本目の指が乗ってきた = ピンチしようとしている。円の判定はせず中断する
-      abortGesture();
+  function updateTwistHint(show, midpoint, progress) {
+    const el = wgEls.twistHint;
+    if (!show) {
+      el.classList.remove('show');
       return;
     }
+    el.classList.add('show');
+    el.style.left = `${midpoint.x}px`;
+    el.style.top = `${midpoint.y}px`;
+    const deg = Math.min(360, Math.abs(progress) * 360);
+    el.style.background = `conic-gradient(#55e6f7 ${deg}deg, rgba(85,230,247,0.12) ${deg}deg)`;
+  }
+
+  function onCanvasPointerDown(e) {
     if (e.target !== els.viewport) return; // カードの上からは起動しない(背景のみ)
     if (wgEls.overlay.classList.contains('open')) return;
     soundAudioCtx();
-    gestureTracking = true;
-    gesturePointerId = e.pointerId;
-    gesturePts = [{ x: e.clientX, y: e.clientY }];
-    gestureLastPoint = { x: e.clientX, y: e.clientY };
-    gesturePanStart = { x: viewportState.x, y: viewportState.y };
-    interact(els.viewport).draggable({ enabled: false });
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size === 2) {
+      const [a, b] = Array.from(activePointers.values());
+      twistBaseDist = pointDist(a, b);
+      twistLastAngle = pointAngle(a, b);
+      twistTotalRotation = 0;
+      twistBroken = false;
+    } else if (activePointers.size > 2) {
+      twistBroken = true; // 3本目が乗ったら判定しない
+      updateTwistHint(false);
+    }
   }
 
   function onCanvasPointerMove(e) {
-    if (!gestureTracking || e.pointerId !== gesturePointerId) return;
-    const dx = e.clientX - gestureLastPoint.x;
-    const dy = e.clientY - gestureLastPoint.y;
-    gestureLastPoint = { x: e.clientX, y: e.clientY };
-    viewportState.x += dx;
-    viewportState.y += dy;
-    applyViewportTransform();
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size !== 2 || twistBroken) return;
 
-    gesturePts.push({ x: e.clientX, y: e.clientY });
-    if (gesturePts.length > GESTURE_MAX_POINTS) gesturePts.shift();
-    wgEls.trailPath.setAttribute('d', pathFromPoints(gesturePts));
-  }
+    const [a, b] = Array.from(activePointers.values());
+    const dist = pointDist(a, b);
+    const angle = pointAngle(a, b);
+    const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 
-  /** 2本目の指が乗ってきた等で、円の判定をせずに追跡だけをやめる(パンは今の位置で確定させる) */
-  function abortGesture() {
-    gestureTracking = false;
-    gesturePts = [];
-    wgEls.trailPath.setAttribute('d', '');
-    interact(els.viewport).draggable({ enabled: true });
+    if (Math.abs(dist / twistBaseDist - 1) > TWIST_MAX_DIST_RATIO_DEVIATION) {
+      // 2点間の距離が変わりすぎた = ピンチ操作とみなし、以降このジェスチャーでは判定しない
+      twistBroken = true;
+      updateTwistHint(false);
+      return;
+    }
+
+    let delta = angle - twistLastAngle;
+    while (delta > 180) delta -= 360;
+    while (delta < -180) delta += 360;
+    twistTotalRotation += delta;
+    twistLastAngle = angle;
+
+    updateTwistHint(true, midpoint, twistTotalRotation / TWIST_MIN_ROTATION_DEG);
+
+    if (Math.abs(twistTotalRotation) > TWIST_MIN_ROTATION_DEG) {
+      twistBroken = true; // 連続で開いてしまわないよう即座に判定を止める
+      updateTwistHint(false);
+      openWormgate();
+    }
   }
 
   function onCanvasPointerEnd(e) {
-    if (!gestureTracking || e.pointerId !== gesturePointerId) return;
-    gestureTracking = false;
-    interact(els.viewport).draggable({ enabled: true });
-
-    const turn = totalSignedTurn(gesturePts);
-    const first = gesturePts[0];
-    const last = gesturePts[gesturePts.length - 1];
-    const closedEnough = first && last && Math.hypot(first.x - last.x, first.y - last.y) < GESTURE_CLOSE_DIST_PX;
-    if (Math.abs(turn) > GESTURE_MIN_TURN_DEG && closedEnough) {
-      viewportState.x = gesturePanStart.x;
-      viewportState.y = gesturePanStart.y;
-      applyViewportTransform();
-      openWormgate();
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) {
+      twistBroken = false;
+      updateTwistHint(false);
     }
-    gesturePts = [];
-    wgEls.trailPath.setAttribute('d', '');
   }
 
   function escapeHtml(str) {
