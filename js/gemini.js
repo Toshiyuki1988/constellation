@@ -9,14 +9,20 @@
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 
 /**
- * @param {{prompt: string, imageBase64?: string, mimeType?: string, tools?: object[]}} params
+ * @param {{prompt: string, imageBase64?: string, mimeType?: string,
+ *   images?: {base64: string, mimeType?: string}[], tools?: object[]}} params
+ *   imageBase64/mimeTypeは画像1枚だけの場合の簡易指定。複数枚送りたい場合はimagesを使う
+ *   (両方指定した場合はimageBase64側が先に追加される)。
  * @returns {Promise<string>} 生成されたテキスト
  */
-async function askGemini({ prompt, imageBase64, mimeType, tools }) {
+async function askGemini({ prompt, imageBase64, mimeType, images, tools }) {
   const parts = [{ text: prompt }];
   if (imageBase64) {
     parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } });
   }
+  (images || []).forEach((img) => {
+    if (img && img.base64) parts.push({ inline_data: { mime_type: img.mimeType || 'image/jpeg', data: img.base64 } });
+  });
 
   const body = { contents: [{ parts }] };
   if (tools) body.tools = tools;
@@ -108,25 +114,29 @@ async function parseExhibitionInfo(text) {
 
 /**
  * サマリーカード用: セッション全体のテキスト情報(collectSessionTextContext()で組み立てた文章)
- * から、視点(mode)と任意の傾向指示(direction)に沿って要約を1本書かせる。画像は送らない
- * (枚数の多いセッションで無料枠をすぐ消費してしまうため、テキスト情報のみを参照する)。
- * @param {{context: string, mode: 'education'|'academic', direction?: string}} params
+ * から、視点(mode)と任意の傾向指示(direction)に沿って要約を1本書かせる。既定では画像は
+ * 送らない(枚数の多いセッションで無料枠をすぐ消費してしまうため)。サマリーカードにASTRで
+ * 手動接続された写真カードがある場合だけ、その写真(imagesで渡す)も見て要約させる
+ * (動画・音声は呼び出し側で除外済みの前提)。
+ * @param {{context: string, mode: 'education'|'academic', direction?: string,
+ *   images?: {base64: string, mimeType?: string}[]}} params
  * @returns {Promise<string>} 要約テキスト
  */
-async function summarizeSession({ context, mode, direction }) {
+async function summarizeSession({ context, mode, direction, images }) {
   const styleInstruction =
     mode === 'education'
       ? '小学生・中学生にも分かるように、やさしい言葉と短い文で説明してください。専門用語はできるだけ避け、使う場合は簡単な説明を添えてください。'
       : '学術的な文体で、批評・美術史的な視点を踏まえて記述してください。必要に応じて専門用語を使って構いません。';
   const directionInstruction = direction && direction.trim() ? `\n特に次の視点・傾向を意識して書いてください: ${direction.trim()}` : '';
+  const imagesInstruction = images && images.length > 0 ? '\n添付した写真の内容(構図・被写体・印象など)も踏まえて書いてください。' : '';
 
   const prompt =
     '以下は、ある美術展覧会・セッションの記録(タイトルと、鑑賞メモ・キャプションなどのテキスト)です。\n\n' +
     `${context}\n\n` +
-    `この内容をもとに、展覧会全体の要約を書いてください。${styleInstruction}${directionInstruction}\n` +
+    `この内容をもとに、展覧会全体の要約を書いてください。${styleInstruction}${directionInstruction}${imagesInstruction}\n` +
     '前置き・見出し・箇条書き記号は使わず、自然な文章で200〜400字程度にまとめてください。';
 
-  const raw = await askGemini({ prompt });
+  const raw = await askGemini({ prompt, images });
   return raw.trim();
 }
 

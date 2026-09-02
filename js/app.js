@@ -570,16 +570,17 @@ function editGuideHexHtml(mediaType) {
   const hex = (action, label) =>
     `<div class="star-card-hex star-card-hex--${action}" data-action="${action}">` +
     `<span class="star-card-hex-strut star-card-hex-strut--${action}"></span>${label}</div>`;
+  const astrHex = '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>';
   // インフォメーションカードはリマインダー用途なので、カード同士を結ぶASTRは搭載しない
   if (mediaType === 'info') {
     return hex('toggle', '開閉') + hex('depth', 'Depth') + hex('delete', 'Delete');
   }
-  // サマリーカードは移動(ドラッグ)と要約傾向の入力(カード本体)だけでよく、
-  // 出力先への接続はボタン操作で自動生成されるためASTRは持たない。Deleteのみ。
+  // サマリーカードは移動(ドラッグ)・要約傾向の入力(カード本体)・Deleteに加えて、ASTRで
+  // 写真カードを手動接続できる(繋いだ写真も要約時にGeminiへ渡す、というユーザー指定の入力
+  // 手段。Depth/Edit/Captionは不要なので持たない)。
   if (mediaType === 'summary') {
-    return hex('delete', 'Delete');
+    return astrHex + hex('delete', 'Delete');
   }
-  const astrHex = '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>';
   if (mediaType === 'session') {
     return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
   }
@@ -922,8 +923,11 @@ function createInfoCard() {
  * 「👦 Education(やさしく)」「🎓 Academic(学術的に)」の2つの視点で要約を作らせる。
  * 押すたびにGeminiを1回呼び、結果はテクストカードとして新規に生成し、ASTRの手動接続と同じ
  * 仕組み(createAstrConnection)でこのサマリーカードに繋げる(効果音・発光演出もそこに乗る)。
- * 画像は送らない(セッションによっては大量の写真を毎回送ることになり、無料枠をすぐ消費して
- * しまうため。テキスト情報だけで要約する)。 */
+ * 既定では画像を送らずテキスト情報だけで要約する(セッション内の全写真を毎回送ると無料枠を
+ * すぐ消費してしまうため)。ただしユーザーがサマリーカード自身のASTRヘックスから写真カードを
+ * 手動接続した場合は、その写真(サムネイルのみ、最大SUMMARY_MAX_CONNECTED_IMAGES枚)も
+ * collectConnectedImageParts()で拾ってGeminiに渡す。動画・音声は対象外(データ量が大きく
+ * 無料枠を早く消費するため)。 */
 
 function summaryCardInnerHtml(card) {
   const session = getSessionById(card.sessionId);
@@ -935,6 +939,7 @@ function summaryCardInnerHtml(card) {
     <p class="star-card-summary-session"><span class="dot"></span>SESSION: ${escapeHtml(session ? session.name : '(不明)')}</p>
     <p class="star-card-summary-label">要約の傾向(任意)</p>
     <textarea class="star-card-summary-input" placeholder="例: フェミニズム的視点で／ポストインターネット的視点で">${escapeHtml(card.summaryDirection || '')}</textarea>
+    <p class="star-card-summary-hint">ASTRで写真を繋ぐと、その写真も見て要約します(動画・音声は対象外)</p>
     ${EDIT_GUIDE_HANDLES_HTML}
     ${editGuideHexHtml('summary')}
   `;
@@ -1006,6 +1011,35 @@ function collectSessionTextContext(sessionId, depth = 0) {
   return lines.join('\n');
 }
 
+/** 与えたdata URL(サムネイル)をGeminiに渡せる{base64, mimeType}の形に分解する */
+function dataUrlToImagePart(dataUrl) {
+  const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || '');
+  return match ? { mimeType: match[1], base64: match[2] } : null;
+}
+
+// サマリーカードにASTRで手動接続できる写真の上限。繋げば繋ぐほどGeminiへの画像添付が増え、
+// 無料枠(1日250)をすぐ消費してしまうため、常識的な枚数に制限しておく。
+const SUMMARY_MAX_CONNECTED_IMAGES = 6;
+
+/**
+ * サマリーカードにASTRで手動接続されている、画像カードのサムネイルを集める(動画・音声は
+ * 対象外。Geminiへ送るデータ量が増えて無料枠をすぐ消費してしまうため、ユーザーの判断で除外)。
+ */
+function collectConnectedImageParts(cardId) {
+  const connectedIds = state.connections
+    .filter((c) => c.cardIdA === cardId || c.cardIdB === cardId)
+    .map((c) => (c.cardIdA === cardId ? c.cardIdB : c.cardIdA));
+  const parts = [];
+  for (const id of connectedIds) {
+    if (parts.length >= SUMMARY_MAX_CONNECTED_IMAGES) break;
+    const c = getCardById(id);
+    if (!c || c.mediaType !== 'image' || !c.thumbDataUrl) continue;
+    const part = dataUrlToImagePart(c.thumbDataUrl);
+    if (part) parts.push(part);
+  }
+  return parts;
+}
+
 const summaryInFlight = new Set();
 
 async function handleSummaryGenerate(card, el, mode) {
@@ -1020,7 +1054,8 @@ async function handleSummaryGenerate(card, el, mode) {
     const context = collectSessionTextContext(card.sessionId);
     const direction = (el.querySelector('.star-card-summary-input')?.value || '').trim();
     card.summaryDirection = direction;
-    const text = await summarizeSession({ context, mode, direction });
+    const images = collectConnectedImageParts(card.id);
+    const text = await summarizeSession({ context, mode, direction, images });
     // 要約傾向に質問文を入れても素直に回答が返ってくるため、後から見返した時に「何を
     // 指示して出てきた要約か」が分かるよう、指示文をQ.として冒頭に残しておく。
     const textWithDirection = direction ? `Q. ${direction}\n\n${text}` : text;

@@ -956,6 +956,13 @@ html, body {
   pointer-events: auto;
 }
 
+.star-card-summary-hint {
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 7px 0 0;
+}
+
 /* WormGateのジャンプ着地演出と同じ視覚言語(緑のリング)を、こちらは基本機能側で独自に持つ */
 .star-card--landed {
   box-shadow: 0 0 0 3px #2e7d32, 0 20px 44px rgba(0, 0, 0, 0.3) !important;
