@@ -481,8 +481,13 @@ function redrawAsterismLines() {
   if (!asterismSvg) return;
   asterismSvg.innerHTML = '';
   const currentId = activeSessionId();
-  // インフォメーションカード・サマリーカードは見た順(鑑賞順)の一部ではないため、自動線から除外する
-  const sessionCards = state.cards.filter((c) => c.sessionId === currentId && c.mediaType !== 'info' && c.mediaType !== 'summary');
+  // インフォメーションカード・サマリーカード・サマリーの出力カード(summarySourceId持ち)は
+  // 見た順(鑑賞順)の一部ではないため、自動線から除外する。これが無いと、連続で生成した
+  // サマリー出力同士が(作成時刻が近いというだけで)自動的に繋がってしまい、意図した
+  // 「出典への接続」と紛らわしくなる。
+  const sessionCards = state.cards.filter(
+    (c) => c.sessionId === currentId && c.mediaType !== 'info' && c.mediaType !== 'summary' && !c.summarySourceId
+  );
 
   // 自動: 追加した順(見た順)に隣同士をつなぐ。ただしhideAutoLink()で個別に消されたペアは除く
   const sorted = sessionCards.slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
