@@ -9,14 +9,17 @@
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 
 /**
- * @param {{prompt: string, imageBase64?: string, mimeType?: string}} params
+ * @param {{prompt: string, imageBase64?: string, mimeType?: string, tools?: object[]}} params
  * @returns {Promise<string>} 生成されたテキスト
  */
-async function askGemini({ prompt, imageBase64, mimeType }) {
+async function askGemini({ prompt, imageBase64, mimeType, tools }) {
   const parts = [{ text: prompt }];
   if (imageBase64) {
     parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } });
   }
+
+  const body = { contents: [{ parts }] };
+  if (tools) body.tools = tools;
 
   const res = await fetch(`${GEMINI_API}/models/${CONFIG.GEMINI_MODEL}:generateContent`, {
     method: 'POST',
@@ -24,7 +27,7 @@ async function askGemini({ prompt, imageBase64, mimeType }) {
       'Content-Type': 'application/json',
       'x-goog-api-key': CONFIG.GEMINI_API_KEY,
     },
-    body: JSON.stringify({ contents: [{ parts }] }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
@@ -44,6 +47,56 @@ async function ocrImage(blob) {
     mimeType: blob.type,
   });
   return raw.trim();
+}
+
+/**
+ * インフォメーションカードの案内文(と任意でURL)から、会期・開廊時間・休廊日を構造化データ
+ * として抽出する。一度パースすれば「今日は鑑賞可能か」は以降ローカルJSだけで判定でき、
+ * APIを再度呼ぶ必要はない。祝日による休廊も、曜日パターン(closedWeekdays)には含めず、
+ * 具体的な日付のexceptionとして個別に列挙してもらう(実行時に祝日カレンダーを別途持たずに
+ * 済ませるため)。
+ * @param {string} text 案内文(「：」で挟まれた範囲を含む)
+ * @param {string} [url] 展覧会公式ページのURL(あれば優先して読み取らせる)
+ * @returns {Promise<object>} 成功時は {title, venue, startDate, endDate, openTime, closeTime,
+ *   closedWeekdays, exceptions}。会期を読み取れなかった場合は {error, partial} を返す
+ *   (partialは読み取れた項目だけを含む)。ネットワーク/APIエラー自体は例外として投げる。
+ */
+async function parseExhibitionInfo(text, url) {
+  const prompt =
+    '以下は美術展覧会・ギャラリーの案内文です。' +
+    (url ? `参考として展覧会の公式ページ(${url})が分かればその内容を優先し、` : '') +
+    '次のJSON形式だけを出力してください(前置き・説明・コードブロックの記号は一切付けないこと)。\n' +
+    '{\n' +
+    '  "title": "展覧会名(アーティスト名を含む)",\n' +
+    '  "venue": "会場名",\n' +
+    '  "startDate": "YYYY-MM-DD",\n' +
+    '  "endDate": "YYYY-MM-DD",\n' +
+    '  "openTime": "HH:MM",\n' +
+    '  "closeTime": "HH:MM",\n' +
+    '  "closedWeekdays": [0=日曜〜6=土曜の整数の配列。定休の曜日だけを入れる],\n' +
+    '  "exceptions": [{"type": "open または closed", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "note": "補足(任意)"}]\n' +
+    '}\n' +
+    '会期中に「祝日は休廊」のような記載がある場合は、closedWeekdaysに含めず、該当する具体的な祝日の' +
+    '日付をexceptionsにtype:"closed"として個別に列挙してください(日本の祝日カレンダーの知識を使って構いません)。' +
+    '「◯月◯日〜◯日は開廊」のような例外もexceptionsにtype:"open"として列挙してください。' +
+    '読み取れない項目はnullにしてください。案内文:\n\n' + text;
+
+  const raw = await askGemini({
+    prompt,
+    tools: [{ google_search: {} }, { url_context: {} }],
+  });
+  const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (err) {
+    return { error: '応答をJSONとして解析できませんでした' };
+  }
+  if (!parsed.startDate || !parsed.endDate) {
+    return { error: '会期(開始日・終了日)を読み取れませんでした', partial: parsed };
+  }
+  return parsed;
 }
 
 function blobToBase64(blob) {

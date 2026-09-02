@@ -35,12 +35,16 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo = document.getElementById('tool-video');
   els.toolAudio = document.getElementById('tool-audio');
   els.toolSession = document.getElementById('tool-session');
+  els.toolInfo = document.getElementById('tool-info');
   els.status = document.getElementById('status');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
   els.imageInput = document.getElementById('image-input');
   els.yearTabs = document.getElementById('year-tabs');
   els.breadcrumb = document.getElementById('breadcrumb');
+  els.infoTicker = document.getElementById('infoTicker');
+  els.infoTickerText = document.getElementById('infoTickerText');
+  els.infoTickerProgress = document.getElementById('infoTickerProgress');
 
   initCanvas(els.viewport, els.content);
 
@@ -80,6 +84,11 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
+  els.toolInfo.addEventListener('click', createInfoCard);
+  els.infoTicker.addEventListener('click', () => {
+    const card = infoTickerItems[infoTickerIndex];
+    if (card) jumpToInfoCard(card);
+  });
 
   initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled);
 });
@@ -186,6 +195,7 @@ function toggleAuthUI(signedIn) {
   els.toolVideo.disabled = !signedIn;
   els.toolAudio.disabled = !signedIn;
   els.toolSession.disabled = !signedIn;
+  els.toolInfo.disabled = !signedIn;
 }
 
 function setStatus(message) {
@@ -224,6 +234,10 @@ async function onSignedIn() {
     renderYearTabs();
     renderBreadcrumb();
     renderAllCards();
+    refreshInfoTicker();
+    // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
+    // (API通信は発生しない、ローカルの日付比較のみ)。
+    setInterval(refreshInfoTicker, 30 * 60 * 1000);
     setStatus(`読み込み完了(${state.cards.length}件)`);
   } catch (err) {
     console.error(err);
@@ -317,6 +331,7 @@ function enterSession(id, isYear) {
   renderYearTabs();
   renderBreadcrumb();
   renderAllCards();
+  if (isYear) refreshInfoTicker(); // ティッカーは年タブ単位なので、年を切り替えた時だけ再集計する
 }
 
 async function handleCreateSession() {
@@ -441,7 +456,8 @@ function redrawAsterismLines() {
   if (!asterismSvg) return;
   asterismSvg.innerHTML = '';
   const currentId = activeSessionId();
-  const sessionCards = state.cards.filter((c) => c.sessionId === currentId);
+  // インフォメーションカードはリマインダー用途のため、見た順の自動線から除外する
+  const sessionCards = state.cards.filter((c) => c.sessionId === currentId && c.mediaType !== 'info');
 
   // 自動: 追加した順(見た順)に隣同士をつなぐ。ただしhideAutoLink()で個別に消されたペアは除く
   const sorted = sessionCards.slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -529,6 +545,10 @@ function editGuideHexHtml(mediaType) {
   const hex = (action, label) =>
     `<div class="star-card-hex star-card-hex--${action}" data-action="${action}">` +
     `<span class="star-card-hex-strut star-card-hex-strut--${action}"></span>${label}</div>`;
+  // インフォメーションカードはリマインダー用途なので、カード同士を結ぶASTRは搭載しない
+  if (mediaType === 'info') {
+    return hex('toggle', '開閉') + hex('depth', 'Depth') + hex('delete', 'Delete');
+  }
   const astrHex = '<div class="star-card-hex star-card-hex--astr" data-action="astr">ASTR</div>';
   if (mediaType === 'session') {
     return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
@@ -565,10 +585,15 @@ function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
   const isSessionCard = mediaType === 'session';
+  const isInfoCard = mediaType === 'info';
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
-  el.className = 'star-card' + (isTextCard ? ' star-card--text' : '') + (isSessionCard ? ' star-card--session' : '');
+  el.className =
+    'star-card' +
+    (isTextCard ? ' star-card--text' : '') +
+    (isSessionCard ? ' star-card--session' : '') +
+    (isInfoCard ? ' star-card--info' : '');
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
   el.dataset.y = String(card.y);
@@ -598,6 +623,8 @@ function renderCard(card) {
       ${EDIT_GUIDE_HANDLES_HTML}
       ${editGuideHexHtml(mediaType)}
     `;
+  } else if (isInfoCard) {
+    el.innerHTML = infoCardInnerHtml(card);
   } else {
     el.innerHTML = `
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
@@ -626,6 +653,8 @@ function renderCard(card) {
         }
       } else if (action === 'title') {
         startSessionTitleEdit(card, el);
+      } else if (action === 'toggle') {
+        toggleInfoCardExpanded(card, el);
       } else if (action === 'astr') {
         // 長押し→ドラッグでの接続はjs/canvas.jsのattachAstrGesture()が処理する。
         // ここに来るのは「長押しせずタップだけした」場合なので、使い方のヒントだけ出す。
@@ -639,7 +668,7 @@ function renderCard(card) {
         el.classList.toggle('star-card--depth-blurred', card.depthBlurred);
         scheduleAutoSave();
       }
-      if (action !== 'astr' && action !== 'title') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle') scheduleAutoSave();
     });
   });
 
@@ -647,23 +676,30 @@ function renderCard(card) {
     attachTapToOpen(el.querySelector('.star-card-session-body'), () => enterSession(card.refSessionId, false));
   }
 
+  // インフォメーションカードは.star-card-memoを使わず専用のフィールドを持つため、
+  // ここから先の共通メモ配線は対象外にする(wireInfoCard()で個別に配線する)。
   const memoEl = el.querySelector('.star-card-memo');
-
-  memoEl.addEventListener('input', () => {
-    card.memo = memoEl.value;
-    syncCardHeight(el);
-    scheduleAutoSave();
-  });
-  // 既定ではメモへのポインタ操作を無効化し、カードの移動を優先する。
-  // 編集ガイドのEditアクションを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
-  memoEl.addEventListener('blur', () => {
-    memoEl.style.pointerEvents = 'none';
-    // OCR取り込みも手入力もなく空のまま編集を終えた場合は、テキスト欄を再び隠す
-    if (!isTextCard && !memoEl.value.trim()) {
-      memoEl.hidden = true;
+  if (memoEl) {
+    memoEl.addEventListener('input', () => {
+      card.memo = memoEl.value;
       syncCardHeight(el);
-    }
-  });
+      scheduleAutoSave();
+    });
+    // 既定ではメモへのポインタ操作を無効化し、カードの移動を優先する。
+    // 編集ガイドのEditアクションを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
+    memoEl.addEventListener('blur', () => {
+      memoEl.style.pointerEvents = 'none';
+      // OCR取り込みも手入力もなく空のまま編集を終えた場合は、テキスト欄を再び隠す
+      if (!isTextCard && !memoEl.value.trim()) {
+        memoEl.hidden = true;
+        syncCardHeight(el);
+      }
+    });
+  }
+
+  if (isInfoCard) {
+    wireInfoCard(card, el);
+  }
 
   if (!isSessionCard && card.imageFileId) {
     const mediaEl = el.querySelector('.star-card-media');
@@ -679,6 +715,355 @@ function renderCard(card) {
   // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。
   if (!isSessionCard || card.memo) {
     syncCardHeight(el);
+  }
+}
+
+/* ---------------- インフォメーションカード(基本機能) ----------------
+ * 展覧会の会期・開廊時間・休廊日を「：」で挟んだテキスト(手入力/OCR)、または任意の公式ページ
+ * URLから、Geminiで一度だけ構造化データに解析する(js/gemini.js の parseExhibitionInfo())。
+ * 以降「今日は鑑賞可能か」はローカルJSだけで判定し、APIを再度呼ぶ必要はない。
+ * ヘッダーのティッカーに、現在の年タブ内で「今日鑑賞可能」な展覧会をローテーション表示し、
+ * タップでそのカードへジャンプする。ASTR(自動線・手動接続とも)は搭載しない、リマインダー用途。 */
+
+function infoCardInnerHtml(card) {
+  const parsed = card.infoParsed;
+  const expanded = Boolean(card.infoExpanded);
+  const visitable = parsed ? isExhibitionVisitableOn(parsed, new Date()) : false;
+  const firstLine = (card.memo || '').split('\n').map((l) => l.replace(/：/g, '').trim()).find((l) => l);
+  const displayTitle = (parsed && parsed.title) || firstLine || '(無題のインフォメーション)';
+  const displayVenue = parsed && parsed.venue;
+
+  const badgeClass = !parsed ? 'unparsed' : visitable ? 'visitable' : 'closed';
+  const badgeText = !parsed ? '未解析' : visitable ? '本日鑑賞可能' : '会期外';
+
+  return `
+    <div class="star-card-info-badge ${badgeClass}"><span class="dot"></span>${badgeText}</div>
+    <div class="star-card-info-head">
+      <p class="star-card-info-title">${escapeHtml(displayTitle)}</p>
+      ${displayVenue ? `<p class="star-card-info-venue">${escapeHtml(displayVenue)}</p>` : ''}
+    </div>
+    <div class="star-card-info-body" ${expanded ? '' : 'hidden'}>
+      <p class="star-card-info-label">情報テキスト(「：」で挟んだ範囲が解析対象)</p>
+      <textarea class="star-card-info-text" placeholder="：会場名・会期・時間などを貼り付け：">${escapeHtml(card.memo || '')}</textarea>
+      <button class="star-card-info-ocr-btn" title="カメラでOCRして追記">${CAMERA_ICON_SVG}<span>OCRで追記</span></button>
+      <p class="star-card-info-label">展覧会ページURL(任意・分かれば優先して読み取ります)</p>
+      <input type="text" class="star-card-info-url" placeholder="https://..." value="${escapeHtml(card.infoUrl || '')}">
+      <button class="star-card-info-parse-btn">解析する</button>
+      ${parsed ? infoParseResultHtml(parsed) : ''}
+      ${card.infoParseError ? infoParseErrorHtml(card) : ''}
+    </div>
+  `;
+}
+
+function infoParseResultHtml(parsed) {
+  const closedLabels = { 0: '日', 1: '月', 2: '火', 3: '水', 4: '木', 5: '金', 6: '土' };
+  const closedChips = (parsed.closedWeekdays || []).map((d) => `<span class="chip closed">${closedLabels[d] || d}</span>`).join('');
+  const exceptionChips = (parsed.exceptions || [])
+    .map((ex) => `<span class="chip ${ex.type === 'open' ? 'exception' : 'closed'}">${escapeHtml(ex.startDate || '')}〜${escapeHtml(ex.endDate || '')}${ex.type === 'open' ? '開廊' : '休廊'}</span>`)
+    .join('');
+  return `
+    <div class="star-card-info-result">
+      <div class="row"><b>会期</b><span>${escapeHtml(parsed.startDate || '?')} 〜 ${escapeHtml(parsed.endDate || '?')}</span></div>
+      ${parsed.openTime ? `<div class="row"><b>時間</b><span>${escapeHtml(parsed.openTime)} 〜 ${escapeHtml(parsed.closeTime || '?')}</span></div>` : ''}
+      ${closedChips ? `<div class="row"><b>休廊日</b><span class="chip-row">${closedChips}</span></div>` : ''}
+      ${exceptionChips ? `<div class="row"><b>例外</b><span class="chip-row">${exceptionChips}</span></div>` : ''}
+    </div>
+  `;
+}
+
+function infoParseErrorHtml(card) {
+  const partial = card.infoParseError.partial || {};
+  return `
+    <div class="star-card-info-error">
+      <p class="title">⚠ ${escapeHtml(card.infoParseError.message || '解析できませんでした')}</p>
+      <p class="hint">読み取れた項目は自動入力されています。空欄だけ手入力で埋めてください(開始日・終了日は必須)。</p>
+      <div class="manual-fields">
+        <div><label>開始日</label><input type="text" class="fix-start" placeholder="YYYY-MM-DD" value="${escapeHtml(partial.startDate || '')}"></div>
+        <div><label>終了日</label><input type="text" class="fix-end" placeholder="YYYY-MM-DD" value="${escapeHtml(partial.endDate || '')}"></div>
+        <div><label>開始時刻</label><input type="text" class="fix-open" placeholder="HH:MM" value="${escapeHtml(partial.openTime || '')}"></div>
+        <div><label>終了時刻</label><input type="text" class="fix-close" placeholder="HH:MM" value="${escapeHtml(partial.closeTime || '')}"></div>
+      </div>
+      <button class="star-card-info-fix-btn">この内容で確定</button>
+    </div>
+  `;
+}
+
+function wireInfoCard(card, el) {
+  const textEl = el.querySelector('.star-card-info-text');
+  const urlEl = el.querySelector('.star-card-info-url');
+  const ocrBtn = el.querySelector('.star-card-info-ocr-btn');
+  const parseBtn = el.querySelector('.star-card-info-parse-btn');
+  const fixBtn = el.querySelector('.star-card-info-fix-btn');
+
+  if (textEl) {
+    textEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    textEl.addEventListener('input', () => {
+      card.memo = textEl.value;
+      syncCardHeight(el);
+      scheduleAutoSave();
+    });
+  }
+  if (urlEl) {
+    urlEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    urlEl.addEventListener('input', () => {
+      card.infoUrl = urlEl.value;
+      scheduleAutoSave();
+    });
+  }
+  if (ocrBtn) {
+    ocrBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    ocrBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleInfoCardOcr(card, el);
+    });
+  }
+  if (parseBtn) {
+    parseBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    parseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleInfoCardParse(card, el);
+    });
+  }
+  if (fixBtn) {
+    fixBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fixBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleInfoCardManualFix(card, el);
+    });
+  }
+}
+
+function createInfoCard() {
+  const card = {
+    id: crypto.randomUUID(),
+    x: 40,
+    y: 40,
+    width: 240,
+    height: 150,
+    memo: '',
+    tags: [],
+    mediaType: 'info',
+    infoUrl: '',
+    infoParsed: null,
+    infoParseError: null,
+    infoExpanded: true,
+    imageFileId: null,
+    sessionId: activeSessionId(),
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  redrawAsterismLines();
+  setStatus('インフォメーションカードを追加しました');
+  scheduleAutoSave();
+  return card;
+}
+
+/** カード1枚を丸ごと作り直す(要素を差し替える)簡易ヘルパー。編集ガイド表示中ならそれも引き継ぐ。 */
+function rerenderCardInPlace(card, oldEl) {
+  const wasEditGuide = oldEl.classList.contains('star-card--edit-guide');
+  oldEl.remove();
+  renderCard(card);
+  const newEl = cardElById(card.id);
+  if (wasEditGuide && newEl) activateEditGuide(newEl);
+  redrawAsterismLines();
+}
+
+function toggleInfoCardExpanded(card, el) {
+  card.infoExpanded = !card.infoExpanded;
+  rerenderCardInPlace(card, el);
+  scheduleAutoSave();
+}
+
+/** インフォメーションカードの📷ボタン: OCRだけ起動し、結果をテキスト欄に追記する */
+async function handleInfoCardOcr(card, el) {
+  const result = await openCamera('caption');
+  if (!result || result.kind !== 'text') return;
+  card.memo = card.memo ? `${card.memo}\n${result.text}` : result.text;
+  rerenderCardInPlace(card, el);
+  setStatus('OCR結果を追記しました');
+  scheduleAutoSave();
+}
+
+async function handleInfoCardParse(card, el) {
+  const textEl = el.querySelector('.star-card-info-text');
+  const urlEl = el.querySelector('.star-card-info-url');
+  const text = (textEl ? textEl.value : card.memo) || '';
+  const url = ((urlEl ? urlEl.value : card.infoUrl) || '').trim();
+  card.memo = text;
+  card.infoUrl = url;
+
+  if (!text.trim()) {
+    setStatus('情報テキストを入力してください');
+    return;
+  }
+
+  setStatus('展覧会情報を解析中…');
+  try {
+    const result = await parseExhibitionInfo(text, url || undefined);
+    if (result.error) {
+      card.infoParsed = null;
+      card.infoParseError = { message: result.error, partial: result.partial || {} };
+      setStatus('解析できませんでした。空欄だけ手動で補ってください');
+    } else {
+      card.infoParsed = result;
+      card.infoParseError = null;
+      setStatus('展覧会情報を解析しました');
+    }
+  } catch (err) {
+    console.error(err);
+    card.infoParseError = { message: '通信に失敗しました', partial: {} };
+    setStatus('解析に失敗しました(コンソールを確認)');
+  }
+  rerenderCardInPlace(card, el);
+  scheduleAutoSave();
+  refreshInfoTicker();
+}
+
+function handleInfoCardManualFix(card, el) {
+  const val = (cls) => el.querySelector(cls)?.value.trim() || '';
+  const startDate = val('.fix-start');
+  const endDate = val('.fix-end');
+  const openTime = val('.fix-open');
+  const closeTime = val('.fix-close');
+  if (!startDate || !endDate) {
+    setStatus('開始日・終了日は入力してください');
+    return;
+  }
+  const partial = (card.infoParseError && card.infoParseError.partial) || {};
+  card.infoParsed = {
+    title: partial.title || null,
+    venue: partial.venue || null,
+    startDate,
+    endDate,
+    openTime: openTime || null,
+    closeTime: closeTime || null,
+    closedWeekdays: partial.closedWeekdays || [],
+    exceptions: partial.exceptions || [],
+  };
+  card.infoParseError = null;
+  rerenderCardInPlace(card, el);
+  setStatus('手動入力の内容で確定しました');
+  scheduleAutoSave();
+  refreshInfoTicker();
+}
+
+/* ---- 「今日は鑑賞可能か」の判定(ローカルJSのみ、API不要) ---- */
+
+function formatDateYMD(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function isExhibitionVisitableOn(parsed, date) {
+  if (!parsed || !parsed.startDate || !parsed.endDate) return false;
+  const ymd = formatDateYMD(date);
+  if (ymd < parsed.startDate || ymd > parsed.endDate) return false;
+  const exceptions = parsed.exceptions || [];
+  for (const ex of exceptions) {
+    if (ex.startDate && ex.endDate && ymd >= ex.startDate && ymd <= ex.endDate) {
+      return ex.type === 'open';
+    }
+  }
+  const closedWeekdays = parsed.closedWeekdays || [];
+  return !closedWeekdays.includes(date.getDay());
+}
+
+/** セッションIDから、その先祖をたどって年セッションのIDを返す */
+function sessionYearRootId(sessionId) {
+  let s = getSessionById(sessionId);
+  let guard = 0;
+  while (s && s.type !== 'year' && guard < 30) {
+    s = getSessionById(s.parentId);
+    guard++;
+  }
+  return s ? s.id : null;
+}
+
+/** 年セッションから対象セッションまでのパンくず(breadcrumb)配列を作る */
+function breadcrumbPathTo(sessionId) {
+  const path = [];
+  let s = getSessionById(sessionId);
+  let guard = 0;
+  while (s && guard < 30) {
+    path.unshift(s.id);
+    if (s.type === 'year') break;
+    s = getSessionById(s.parentId);
+    guard++;
+  }
+  return path;
+}
+
+/** 現在の年タブ内で、今日鑑賞可能なインフォメーションカードを集める(階層をまたいだ全年横断はしない) */
+function collectVisitableInfoCards() {
+  const currentYearId = state.breadcrumb[0];
+  if (!currentYearId) return [];
+  const today = new Date();
+  return state.cards.filter((c) => {
+    if (c.mediaType !== 'info' || !c.infoParsed) return false;
+    if (sessionYearRootId(c.sessionId) !== currentYearId) return false;
+    return isExhibitionVisitableOn(c.infoParsed, today);
+  });
+}
+
+/** インフォメーションカードが入っているセッションまでパンくずを遡ってから、その位置へジャンプする */
+function jumpToInfoCard(card) {
+  state.breadcrumb = breadcrumbPathTo(card.sessionId);
+  renderYearTabs();
+  renderBreadcrumb();
+  renderAllCards();
+  requestAnimationFrame(() => {
+    const el = cardElById(card.id);
+    if (!el) return;
+    const rect = els.viewport.getBoundingClientRect();
+    els.content.classList.add('canvas-content--animated');
+    viewportState.x = rect.width / 2 - (card.x + card.width / 2) * viewportState.scale;
+    viewportState.y = rect.height / 2 - (card.y + card.height / 2) * viewportState.scale;
+    applyViewportTransform();
+    setTimeout(() => els.content.classList.remove('canvas-content--animated'), 400);
+    el.classList.add('star-card--landed');
+    setTimeout(() => el.classList.remove('star-card--landed'), 1600);
+  });
+}
+
+/* ---- ヘッダーのティッカー(現在の年タブ内で鑑賞可能な展覧会をローテーション表示) ---- */
+
+let infoTickerItems = [];
+let infoTickerIndex = 0;
+let infoTickerTimer = null;
+const INFO_TICKER_ROTATE_MS = 5000;
+
+function refreshInfoTicker() {
+  infoTickerItems = collectVisitableInfoCards();
+  infoTickerIndex = 0;
+  renderInfoTicker();
+}
+
+function renderInfoTicker() {
+  if (!els.infoTicker) return;
+  if (infoTickerTimer) {
+    clearInterval(infoTickerTimer);
+    infoTickerTimer = null;
+  }
+  if (infoTickerItems.length === 0) {
+    els.infoTicker.hidden = true;
+    return;
+  }
+  els.infoTicker.hidden = false;
+  const card = infoTickerItems[infoTickerIndex];
+  const parsed = card.infoParsed;
+  els.infoTickerText.textContent = parsed.venue ? `${parsed.title} — ${parsed.venue}` : parsed.title;
+  els.infoTickerProgress.innerHTML = infoTickerItems
+    .map((_, i) => `<span class="${i === infoTickerIndex ? 'active' : ''}"></span>`)
+    .join('');
+
+  if (infoTickerItems.length > 1) {
+    infoTickerTimer = setInterval(() => {
+      infoTickerIndex = (infoTickerIndex + 1) % infoTickerItems.length;
+      renderInfoTicker();
+    }, INFO_TICKER_ROTATE_MS);
   }
 }
 
@@ -733,8 +1118,6 @@ function loadFullMedia(el, card) {
  * メモぶんだけカードを縦に伸ばす。
  */
 function syncCardHeight(el) {
-  const memoEl = el.querySelector('.star-card-memo');
-  if (!memoEl) return;
   // getBoundingClientRect() はキャンバスのズーム後の画面px を返すため、カード自身の
   // CSS px(ズーム前の論理値)に戻してから style.height に反映する。これをしないと、
   // キャンバスを縮小表示している間にカードを編集・追加した際、実際より小さい値が
@@ -744,8 +1127,11 @@ function syncCardHeight(el) {
     mediaEl.style.height = `${mediaEl.getBoundingClientRect().height / viewportState.scale}px`;
     mediaEl.style.flex = 'none';
   }
-  memoEl.style.height = 'auto';
-  memoEl.style.height = `${memoEl.scrollHeight}px`;
+  const memoEl = el.querySelector('.star-card-memo');
+  if (memoEl) {
+    memoEl.style.height = 'auto';
+    memoEl.style.height = `${memoEl.scrollHeight}px`;
+  }
   el.style.height = 'auto';
   const total = el.getBoundingClientRect().height / viewportState.scale;
   el.style.height = `${total}px`;
@@ -877,6 +1263,7 @@ function removeCardFromState(card, el) {
   if (idx !== -1) state.cards.splice(idx, 1);
   el.remove();
   redrawAsterismLines(); // 消えたカードに繋がっていた線も引き直しで自然に消える
+  if (card.mediaType === 'info') refreshInfoTicker();
   scheduleAutoSave();
 }
 
