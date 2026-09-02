@@ -11,6 +11,7 @@
 | キャンバス操作 | interact.js(ドラッグ・リサイズ・ピンチズーム) |
 | データ保存 | Google Drive API v3(ブラウザから直接、OAuth) |
 | OCR / AIガイド | Gemini API(ブラウザから直接、APIキー) |
+| 展覧会カレンダー同期 | Google Calendar API v3(ブラウザから直接、OAuth) |
 
 ## ファイル構成
 
@@ -22,6 +23,7 @@ constellation/
 │   ├── config.js   … アプリの既定設定(秘密情報は含まない。詳細は下記)
 │   ├── auth.js      … Google Identity Services によるOAuth
 │   ├── drive.js      … Drive API v3 ラッパー
+│   ├── calendar.js    … Calendar API v3 ラッパー(展覧会カレンダー同期)
 │   ├── gemini.js      … Gemini API ラッパー
 │   ├── canvas.js       … interact.js によるキャンバス操作
 │   └── app.js          … 画面のエントリーポイント
@@ -32,6 +34,13 @@ constellation/
 `Constellation` フォルダに、`constellation-data.json`(カードの位置・メモ等)と
 アップロードした画像ファイルとして保存されます(`drive.file` スコープ = このアプリが
 作成したファイルにのみアクセス可能)。
+
+インフォメーションカードで解析した展覧会の「鑑賞可能日」は、`展覧会`という名前の
+専用Googleカレンダー(このアプリが自動で新規作成する二次カレンダー)に、開廊日の
+まとまりごとの終日イベントとして反映されます(`calendar.app.created` スコープ =
+このアプリが作成したカレンダーにのみアクセス可能。既存の他のカレンダーは見えません)。
+同期はこのアプリを開いて情報を解析/修正した瞬間だけ行われ、常時バックグラウンドで
+同期し続けるものではありません。
 
 ## OAuthクライアントID・APIキーの扱いについて
 
@@ -57,6 +66,7 @@ Gemini APIキーを一切書き込みません。かわりにデプロイ後の�
 
 - **Google Drive API**
 - **Generative Language API**(Gemini API)
+- **Google Calendar API**
 
 ### 3. OAuth同意画面の設定
 

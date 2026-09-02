@@ -23,15 +23,20 @@ const CONFIG = {
   // (2026-08: gemini-2.5-flash が新規利用不可になったため gemini-3.6-flash に変更)
   GEMINI_MODEL: 'gemini-3.6-flash',
 
-  // Drive アクセススコープ。「アプリが作成/開いたファイルのみ」にアクセスする
-  // 非機微(non-sensitive寄り)スコープ。ユーザーのDrive全体は見えない。
-  DRIVE_SCOPES: 'https://www.googleapis.com/auth/drive.file',
+  // OAuthスコープ。どちらも「アプリが作成したものだけ」にアクセスする
+  // 非機微(non-sensitive寄り)スコープで統一している(ユーザーのDrive全体・既存カレンダー全体は見えない)。
+  // - drive.file: アプリが作成/開いたファイルのみ
+  // - calendar.app.created: アプリが作成した二次カレンダー(と、そのイベント)のみ
+  OAUTH_SCOPES: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.app.created',
 
   // データの保存先フォルダ名(ユーザーのマイドライブ直下に作成される)
   APP_FOLDER_NAME: 'Constellation',
 
   // 全カード情報をまとめて保存する JSON ファイル名
   DATA_FILE_NAME: 'constellation-data.json',
+
+  // インフォメーションカードの「鑑賞可能日」を同期する専用Googleカレンダーの名前
+  EXHIBITION_CALENDAR_NAME: '展覧会',
 };
 
 /** クライアントIDとAPIキーが両方入力済みか */

@@ -15,7 +15,7 @@ function initAuth(onSignedIn, onSignInFailed) {
   try {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: CONFIG.GOOGLE_CLIENT_ID,
-      scope: CONFIG.DRIVE_SCOPES,
+      scope: CONFIG.OAUTH_SCOPES,
       callback: (response) => {
         debugLog('OAuthコールバック受信, error=' + (response && response.error));
         if (response.error) {

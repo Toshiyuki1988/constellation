@@ -13,6 +13,9 @@ const state = {
   // Asterism: 自動の見た順の線のうち、個別に非表示にしたペア。
   // { id, sessionId, cardIdA, cardIdB }
   hiddenAutoLinks: [],
+  // インフォメーションカードの「鑑賞可能日」を同期する専用Googleカレンダー(「展覧会」)のID。
+  // 初回同期時に作成し、以後はこのIDを使い回す。
+  exhibitionCalendarId: null,
 };
 
 const FIRST_YEAR = 2025;
@@ -224,6 +227,7 @@ async function onSignedIn() {
     state.sessions = data.sessions || [];
     state.connections = data.connections || [];
     state.hiddenAutoLinks = data.hiddenAutoLinks || [];
+    state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -892,7 +896,9 @@ async function handleInfoCardParse(card, el) {
     } else {
       card.infoParsed = result;
       card.infoParseError = null;
-      setStatus('展覧会情報を解析しました');
+      setStatus('展覧会情報を解析しました。カレンダーに同期中…');
+      await syncInfoCardCalendar(card);
+      setStatus('展覧会情報を解析し、カレンダーに同期しました');
     }
   } catch (err) {
     console.error(err);
@@ -905,7 +911,7 @@ async function handleInfoCardParse(card, el) {
   refreshInfoTicker();
 }
 
-function handleInfoCardManualFix(card, el) {
+async function handleInfoCardManualFix(card, el) {
   const val = (cls) => el.querySelector(cls)?.value.trim() || '';
   const startDate = val('.fix-start');
   const endDate = val('.fix-end');
@@ -927,8 +933,10 @@ function handleInfoCardManualFix(card, el) {
     exceptions: partial.exceptions || [],
   };
   card.infoParseError = null;
+  setStatus('手動入力の内容で確定しました。カレンダーに同期中…');
+  await syncInfoCardCalendar(card);
   rerenderCardInPlace(card, el);
-  setStatus('手動入力の内容で確定しました');
+  setStatus('手動入力の内容で確定し、カレンダーに同期しました');
   scheduleAutoSave();
   refreshInfoTicker();
 }
@@ -954,6 +962,82 @@ function isExhibitionVisitableOn(parsed, date) {
   }
   const closedWeekdays = parsed.closedWeekdays || [];
   return !closedWeekdays.includes(date.getDay());
+}
+
+/* ---- インフォメーションカードの「鑑賞可能日」をGoogleカレンダー(「展覧会」)へ同期する ----
+ * ガントチャートのように、実際に鑑賞できる日のまとまり(連続した開廊日ブロック)ごとに
+ * 終日イベントを1つ作る。休廊日を挟むと複数ブロックに分かれる。
+ * 常時バックグラウンド同期ではなく、このアプリを開いて解析/手動修正した瞬間だけ動く
+ * (静的サイト+API直接呼び出しという構成上の制約)。 */
+
+function addOneDayYMD(ymd) {
+  const d = new Date(`${ymd}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return formatDateYMD(d);
+}
+
+/** 会期中、実際に鑑賞可能な日を連続ブロックに分けて返す([{start, end}, ...]、両端含む) */
+function computeVisitableBlocks(parsed) {
+  if (!parsed || !parsed.startDate || !parsed.endDate) return [];
+  const blocks = [];
+  let blockStart = null;
+  let prevYmd = null;
+  const cursor = new Date(`${parsed.startDate}T00:00:00`);
+  const end = new Date(`${parsed.endDate}T00:00:00`);
+  while (cursor <= end) {
+    const ymd = formatDateYMD(cursor);
+    if (isExhibitionVisitableOn(parsed, cursor)) {
+      if (!blockStart) blockStart = ymd;
+      prevYmd = ymd;
+    } else if (blockStart) {
+      blocks.push({ start: blockStart, end: prevYmd });
+      blockStart = null;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  if (blockStart) blocks.push({ start: blockStart, end: prevYmd });
+  return blocks;
+}
+
+/**
+ * カードの解析済み情報を「展覧会」カレンダーに反映する。差分更新はせず、このカードに紐づく
+ * 既存イベントを一旦全て消してから、鑑賞可能ブロックの数だけ作り直す(個人利用の規模では
+ * API呼び出し回数は問題にならないため、差分計算より単純さを優先した)。
+ * 失敗してもインフォカード自体の解析結果は失わない(ベストエフォート、エラーはコンソールのみ)。
+ */
+async function syncInfoCardCalendar(card) {
+  if (!card.infoParsed) return;
+  try {
+    state.exhibitionCalendarId = await ensureExhibitionCalendar(state.exhibitionCalendarId);
+    const existing = await listCardCalendarEvents(state.exhibitionCalendarId, card.id);
+    await Promise.all(existing.map((ev) => deleteCalendarEvent(state.exhibitionCalendarId, ev.id).catch(() => {})));
+
+    const parsed = card.infoParsed;
+    const summary = parsed.venue ? `${parsed.title || '(無題)'} - ${parsed.venue}` : (parsed.title || '(無題の展覧会)');
+    const blocks = computeVisitableBlocks(parsed);
+    for (const block of blocks) {
+      await insertCalendarEvent(state.exhibitionCalendarId, {
+        summary,
+        start: { date: block.start },
+        end: { date: addOneDayYMD(block.end) },
+        extendedProperties: { private: { constellationCardId: String(card.id) } },
+      });
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus('カレンダー同期に失敗しました(コンソールを確認)');
+  }
+}
+
+/** インフォカード削除時、そのカードに紐づくカレンダーイベントも削除する */
+async function removeInfoCardCalendarEvents(card) {
+  if (!state.exhibitionCalendarId) return;
+  try {
+    const existing = await listCardCalendarEvents(state.exhibitionCalendarId, card.id);
+    await Promise.all(existing.map((ev) => deleteCalendarEvent(state.exhibitionCalendarId, ev.id).catch(() => {})));
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 /** セッションIDから、その先祖をたどって年セッションのIDを返す */
@@ -1248,7 +1332,10 @@ function removeCardFromState(card, el) {
   if (idx !== -1) state.cards.splice(idx, 1);
   el.remove();
   redrawAsterismLines(); // 消えたカードに繋がっていた線も引き直しで自然に消える
-  if (card.mediaType === 'info') refreshInfoTicker();
+  if (card.mediaType === 'info') {
+    refreshInfoTicker();
+    if (card.infoParsed) removeInfoCardCalendarEvents(card);
+  }
   scheduleAutoSave();
 }
 
@@ -1515,6 +1602,7 @@ async function handleSave() {
       sessions: state.sessions,
       connections: state.connections,
       hiddenAutoLinks: state.hiddenAutoLinks,
+      exhibitionCalendarId: state.exhibitionCalendarId,
     });
     setStatus('自動保存しました');
   } catch (err) {
