@@ -740,6 +740,7 @@ function renderCard(card) {
  * タップでそのカードへジャンプする。ASTR(自動線・手動接続とも)は搭載しない、リマインダー用途。 */
 
 function infoCardInnerHtml(card) {
+  if (card.infoParsed) normalizeInfoParsedExceptions(card.infoParsed);
   const parsed = card.infoParsed;
   const expanded = Boolean(card.infoExpanded);
   const visitable = parsed ? isExhibitionVisitableOn(parsed, new Date()) : false;
@@ -770,7 +771,7 @@ function infoCardInnerHtml(card) {
 function infoParseResultHtml(parsed) {
   const closedLabels = { 0: '日', 1: '月', 2: '火', 3: '水', 4: '木', 5: '金', 6: '土' };
   const closedChips = (parsed.closedWeekdays || []).map((d) => `<span class="chip closed">${closedLabels[d] || d}</span>`).join('');
-  const exceptionChips = resolveDisplayExceptions(parsed.exceptions || [])
+  const exceptionChips = (parsed.exceptions || [])
     .map((ex) => `<span class="chip ${ex.type === 'open' ? 'exception' : 'closed'}">${escapeHtml(ex.startDate || '')}〜${escapeHtml(ex.endDate || '')}${ex.type === 'open' ? '開廊' : '休廊'}</span>`)
     .join('');
   return `
@@ -912,6 +913,7 @@ async function handleInfoCardParse(card, el) {
       setStatus('解析できませんでした。空欄だけ手動で補ってください', { important: true });
     } else {
       card.infoParsed = result;
+      normalizeInfoParsedExceptions(card.infoParsed);
       card.infoParseError = null;
       setStatus('展覧会情報を解析しました。カレンダーに同期中…');
       const synced = await syncInfoCardCalendar(card);
@@ -950,6 +952,7 @@ async function handleInfoCardManualFix(card, el) {
     closedWeekdays: partial.closedWeekdays || [],
     exceptions: partial.exceptions || [],
   };
+  normalizeInfoParsedExceptions(card.infoParsed);
   card.infoParseError = null;
   setStatus('手動入力の内容で確定しました。カレンダーに同期中…');
   const synced = await syncInfoCardCalendar(card);
@@ -990,13 +993,16 @@ function formatDateYMD(date) {
 /**
  * Geminiの解析結果が、同じ日にopenとclosedの矛盾したexceptionを両方含めてしまうことがある
  * (例: 期間限定で開廊するopen exceptionの期間内の曜日を、休廊曜日だからと個別にclosedでも
- * 列挙してしまう)。カード上の「例外」チップ表示でもisExhibitionVisitableOn()と同じ「open優先」
- * ルールで解決し、矛盾したチップが両方表示されて紛らわしくならないようにする。
+ * 列挙してしまう)。openと重なって矛盾しているclosed exceptionはそもそも「例外」ではない
+ * (休廊日パターン通りの、ただの通常営業日)ため、表示用に隠すのではなくcard.infoParsed自体から
+ * 取り除く。カードを描画するたびに呼ぶので、過去に(この正規化の実装前に)解析済みの
+ * カードも、再解析なしで次に開いた時点で自動的にきれいになる。
  */
-function resolveDisplayExceptions(exceptions) {
-  const opens = exceptions.filter((ex) => ex.type === 'open' && ex.startDate && ex.endDate);
+function normalizeInfoParsedExceptions(parsed) {
+  if (!parsed || !Array.isArray(parsed.exceptions) || parsed.exceptions.length === 0) return;
+  const opens = parsed.exceptions.filter((ex) => ex.type === 'open' && ex.startDate && ex.endDate);
   const overlapsOpen = (ex) => opens.some((o) => !(ex.endDate < o.startDate || ex.startDate > o.endDate));
-  return exceptions.filter((ex) => ex.type === 'open' || !ex.startDate || !ex.endDate || !overlapsOpen(ex));
+  parsed.exceptions = parsed.exceptions.filter((ex) => ex.type === 'open' || !ex.startDate || !ex.endDate || !overlapsOpen(ex));
 }
 
 function isExhibitionVisitableOn(parsed, date) {
