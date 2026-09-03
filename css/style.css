@@ -29,6 +29,7 @@ html, body {
 }
 
 .toolbar {
+  position: relative;
   flex: none;
   z-index: 10;
   display: flex;
@@ -135,6 +136,33 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+/* 時間のかかる処理(Drive同期・Gemini呼び出し・Overpass取得など)の進行を、ヘッダー下端の
+   細い線で視覚化する。setStatus()の busy/progress オプションから共通で制御される
+   (2026年9月、Mapping Storysの屋外取得が「押しても反応が無いように見える」不具合の対応として、
+   1箇所だけでなくアプリ全体の重い処理に広げた)。所要時間が読めない処理は不定(indeterminate)の
+   スライドアニメーション、件数が分かる処理(移行処理など)は実際の割合で幅を決める。 */
+.status-progress {
+  position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 2px; overflow: hidden;
+  background: rgba(0, 0, 0, 0.06);
+}
+.status-progress-bar {
+  position: absolute; top: 0; left: 0; width: 0%; height: 100%;
+  background: var(--text);
+  transition: width 0.25s ease-out;
+}
+.status-progress.indeterminate .status-progress-bar {
+  width: 30%;
+  animation: status-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes status-progress-slide {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-progress.indeterminate .status-progress-bar { animation: none; left: 0; width: 100%; opacity: 0.5; }
 }
 
 /* ---------- 年タブ・パンくず(セッションの入れ子ナビゲーション) ---------- */

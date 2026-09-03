@@ -48,6 +48,8 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolInfo = document.getElementById('tool-info');
   els.toolSummary = document.getElementById('tool-summary');
   els.status = document.getElementById('status');
+  els.statusProgress = document.getElementById('statusProgress');
+  els.statusProgressBar = document.getElementById('statusProgressBar');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
   els.imageInput = document.getElementById('image-input');
@@ -266,11 +268,31 @@ function toggleAuthUI(signedIn) {
 let importantStatusUntil = 0;
 const IMPORTANT_STATUS_HOLD_MS = 6000;
 
-/** @param {string} message @param {{important?: boolean}} [opts] */
+/**
+ * @param {string} message
+ * @param {{important?: boolean, busy?: boolean, progress?: number}} [opts]
+ *   busy: 所要時間が読めない処理中であることを示す(ヘッダー下の進行バーを不定表示にする)
+ *   progress: 0〜1の実際の割合が分かる処理で指定する(指定するとbusyより優先され、実測の幅で表示する)
+ *   どちらも指定しない呼び出し(=完了・失敗メッセージ)では、進行バーは自動的に消える。
+ */
 function setStatus(message, opts) {
   if (!opts?.important && Date.now() < importantStatusUntil) return;
   els.status.textContent = message;
   if (opts?.important) importantStatusUntil = Date.now() + IMPORTANT_STATUS_HOLD_MS;
+  updateStatusProgress(opts);
+}
+
+function updateStatusProgress(opts) {
+  const hasProgress = typeof opts?.progress === 'number';
+  const showing = hasProgress || Boolean(opts?.busy);
+  els.statusProgress.hidden = !showing;
+  if (!showing) return;
+  if (hasProgress) {
+    els.statusProgress.classList.remove('indeterminate');
+    els.statusProgressBar.style.width = `${Math.max(0, Math.min(1, opts.progress)) * 100}%`;
+  } else {
+    els.statusProgress.classList.add('indeterminate');
+  }
 }
 
 /* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ---------------- */
@@ -286,7 +308,7 @@ function scheduleAutoSave() {
 
 async function onSignedIn() {
   toggleAuthUI(true);
-  setStatus('Google Driveと同期中…');
+  setStatus('Google Driveと同期中…', { busy: true });
   try {
     state.folderId = await findOrCreateAppFolder();
     state.mediaFolderId = await findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId);
@@ -1214,7 +1236,7 @@ async function handleSummaryGenerate(card, el, modeOrCrewId) {
   btns.forEach((b) => { b.disabled = true; });
 
   const speakerLabel = crew ? crew.name : (mode === 'education' ? 'Education' : 'Academic');
-  setStatus(`${speakerLabel}の要約を作成中…`);
+  setStatus(`${speakerLabel}の要約を作成中…`, { busy: true });
   try {
     const sources = [];
     const context = collectSessionTextContext(card.sessionId, sources);
@@ -1304,7 +1326,7 @@ async function handleInfoCardParse(card, el) {
   const parseBtn = el.querySelector('.star-card-info-parse-btn');
   if (parseBtn) { parseBtn.disabled = true; parseBtn.textContent = '解析中…'; }
 
-  setStatus('展覧会情報を解析中…');
+  setStatus('展覧会情報を解析中…', { busy: true });
   try {
     const result = await parseExhibitionInfo(text);
     if (result.error) {
@@ -1316,7 +1338,7 @@ async function handleInfoCardParse(card, el) {
       normalizeInfoParsedExceptions(card.infoParsed);
       card.infoParseError = null;
       card.infoRawEditing = false; // 解析成功時は、コピペ欄をペンアイコンへ格納し直す
-      setStatus('展覧会情報を解析しました。カレンダーに同期中…');
+      setStatus('展覧会情報を解析しました。カレンダーに同期中…', { busy: true });
       const synced = await syncInfoCardCalendar(card);
       if (synced) setStatus('展覧会情報を解析し、カレンダーに同期しました');
     }
@@ -1356,7 +1378,7 @@ async function handleInfoCardManualFix(card, el) {
   normalizeInfoParsedExceptions(card.infoParsed);
   card.infoParseError = null;
   card.infoRawEditing = false; // 手動確定時も、コピペ欄をペンアイコンへ格納し直す
-  setStatus('手動入力の内容で確定しました。カレンダーに同期中…');
+  setStatus('手動入力の内容で確定しました。カレンダーに同期中…', { busy: true });
   const synced = await syncInfoCardCalendar(card);
   rerenderCardInPlace(card, el);
   if (synced) setStatus('手動入力の内容で確定し、カレンダーに同期しました');
@@ -1375,7 +1397,7 @@ async function handleInfoCardResync(card, el) {
   const resyncBtn = el.querySelector('.star-card-info-resync-btn');
   if (resyncBtn) { resyncBtn.disabled = true; resyncBtn.textContent = '同期中…'; }
 
-  setStatus('カレンダーに同期中…');
+  setStatus('カレンダーに同期中…', { busy: true });
   const synced = await syncInfoCardCalendar(card);
   infoCardParseInFlight.delete(card.id);
   if (resyncBtn) { resyncBtn.disabled = false; resyncBtn.textContent = 'カレンダーに同期'; }
@@ -1586,7 +1608,7 @@ async function migrateExistingMediaToFolders() {
   let done = 0;
   let failed = 0;
   for (const card of targets) {
-    setStatus(`移行中… (${done}/${targets.length})`);
+    setStatus(`移行中… (${done}/${targets.length})`, { progress: done / targets.length });
     try {
       const folderId = await resolveSessionMediaFolderId(card.sessionId);
       await moveFile(card.imageFileId, folderId);
@@ -2039,7 +2061,7 @@ async function handleCardExtract(card, el) {
     return;
   }
 
-  setStatus('文字を読み取り中…');
+  setStatus('文字を読み取り中…', { busy: true });
   let text;
   try {
     const blobUrl = await getFileBlobUrlCached(card.imageFileId);
@@ -2148,7 +2170,7 @@ async function handleViewportDrop(event) {
     return;
   }
 
-  setStatus('画像を取得中…');
+  setStatus('画像を取得中…', { busy: true });
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2324,7 +2346,7 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
-  setStatus('追加しました。アップロード中…');
+  setStatus('追加しました。アップロード中…', { busy: true });
   scheduleAutoSave(); // アップロード完了前にタブを閉じても、カードの存在自体は残るように
 
   uploadCardFileInBackground(card, blob, filename);

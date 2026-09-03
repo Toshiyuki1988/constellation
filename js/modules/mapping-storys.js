@@ -472,6 +472,7 @@
     const originalLabel = msEls.fetchBtn.textContent;
     msEls.fetchBtn.textContent = '現在地を取得中…';
     showFetchStatus('現在地の許可ダイアログが出ていたら「許可」を選んでください…', false);
+    setStatus('Mapping Storys: 現在地を取得中…', { busy: true });
     try {
       const pos = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 12000 });
@@ -481,6 +482,7 @@
 
       msEls.fetchBtn.textContent = '地図データを取得中…';
       showFetchStatus('地図サーバーへ問い合わせ中…(無料の公共サーバーのため20〜40秒程度かかることがあります。気長にお待ちください)', false);
+      setStatus('Mapping Storys: 地図サーバーへ問い合わせ中…', { busy: true });
       const query = buildOverpassQuery(lat0, lon0, radiusValue);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
@@ -500,6 +502,7 @@
       const built = buildShapesFromOverpass(json.elements || [], lat0, lon0);
       if (!built.shapes.length) {
         showFetchStatus('この範囲では建物・道路のデータが見つかりませんでした(半径を広げてみてください)', true);
+        setStatus('Mapping Storys: この範囲では地図データが見つかりませんでした', { important: true });
         return;
       }
       pendingOutdoor = built;
@@ -512,7 +515,9 @@
       setStatus(`半径${radiusValue}mの地図データを取得しました(${detail})`);
     } catch (err) {
       console.error(err);
-      showFetchStatus('取得に失敗しました: ' + describeOutdoorError(err), true);
+      const reason = describeOutdoorError(err);
+      showFetchStatus('取得に失敗しました: ' + reason, true);
+      setStatus('Mapping Storys: 地図データの取得に失敗しました: ' + reason, { important: true });
     } finally {
       msEls.fetchBtn.disabled = false;
       msEls.fetchBtn.textContent = originalLabel;
@@ -641,6 +646,7 @@
     msEls.deployBtn.disabled = true;
     const originalLabel = msEls.deployBtn.textContent;
     msEls.deployBtn.textContent = '展開中…';
+    setStatus('Mapping Storys: 地図を展開中…', { busy: true });
     try {
       const oldLayer = session.mapLayer;
       let newLayer;
