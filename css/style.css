@@ -769,6 +769,22 @@ html, body {
   pointer-events: auto;
 }
 
+/* 解析済み後、コピペ欄を畳んで代わりに出すペンアイコン(ズームジェスチャーとの競合防止) */
+.star-card-info-edit-raw-btn {
+  display: block;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.star-card-info-edit-raw-btn:hover { color: var(--text); border-color: var(--text); }
+
 .star-card-info-parse-btn {
   display: block;
   width: 100%;
@@ -814,6 +830,12 @@ html, body {
 }
 .star-card-info-result .chip.closed { color: var(--rust); border-color: rgba(179, 64, 43, 0.35); }
 .star-card-info-result .chip.exception { color: #2e7d32; border-color: rgba(46, 125, 50, 0.35); }
+
+.star-card-info-link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 .star-card-info-error {
   margin-top: 10px;

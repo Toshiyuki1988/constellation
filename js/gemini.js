@@ -63,10 +63,15 @@ async function ocrImage(blob) {
  * 別途持たずに済ませるため)。
  * URL入力(url_contextツールでの取得)は、TOKYO ART BEATなどクライアントサイドレンダリング
  * のサイトで本文が取得できず解析に失敗するため廃止した。ウェブページからのコピペを想定。
+ * 2026年9月に追加: google_searchツール(検索グラウンディング)を同じ1回の呼び出しに載せ、
+ * 本文から読み取ったtitle(アーティスト名を含む)とvenueを手がかりに、その展覧会の公式ページ
+ * URL(officialUrl)も一緒に探させる。1日のリクエスト上限はgenerateContentの呼び出し回数
+ * 単位でカウントされるため(ツール自体の呼び出し回数ではない)、既存の1日の無料枠を追加で
+ * 消費することなく実現できる。見つからない/確信が持てない場合はnullを返させる。
  * @param {string} text 案内文(展覧会ページ本文のコピペ、または手入力)
  * @returns {Promise<object>} 成功時は {title, venue, startDate, endDate, openTime, closeTime,
- *   closedWeekdays, exceptions}。会期を読み取れなかった場合は {error, partial} を返す
- *   (partialは読み取れた項目だけを含む)。ネットワーク/APIエラー自体は例外として投げる。
+ *   closedWeekdays, exceptions, officialUrl}。会期を読み取れなかった場合は {error, partial} を
+ *   返す(partialは読み取れた項目だけを含む)。ネットワーク/APIエラー自体は例外として投げる。
  */
 async function parseExhibitionInfo(text) {
   const prompt =
@@ -80,8 +85,13 @@ async function parseExhibitionInfo(text) {
     '  "openTime": "HH:MM",\n' +
     '  "closeTime": "HH:MM",\n' +
     '  "closedWeekdays": [0=日曜〜6=土曜の整数の配列。定休の曜日だけを入れる],\n' +
-    '  "exceptions": [{"type": "open または closed", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "note": "補足(任意)"}]\n' +
+    '  "exceptions": [{"type": "open または closed", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "note": "補足(任意)"}],\n' +
+    '  "officialUrl": "この展覧会の公式ページURL(美術館・ギャラリー自身のサイト上の、この展覧会専用のページ)。' +
+    '検索して見つけた場合のみ入れ、確信が持てなければnull"\n' +
     '}\n' +
+    'officialUrlについては、上で読み取ったtitle(アーティスト名を含む)とvenue(会場名)を検索語として' +
+    'Google検索を行い、レビュー記事やSNS・チケットサイトではなく、美術館・ギャラリー自身が公開している' +
+    'その展覧会専用のページを1つだけ選んでください。見つからなければ無理に埋めずnullにしてください。\n' +
     'closedWeekdaysには「毎週◯曜日定休」のような曜日パターンだけを入れ、それ以外の例外は全てexceptionsで表現してください。' +
     '具体的には次のような記載を、本文全体から見落とさず探して反映してください。\n' +
     '- 「祝日は休廊」→ 該当する具体的な祝日の日付をexceptionsにtype:"closed"として個別に列挙(日本の祝日カレンダーの知識を使って構いません)\n' +
@@ -97,7 +107,7 @@ async function parseExhibitionInfo(text) {
     '開閉の記載が無ければ、exceptionsは空配列のままにしてください。' +
     '読み取れない項目はnullにしてください。案内文:\n\n' + text;
 
-  const raw = await askGemini({ prompt });
+  const raw = await askGemini({ prompt, tools: [{ google_search: {} }] });
   const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '');
 
   let parsed;
@@ -105,6 +115,12 @@ async function parseExhibitionInfo(text) {
     parsed = JSON.parse(cleaned);
   } catch (err) {
     return { error: '応答をJSONとして解析できませんでした' };
+  }
+  // http(s)以外(javascript:等)が紛れ込んでいた場合に備え、リンクとして使う前に必ず検査する
+  if (typeof parsed.officialUrl !== 'string' || !/^https?:\/\//i.test(parsed.officialUrl.trim())) {
+    parsed.officialUrl = null;
+  } else {
+    parsed.officialUrl = parsed.officialUrl.trim();
   }
   if (!parsed.startDate || !parsed.endDate) {
     return { error: '会期(開始日・終了日)を読み取れませんでした', partial: parsed };

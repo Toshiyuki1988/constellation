@@ -383,7 +383,7 @@ function attachCardGestures(el) {
 
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('.star-card-handle, .star-card-hex')) return; // ハンドル/編集ガイドのボタンは専用処理
-    if (event.target.closest('button, textarea, input')) return;
+    if (event.target.closest('button, textarea, input, a')) return; // 公式ページリンク(<a>)などはカードのドラッグ/長押し処理の対象外
     if (pointerId !== null) return; // 既に1点を追跡中なら追加のポインタは無視
 
     // iOSなどはAudioContextの生成/再開がユーザー操作に直接紐づく同期呼び出しでないと

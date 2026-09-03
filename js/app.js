@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.signOutBtn = document.getElementById('sign-out-btn');
   els.toolUpload = document.getElementById('tool-upload');
   els.toolCamera = document.getElementById('tool-camera');
-  els.toolOcr = document.getElementById('tool-ocr');
+  els.toolText = document.getElementById('tool-text');
   els.toolVideo = document.getElementById('tool-video');
   els.toolAudio = document.getElementById('tool-audio');
   els.toolSession = document.getElementById('tool-session');
@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolUpload.addEventListener('click', () => els.imageInput.click());
   els.imageInput.addEventListener('change', handleImageSelected);
   els.toolCamera.addEventListener('click', () => handleOpenCamera('photo'));
-  els.toolOcr.addEventListener('click', () => handleOpenCamera('caption'));
+  els.toolText.addEventListener('click', handleOpenTextTool);
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
   els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
   els.toolSession.addEventListener('click', handleCreateSession);
@@ -122,7 +122,7 @@ function buildPieTools() {
   return [
     { label: 'アップロード', icon: els.toolUpload.querySelector('svg').outerHTML, action: () => els.imageInput.click() },
     { label: 'カメラ', icon: els.toolCamera.querySelector('svg').outerHTML, action: () => handleOpenCamera('photo') },
-    { label: 'OCR', icon: els.toolOcr.querySelector('svg').outerHTML, action: () => handleOpenCamera('caption') },
+    { label: 'テクスト', icon: els.toolText.querySelector('svg').outerHTML, action: handleOpenTextTool },
     { label: '動画撮影', icon: els.toolVideo.querySelector('svg').outerHTML, action: () => handleOpenCamera('video') },
     { label: '音声録音', icon: els.toolAudio.querySelector('svg').outerHTML, action: () => handleOpenCamera('audio') },
     // PCのマウスでは背景2本指ダブルタップが使えないため、モジュール共通キーパッドへの
@@ -205,7 +205,7 @@ function toggleAuthUI(signedIn) {
   els.signOutBtn.hidden = !signedIn;
   els.toolUpload.disabled = !signedIn;
   els.toolCamera.disabled = !signedIn;
-  els.toolOcr.disabled = !signedIn;
+  els.toolText.disabled = !signedIn;
   els.toolVideo.disabled = !signedIn;
   els.toolAudio.disabled = !signedIn;
   els.toolSession.disabled = !signedIn;
@@ -360,7 +360,11 @@ function enterSession(id, isYear) {
 }
 
 async function handleCreateSession() {
-  const useOcr = window.confirm('OCRでセッション名を読み取りますか?\n(キャンセルすると手入力になります)');
+  const useOcr = window.confirm(
+    'セッション名の入力方法を選んでください。\n\n' +
+    '「OK」: OCRで読み取る(カメラを起動)\n' +
+    '「キャンセル」: 手入力する'
+  );
   let name;
   if (useOcr) {
     const result = await openCamera('caption');
@@ -821,14 +825,29 @@ function infoCardInnerHtml(card) {
       ${displayVenue ? `<p class="star-card-info-venue">${escapeHtml(displayVenue)}</p>` : ''}
     </div>
     <div class="star-card-info-body" ${expanded ? '' : 'hidden'}>
-      <p class="star-card-info-label">展覧会ページの本文をコピペ</p>
-      <textarea class="star-card-info-text" placeholder="会場名・会期・時間などのテキストを貼り付け">${escapeHtml(card.memo || '')}</textarea>
-      <button class="star-card-info-parse-btn">解析する</button>
+      ${infoRawTextSectionHtml(card)}
       ${parsed ? infoParseResultHtml(parsed) : ''}
       ${card.infoParseError ? infoParseErrorHtml(card) : ''}
     </div>
     ${EDIT_GUIDE_HANDLES_HTML}
     ${editGuideHexHtml('info')}
+  `;
+}
+
+/**
+ * 展覧会ページ本文のコピペ欄。一度解析済み(card.infoParsed)になった後もこの欄を常時展開
+ * したままだと、カードのほとんどの面積でポインタがtextarea上から始まってしまい、キャンバスの
+ * ピンチズームへポインタが伝わらない(wireInfoCard()でtextareaのpointerdownをstopPropagation
+ * しているため)。解析済みならペンアイコン1つに格納し、押した時だけ展開してズームとの競合を防ぐ。
+ */
+function infoRawTextSectionHtml(card) {
+  if (card.infoParsed && !card.infoRawEditing) {
+    return '<button class="star-card-info-edit-raw-btn" title="展覧会ページの本文を編集">✎ 本文を編集</button>';
+  }
+  return `
+    <p class="star-card-info-label">展覧会ページの本文をコピペ</p>
+    <textarea class="star-card-info-text" placeholder="会場名・会期・時間などのテキストを貼り付け">${escapeHtml(card.memo || '')}</textarea>
+    <button class="star-card-info-parse-btn">解析する</button>
   `;
 }
 
@@ -844,6 +863,7 @@ function infoParseResultHtml(parsed) {
       ${parsed.openTime ? `<div class="row"><b>時間</b><span>${escapeHtml(parsed.openTime)} 〜 ${escapeHtml(parsed.closeTime || '?')}</span></div>` : ''}
       ${closedChips ? `<div class="row"><b>休廊日</b><span class="chip-row">${closedChips}</span></div>` : ''}
       ${exceptionChips ? `<div class="row"><b>例外</b><span class="chip-row">${exceptionChips}</span></div>` : ''}
+      ${parsed.officialUrl ? `<div class="row"><b>リンク</b><span><a class="star-card-info-link" href="${escapeHtml(parsed.officialUrl)}" target="_blank" rel="noopener noreferrer">公式ページ</a></span></div>` : ''}
     </div>
     <button class="star-card-info-resync-btn" title="Geminiを呼ばず、この解析結果だけをカレンダーに反映し直す">カレンダーに同期</button>
   `;
@@ -869,9 +889,18 @@ function infoParseErrorHtml(card) {
 function wireInfoCard(card, el) {
   const textEl = el.querySelector('.star-card-info-text');
   const parseBtn = el.querySelector('.star-card-info-parse-btn');
+  const editRawBtn = el.querySelector('.star-card-info-edit-raw-btn');
   const fixBtn = el.querySelector('.star-card-info-fix-btn');
   const resyncBtn = el.querySelector('.star-card-info-resync-btn');
 
+  if (editRawBtn) {
+    editRawBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    editRawBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      card.infoRawEditing = true;
+      rerenderCardInPlace(card, el);
+    });
+  }
   if (textEl) {
     textEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     textEl.addEventListener('input', () => {
@@ -1165,6 +1194,7 @@ async function handleInfoCardParse(card, el) {
       card.infoParsed = result;
       normalizeInfoParsedExceptions(card.infoParsed);
       card.infoParseError = null;
+      card.infoRawEditing = false; // 解析成功時は、コピペ欄をペンアイコンへ格納し直す
       setStatus('展覧会情報を解析しました。カレンダーに同期中…');
       const synced = await syncInfoCardCalendar(card);
       if (synced) setStatus('展覧会情報を解析し、カレンダーに同期しました');
@@ -1201,9 +1231,11 @@ async function handleInfoCardManualFix(card, el) {
     closeTime: closeTime || null,
     closedWeekdays: partial.closedWeekdays || [],
     exceptions: partial.exceptions || [],
+    officialUrl: partial.officialUrl || null,
   };
   normalizeInfoParsedExceptions(card.infoParsed);
   card.infoParseError = null;
+  card.infoRawEditing = false; // 手動確定時も、コピペ欄をペンアイコンへ格納し直す
   setStatus('手動入力の内容で確定しました。カレンダーに同期中…');
   const synced = await syncInfoCardCalendar(card);
   rerenderCardInPlace(card, el);
@@ -1344,6 +1376,7 @@ async function syncInfoCardCalendar(card) {
     for (const block of blocks) {
       await insertCalendarEvent(state.exhibitionCalendarId, {
         summary,
+        description: parsed.officialUrl || undefined,
         start: { date: block.start },
         end: { date: addOneDayYMD(block.end) },
         extendedProperties: { private: { constellationCardId: String(card.id) } },
@@ -2066,6 +2099,27 @@ function extensionForMime(mimeType, fallback) {
   if (mimeType.includes('mp4')) return 'mp4';
   if (mimeType.includes('webm')) return 'webm';
   return fallback;
+}
+
+/**
+ * ボトムツールバー/CONSTELLATION PIEの「テクスト」ボタン。OCR(カメラでキャプションを撮影して
+ * 読み取る)と直接入力(カメラを使わずその場で手入力する)のどちらにするかをまず確認する
+ * (handleCreateSession()のセッション名入力で使っているのと同じ、window.confirmによる二択の踏襲)。
+ */
+async function handleOpenTextTool() {
+  const useOcr = window.confirm(
+    'テクストの入力方法を選んでください。\n\n' +
+    '「OK」: OCRで読み取る(カメラを起動)\n' +
+    '「キャンセル」: 直接入力する'
+  );
+  if (useOcr) {
+    await handleOpenCamera('caption');
+  } else {
+    const card = createTextCard('');
+    const el = cardElById(card.id);
+    const memoEl = el?.querySelector('.star-card-memo');
+    if (memoEl) memoEl.focus();
+  }
 }
 
 /** テクストモードの読み取り結果からカードを作る(画像を伴わないため Drive アップロードは不要) */
