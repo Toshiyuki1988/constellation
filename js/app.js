@@ -459,6 +459,7 @@ async function handleCreateSession() {
 
 function renderAllCards() {
   els.content.innerHTML = '';
+  if (window.renderMappingStorysLayer) window.renderMappingStorysLayer(); // Mapping Storys: カードより先に挿入し、最背面の地図として敷く
   createAsterismLayer();
   const currentId = activeSessionId();
   state.cards

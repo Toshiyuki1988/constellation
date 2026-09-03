@@ -13,6 +13,7 @@
 //   playWormGateOpenSound()    WormGate起動時の「パァーン」
 //   playWormGateRingTickSound()WormGateのリング回転中の「ピルルル」(呼ぶ間隔は呼び出し側が決める)
 //   playWormGateSelectSound()  WormGateで写真を選んでジャンプする時の「キュッ」
+//   playMappingStorysDeploySound() Mapping Storysで地図をキャンバスへ展開する時の「シュワァーン…」
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -295,4 +296,50 @@ function playWormGateSelectSound() {
   osc.connect(gain).connect(highpass).connect(c.destination);
   osc.start(now);
   osc.stop(now + 0.06);
+}
+
+/** Mapping Storysで地図をキャンバスへ展開する:「シュワァーン…」。地面が広がるように包み込む
+ *  低めのパッド(2声デチューン)+ 遅れて立ち上がる高音のきらめき(広いリバーブ)。WormGateの
+ *  弾けるような開始音とは対照的に、ゆっくり満ちていく持続音にして「地図が広がる」感触を出す。 */
+function playMappingStorysDeploySound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const filter = c.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 1100;
+  filter.connect(c.destination);
+
+  const padGain = c.createGain();
+  padGain.gain.setValueAtTime(0.0001, now);
+  padGain.gain.exponentialRampToValueAtTime(0.1, now + 0.4);
+  padGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.15);
+  padGain.connect(filter);
+  [196, 198.5].forEach((freq) => { // わずかにデチューンした2声でうねりを作る
+    const osc = c.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    osc.connect(padGain);
+    osc.start(now);
+    osc.stop(now + 1.2);
+  });
+
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  const wetGain = c.createGain();
+  wetGain.gain.value = 0.3;
+  convolver.connect(wetGain).connect(c.destination);
+
+  const shimmerGain = c.createGain();
+  shimmerGain.gain.setValueAtTime(0.0001, now + 0.18);
+  shimmerGain.gain.exponentialRampToValueAtTime(0.05, now + 0.55);
+  shimmerGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.3);
+  shimmerGain.connect(convolver);
+  const shimmerOsc = c.createOscillator();
+  shimmerOsc.type = 'sine';
+  shimmerOsc.frequency.setValueAtTime(1500, now + 0.18);
+  shimmerOsc.frequency.exponentialRampToValueAtTime(2500, now + 1.0);
+  shimmerOsc.connect(shimmerGain);
+  shimmerOsc.start(now + 0.18);
+  shimmerOsc.stop(now + 1.35);
 }
