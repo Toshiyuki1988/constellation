@@ -84,6 +84,12 @@ function ensureCameraDom() {
     holdChipText: document.getElementById('hold-chip-text'),
     ocrProgress: document.getElementById('ocr-progress'),
     capBtn: document.getElementById('camera-cap-btn'),
+    freezeWrap: document.getElementById('caption-freeze-wrap'),
+    selectLayer: document.getElementById('caption-select-layer'),
+    selectRect: document.getElementById('caption-select-rect'),
+    selectActions: document.getElementById('caption-select-actions'),
+    selectRetakeBtn: document.getElementById('caption-select-retake'),
+    selectRunBtn: document.getElementById('caption-select-run'),
 
     videoScreen: document.getElementById('camera-screen-video'),
     videoVideo: document.getElementById('camera-video-video'),
@@ -103,7 +109,10 @@ function wireCameraEvents() {
   camEls.closeBtn.addEventListener('click', closeCamera);
 
   camEls.shutterPhoto.addEventListener('click', capturePhoto);
-  camEls.capBtn.addEventListener('click', handleCaptionRead);
+  camEls.capBtn.addEventListener('click', captureForSelection);
+  camEls.selectRetakeBtn.addEventListener('click', resetCaptionState);
+  camEls.selectRunBtn.addEventListener('click', handleSelectionRun);
+  wireSelectionLayer();
 
   camEls.videoRecBtn.addEventListener('click', () => {
     if (isRecording()) {
@@ -305,7 +314,8 @@ function tryApplyFocusPoint(x, y, width, height) {
 
 function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
   screenEl.addEventListener('click', (e) => {
-    if (e.target.closest('button')) return;
+    // 選択モード中(静止フレームを見ている間)はタップフォーカスの対象外
+    if (e.target.closest('button, .cam-select-layer')) return;
     const rect = screenEl.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -317,10 +327,10 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
 
 /* ---------------- 撮影(canvasへフレーム描画してBlob化) ---------------- */
 
-function captureFrameBlob(videoEl, maxEdge, quality) {
+function captureFrameToCanvas(videoEl, maxEdge) {
   const vw = videoEl.videoWidth;
   const vh = videoEl.videoHeight;
-  if (!vw || !vh) return Promise.reject(new Error('カメラ映像の準備ができていません'));
+  if (!vw || !vh) throw new Error('カメラ映像の準備ができていません');
   let w = vw;
   let h = vh;
   const longest = Math.max(w, h);
@@ -333,9 +343,18 @@ function captureFrameBlob(videoEl, maxEdge, quality) {
   canvas.width = w;
   canvas.height = h;
   canvas.getContext('2d').drawImage(videoEl, 0, 0, w, h);
+  return canvas;
+}
+
+function canvasToBlob(canvas, quality) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の生成に失敗しました'))), 'image/jpeg', quality);
   });
+}
+
+async function captureFrameBlob(videoEl, maxEdge, quality) {
+  const canvas = captureFrameToCanvas(videoEl, maxEdge);
+  return canvasToBlob(canvas, quality);
 }
 
 async function capturePhoto() {
@@ -354,7 +373,17 @@ async function capturePhoto() {
 
 /* ---------------- テクストモード(キャプションだけをその場で読み取る) ----------------
    読み取りに使った写真そのものはカードに残さない(OCR用の使い捨て)。
-   読み取れたテキストだけをテクストカードとして返す。 */
+   読み取れたテキストだけをテクストカードとして返す。
+   撮影すると即OCRするのではなく、一度静止フレームを見せて「読み取りたい範囲」を
+   指でなぞって選べるようにする(2026年9月追加)。選ばなければ全体を送る、従来通りの挙動。
+   これは長いキャプション文の中から一部だけ拾いたい/余計な文字を除きたい場合のため。 */
+
+let captionFreezeCanvas = null; // 撮影直後の静止フレーム(選択モード中だけ保持)
+let captionSelection = null; // 選択レイヤー内のCSSピクセル座標 {x, y, w, h}。null = 未選択(全体)
+let selectPointerActive = false;
+let selectPointerId = null;
+let selectStartX = 0;
+let selectStartY = 0;
 
 function resetCaptionState() {
   camEls.holdChip.classList.remove('show');
@@ -362,15 +391,154 @@ function resetCaptionState() {
   camEls.capBtn.hidden = false;
   camEls.capBtn.disabled = false;
   camEls.captionHint.textContent = '画面にキャプションを収めてタップ';
+  captionFreezeCanvas = null;
+  captionSelection = null;
+  camEls.freezeWrap.classList.remove('show');
+  camEls.freezeWrap.innerHTML = '';
+  camEls.selectLayer.classList.remove('show');
+  camEls.selectRect.hidden = true;
+  camEls.selectActions.classList.remove('show');
+  camEls.selectRunBtn.disabled = false;
+  camEls.selectRetakeBtn.disabled = false;
+  camEls.tiltLayerCaption.style.visibility = '';
+  camEls.alignPulseCaption.style.visibility = '';
 }
 
 function camDebugLog(msg) {
   if (typeof debugLog === 'function') debugLog(msg);
 }
 
-async function handleCaptionRead() {
+/** 「タップして読み取る」: 撮影してすぐOCRはせず、選択モードへ移る */
+async function captureForSelection() {
   if (!camStream) return;
   camEls.capBtn.disabled = true;
+  try {
+    const canvas = captureFrameToCanvas(camEls.videoCaption, 2400);
+    playShutter();
+    enterSelectionMode(canvas);
+  } catch (err) {
+    console.error(err);
+    showCameraError('撮影に失敗しました');
+    camEls.capBtn.disabled = false;
+  }
+}
+
+function enterSelectionMode(canvas) {
+  captionFreezeCanvas = canvas;
+  captionSelection = null;
+  camEls.freezeWrap.innerHTML = '';
+  camEls.freezeWrap.appendChild(canvas);
+  camEls.freezeWrap.classList.add('show');
+  camEls.selectLayer.classList.add('show');
+  camEls.selectRect.hidden = true;
+  camEls.selectActions.classList.add('show');
+  camEls.capBtn.hidden = true;
+  camEls.tiltLayerCaption.style.visibility = 'hidden'; // 静止画には傾きガイド/正対インジケーターの意味が無い
+  camEls.alignPulseCaption.style.visibility = 'hidden';
+  camEls.captionHint.textContent = '文字の範囲を指でなぞって選択(そのままなら全体を読み取ります)';
+  updateSelectRunLabel();
+}
+
+function updateSelectRunLabel() {
+  camEls.selectRunBtn.textContent = captionSelection ? 'この範囲を読み取る' : '全体を読み取る';
+}
+
+/** 選択レイヤー上のドラッグで矩形を描く。指を離すまで始点を固定し、終点だけ動かす。 */
+function wireSelectionLayer() {
+  const layer = camEls.selectLayer;
+  layer.addEventListener('pointerdown', (e) => {
+    const rect = layer.getBoundingClientRect();
+    selectStartX = e.clientX - rect.left;
+    selectStartY = e.clientY - rect.top;
+    selectPointerActive = true;
+    selectPointerId = e.pointerId;
+    try { layer.setPointerCapture(e.pointerId); } catch (err) { /* 無効なpointerIdは無視 */ }
+    updateSelectRectFromPoints(selectStartX, selectStartY, selectStartX, selectStartY);
+  });
+  layer.addEventListener('pointermove', (e) => {
+    if (!selectPointerActive || e.pointerId !== selectPointerId) return;
+    const rect = layer.getBoundingClientRect();
+    updateSelectRectFromPoints(selectStartX, selectStartY, e.clientX - rect.left, e.clientY - rect.top);
+  });
+  const endSelect = (e) => {
+    if (e.pointerId !== selectPointerId) return;
+    selectPointerActive = false;
+    selectPointerId = null;
+  };
+  layer.addEventListener('pointerup', endSelect);
+  layer.addEventListener('pointercancel', endSelect);
+}
+
+function updateSelectRectFromPoints(x0, y0, x1, y1) {
+  const x = Math.min(x0, x1);
+  const y = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0);
+  const h = Math.abs(y1 - y0);
+  // 誤タップ対策: 小さすぎる矩形は「選択なし」(=全体を読み取る)として扱う
+  if (w < 8 || h < 8) {
+    captionSelection = null;
+    camEls.selectRect.hidden = true;
+  } else {
+    captionSelection = { x, y, w, h };
+    camEls.selectRect.hidden = false;
+    camEls.selectRect.style.left = `${x}px`;
+    camEls.selectRect.style.top = `${y}px`;
+    camEls.selectRect.style.width = `${w}px`;
+    camEls.selectRect.style.height = `${h}px`;
+  }
+  updateSelectRunLabel();
+}
+
+/**
+ * object-fit:containで表示された画像の、コンテナ内での実際の描画矩形(レターボックス分の
+ * オフセットを含む)を求める。選択レイヤー上のCSSピクセル座標を、元画像のピクセル座標へ
+ * 変換するために使う。
+ */
+function computeContainRect(containerW, containerH, imgW, imgH) {
+  const containerRatio = containerW / containerH;
+  const imgRatio = imgW / imgH;
+  let renderW;
+  let renderH;
+  if (imgRatio > containerRatio) {
+    renderW = containerW;
+    renderH = containerW / imgRatio;
+  } else {
+    renderH = containerH;
+    renderW = containerH * imgRatio;
+  }
+  return { offsetX: (containerW - renderW) / 2, offsetY: (containerH - renderH) / 2, renderW, renderH };
+}
+
+/** 静止フレーム(sourceCanvas)から、選択レイヤー上の矩形(CSSピクセル座標)が指す部分だけを切り出す */
+function cropCanvasToBlob(sourceCanvas, containerEl, selRect, quality) {
+  const containerRect = containerEl.getBoundingClientRect();
+  const { offsetX, offsetY, renderW, renderH } = computeContainRect(
+    containerRect.width, containerRect.height, sourceCanvas.width, sourceCanvas.height
+  );
+  const scale = sourceCanvas.width / renderW;
+  // レターボックス部分(画像が実際には描かれていない余白)にはみ出た選択は、画像の範囲にクランプする
+  const selX0 = Math.max(selRect.x, offsetX);
+  const selY0 = Math.max(selRect.y, offsetY);
+  const selX1 = Math.min(selRect.x + selRect.w, offsetX + renderW);
+  const selY1 = Math.min(selRect.y + selRect.h, offsetY + renderH);
+
+  const cropX = Math.max(0, (selX0 - offsetX) * scale);
+  const cropY = Math.max(0, (selY0 - offsetY) * scale);
+  const cropW = Math.max(1, (selX1 - selX0) * scale);
+  const cropH = Math.max(1, (selY1 - selY0) * scale);
+
+  const out = document.createElement('canvas');
+  out.width = Math.round(cropW);
+  out.height = Math.round(cropH);
+  out.getContext('2d').drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, out.width, out.height);
+  return canvasToBlob(out, quality);
+}
+
+/** 「この範囲を読み取る」/「全体を読み取る」ボタン */
+async function handleSelectionRun() {
+  if (!captionFreezeCanvas) return;
+  camEls.selectRunBtn.disabled = true;
+  camEls.selectRetakeBtn.disabled = true;
   camEls.captionHint.textContent = '読み取り中…';
   // Gemini応答は所要時間が読めないため、進捗率ではなく「動いている」ことだけを示す
   // 不定進捗のスライドバーで表現する。
@@ -379,14 +547,16 @@ async function handleCaptionRead() {
     // OCR用は取り込み後の作品写真(1600px)より高い解像度・画質で送る。
     // 文字の視認性が最優先なので、ダウンスケールで潰れないようにする。
     // (このBlobはOCRにのみ使い、成功しても保存・アップロードはしない)
-    const blob = await captureFrameBlob(camEls.videoCaption, 2400, 0.92);
-    playShutter();
-    camDebugLog(`OCR送信 size=${blob.size}B type=${blob.type}`);
+    const blob = captionSelection
+      ? await cropCanvasToBlob(captionFreezeCanvas, camEls.freezeWrap, captionSelection, 0.92)
+      : await canvasToBlob(captionFreezeCanvas, 0.92);
+    camDebugLog(`OCR送信(選択=${captionSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
     const text = await ocrImage(blob);
     camDebugLog(`OCR結果: ${JSON.stringify(text)}`);
     if (!text || text.includes('(テキストなし)')) {
-      camEls.captionHint.textContent = '文字を検出できませんでした。もう一度お試しください';
-      camEls.capBtn.disabled = false;
+      camEls.captionHint.textContent = '文字を検出できませんでした。選択し直すか撮り直してください';
+      camEls.selectRunBtn.disabled = false;
+      camEls.selectRetakeBtn.disabled = false;
       return;
     }
     camEls.holdChipText.textContent = text.split('\n')[0].slice(0, 60);
@@ -397,7 +567,8 @@ async function handleCaptionRead() {
     console.error(err);
     camDebugLog('OCRエラー: ' + err.message);
     camEls.captionHint.textContent = '読み取りに失敗しました(' + err.message + ')';
-    camEls.capBtn.disabled = false;
+    camEls.selectRunBtn.disabled = false;
+    camEls.selectRetakeBtn.disabled = false;
   } finally {
     camEls.ocrProgress.hidden = true;
   }
