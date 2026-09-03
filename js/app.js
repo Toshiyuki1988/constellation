@@ -898,19 +898,34 @@ function infoRawTextSectionHtml(card) {
   `;
 }
 
+/**
+ * 解析結果(title・venue)からGoogle検索結果ページのURLを組み立てる。Geminiには一切問い合わせず
+ * (=無料枠を消費しない)、クライアントサイドだけで完結させる。以前はGeminiのgoogle_searchツール
+ * (検索グラウンディング)で公式ページそのものを探させていたが、請求先アカウント非紐付けの
+ * 無料キーでは検索グラウンディングの割り当てが無く、呼んだ瞬間に429 RESOURCE_EXHAUSTEDで
+ * 解析全体が失敗する不具合が実機で確認されたため撤回し、この方式に置き換えた(2026年9月)。
+ * 公式ページを断定できるわけではないが、タップすればユーザー自身がすぐ確認できる。
+ */
+function exhibitionSearchUrl(parsed) {
+  const query = [parsed.title, parsed.venue].filter(Boolean).join(' ');
+  if (!query) return null;
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+}
+
 function infoParseResultHtml(parsed) {
   const closedLabels = { 0: '日', 1: '月', 2: '火', 3: '水', 4: '木', 5: '金', 6: '土' };
   const closedChips = (parsed.closedWeekdays || []).map((d) => `<span class="chip closed">${closedLabels[d] || d}</span>`).join('');
   const exceptionChips = (parsed.exceptions || [])
     .map((ex) => `<span class="chip ${ex.type === 'open' ? 'exception' : 'closed'}">${escapeHtml(ex.startDate || '')}〜${escapeHtml(ex.endDate || '')}${ex.type === 'open' ? '開廊' : '休廊'}</span>`)
     .join('');
+  const searchUrl = exhibitionSearchUrl(parsed);
   return `
     <div class="star-card-info-result">
       <div class="row"><b>会期</b><span>${escapeHtml(parsed.startDate || '?')} 〜 ${escapeHtml(parsed.endDate || '?')}</span></div>
       ${parsed.openTime ? `<div class="row"><b>時間</b><span>${escapeHtml(parsed.openTime)} 〜 ${escapeHtml(parsed.closeTime || '?')}</span></div>` : ''}
       ${closedChips ? `<div class="row"><b>休廊日</b><span class="chip-row">${closedChips}</span></div>` : ''}
       ${exceptionChips ? `<div class="row"><b>例外</b><span class="chip-row">${exceptionChips}</span></div>` : ''}
-      ${parsed.officialUrl ? `<div class="row"><b>リンク</b><span><a class="star-card-info-link" href="${escapeHtml(parsed.officialUrl)}" target="_blank" rel="noopener noreferrer">公式ページ</a></span></div>` : ''}
+      ${searchUrl ? `<div class="row"><b>リンク</b><span><a class="star-card-info-link" href="${escapeHtml(searchUrl)}" target="_blank" rel="noopener noreferrer">Google検索で確認</a></span></div>` : ''}
     </div>
     <button class="star-card-info-resync-btn" title="Geminiを呼ばず、この解析結果だけをカレンダーに反映し直す">カレンダーに同期</button>
   `;
@@ -1278,7 +1293,6 @@ async function handleInfoCardManualFix(card, el) {
     closeTime: closeTime || null,
     closedWeekdays: partial.closedWeekdays || [],
     exceptions: partial.exceptions || [],
-    officialUrl: partial.officialUrl || null,
   };
   normalizeInfoParsedExceptions(card.infoParsed);
   card.infoParseError = null;
@@ -1423,7 +1437,7 @@ async function syncInfoCardCalendar(card) {
     for (const block of blocks) {
       await insertCalendarEvent(state.exhibitionCalendarId, {
         summary,
-        description: parsed.officialUrl || undefined,
+        description: exhibitionSearchUrl(parsed) || undefined,
         start: { date: block.start },
         end: { date: addOneDayYMD(block.end) },
         extendedProperties: { private: { constellationCardId: String(card.id) } },

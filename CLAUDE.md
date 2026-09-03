@@ -141,10 +141,10 @@ Constellation/
 - 編集ガイドは「開閉(展開/折りたたみ)」「Depth」「Delete」のみで、**ASTR(自動線・手動接続とも)は搭載しない**
 - **本文コピペ欄は、一度解析済みになった後は✎「本文を編集」ボタン1つに格納される**(`card.infoRawEditing`、既定false)。解析前(または✎で編集中)は`<textarea class="star-card-info-text">`が展開されている。これは、テキストエリアのpointerdownを`stopPropagation()`している関係で、展開されたままだとカードのほぼ全面でピンチズームがキャンバスへ伝わらない不具合報告(2026年9月)を受けての対応。解析成功時(`handleInfoCardParse()`)・手動確定時(`handleInfoCardManualFix()`)には自動で`infoRawEditing = false`に戻し、再び格納する
 
-`parseExhibitionInfo()`(2026年9月、公式ページリンクの自動検索を追加)は`tools: [{ google_search: {} }]`(検索グラウンディング)を付けて呼んでいる。読み取ったtitle(アーティスト名を含む)・venueを手がかりにGemini自身がGoogle検索を行い、美術館・ギャラリー自身が公開するその展覧会専用ページのURLを`officialUrl`として同じJSON応答に含めさせる(見つからなければnull)。日次のリクエスト上限(1日20 or 250)は`generateContent`の呼び出し回数単位でカウントされる想定のため、ツールを1個追加しても**呼び出し自体は従来通り1回のまま**で済んでいる。取得できたリンクはカード上に「公式ページ」として表示するほか、`syncInfoCardCalendar()`でカレンダーイベントの`description`にも入れている。以前(URL入力廃止時)に削除したのは`url_context`(特定URLの本文取得)であり、`google_search`(検索そのもの)は別物として今回復活させた形になる。
+`parseExhibitionInfo()`は現在ツールなしのプレーンなテキストプロンプトでGeminiを呼んでいる(URL廃止に伴い`google_search`/`url_context`ツールも削除済み)。
 
-### 要検証(officialUrl)
-`google_search`ツールと、JSON出力を期待するプレーンテキストプロンプト(`response_mime_type`等の厳密なJSONモードは未使用)の組み合わせが、実機の`gemini-3.5-flash-lite`で実際にJSONとして壊れず返ってくるか、また検索グラウンディング自体が無料枠内で(課金なしに)動作するかは**未検証**(実装時点ではコードレビューのみで、実機のAPIキーでは未確認)。もし応答がJSONとして壊れる・`officialUrl`が実在しないURLを返す(検索しても幻覚で埋める)などの問題が出た場合は、プロンプト側で「見つからなければ無理に埋めずnullに」の指示を強めるか、最悪`officialUrl`欄自体を見送ることも検討する。
+**2026年9月、検索グラウンディングは無料キーで即429になることを実機確認**: 一度、公式ページリンクの自動検索機能として`tools: [{ google_search: {} }]`(検索グラウンディング)を`parseExhibitionInfo()`に追加し、読み取ったtitle・venueを手がかりにGemini自身がGoogle検索を行い、`officialUrl`を同じJSON応答に含めさせる実装を試した。「日次のリクエスト上限は`generateContent`の呼び出し回数単位でカウントされるはずだから、ツールを1個追加しても呼び出し自体は1回のまま」という想定だったが、これは誤りだった。**実機で試したところ、インフォ解析(サマリー要約は同時に成功していたため、1日の呼び出し数上限とは無関係)が`429 RESOURCE_EXHAUSTED`で即座に失敗した**。エラー本文に明確な理由は無かったが、状況から「検索グラウンディング自体が、請求先アカウントを紐付けていない無料キーでは割り当てゼロで、有効化した時点で失敗する」という機能であると判断し、**完全無料運用の絶対条件と両立しないため撤回した**(`tools`指定を削除し、元のプレーンプロンプトに戻した)。今後、Gemini API呼び出しに`google_search`や類似の検索/ツール系オプションを追加する際は、まずこの制約を疑うこと。
+代わりに、展覧会リンクは`js/app.js`の`exhibitionSearchUrl(parsed)`が、Geminiを一切呼ばずtitle・venueからGoogle検索結果ページのURL(`https://www.google.com/search?q=...`)をクライアントサイドだけで組み立てる方式にした。公式ページそのものを断定はできないが、タップすればユーザー自身がすぐ確認できる、無料枠を一切消費しない代替案。カード上に「Google検索で確認」リンクとして表示し、`syncInfoCardCalendar()`でカレンダーイベントの`description`にも同じURLを入れている。
 
 ## Googleカレンダー同期(基本機能、2026年9月実装)
 
