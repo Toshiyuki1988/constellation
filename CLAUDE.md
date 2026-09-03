@@ -100,6 +100,11 @@ Constellation/
 
 ### 実装済みモジュール一覧
 - **WormGate**(`js/modules/wormgate.js`、コード`123`):セッション内の写真をリングHUDで指ドラッグして探し、タップでキャンバス上の位置へジャンプする検索/ナビゲーション用モジュール。写真は`thumbDataUrl`を流用(フル画像は読み込まない)。`js/sound.js`にWormGate専用の効果音3つ(起動音・リング回転音・選択音)を追加した。
+- **Crews**(`js/modules/crews.js`、コード`456`。電話キーパッドの中央の横一列であり、洛書の対角線(4+5+2ではなく4-5-6=15)でもある並び。中央5を軸に複数のペルソナが集う、というこのモジュールの性質にちなんで選んだ):文献・記録に登場する人物の言葉を借りて、サマリーカードをその人格の声で語らせるモジュール。導入のきっかけはグスタフソン&ハーポヤ『つぼみの本』だが、特定の一冊専用にはせず、あらゆる文献から人格(ペルソナ)を召喚できる汎用設計にした。
+  - ペルソナの登録は【人物情報】【その言葉(引用)】の2項目だけ。性別・職業・口調のような構造化欄は持たず、口調・人となりは「その言葉」の引用そのものからGeminiに読み取らせる。表示名は人物情報の冒頭からクライアント側だけで自動生成する(API不使用)。長文になりやすいため、両欄には📷ボタンでその場でOCR読み取りできる(`js/camera.js`の`openCamera('caption')`を流用、複数回撮影すると改行で追記される)
+  - データは`state.crews`(配列、`{id, personInfo, theirWords, name, avatar, enabled, createdAt}`)に持ち、既存のカード/セッションと同じ`constellation-data.json`へオートセーブされる(専用のDrive保存キーやバックエンドは作っていない)
+  - **重要な設計判断: ペルソナの登録・保存時にGeminiは一切呼ばない。** 2026年9月、インフォメーションカードの展覧会リンク自動検索で`google_search`ツール(検索グラウンディング)を使ったところ、請求先アカウント非紐付けの無料キーでは割り当てがゼロで即座に`429 RESOURCE_EXHAUSTED`になることが実機で判明した(詳細は下記インフォメーションカードのセクション)。この教訓を踏まえ、Crewsでは「登録のたびに余分なAPI呼び出しを増やす」設計を避けた。実際にペルソナが「形成」される(=その人格になりきった一人称の語りが生成される)のは、サマリーカード上でそのペルソナのヘックスを押した瞬間だけで、既存の`summarizeSession()`(`js/gemini.js`)を`persona: {personInfo, theirWords}`付きで1回呼ぶだけ。Education/Academicと全く同じ呼び出しパターンを保っている
+  - 統合ポイントは全て`js/app.js`側の小さなフック経由:`summaryCardInnerHtml()`が`window.crewsSummaryHexButtonsHtml()`を呼んでONのペルソナ数ぶんヘックスボタンを追加描画し、`handleSummaryGenerate(card, el, modeOrCrewId)`は`window.getCrewById()`で引数がペルソナIDかどうかを判定してから`summarizeSession()`へ`persona`を渡す。生成されたテクストカードには`card.crewPersonaId`/`crewPersonaName`/`crewPersonaAvatar`を持たせ、`renderCard()`が水色グラスモーフ(`.star-card--crew`)とペルソナの名前・絵文字ヘッダー(`.star-card-crew-head`)を付けて、通常のテクストカードと一目で区別できるようにしている
 
 なお、セッション・編集ガイド・Asterism(見た順の線・ASTR手動接続)・操作音・インフォメーションカード・サマリーカード(いずれも下記)などは基本機能そのもの(canvas.js/app.jsに直接組み込み済み)であり、上記のモジュール分離の対象ではない。
 

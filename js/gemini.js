@@ -128,13 +128,21 @@ async function parseExhibitionInfo(text) {
  * 回答と同時に、本文中の[出典N]タグのうち最も参考にした番号(mostRelevantSource、1始まり)も
  * 答えさせる(呼び出し側でsources[mostRelevantSource-1]から実際のcard.idへ引き当て、その
  * カードへASTR接続する用途)。特に無ければnull。
- * @param {{context: string, mode: 'education'|'academic', direction?: string,
+ * personaを渡すとmodeは無視し、Crewsモジュール(js/modules/crews.js)が持つ人格(【人物情報】
+ * 【その言葉】)になりきらせた一人称の語りを書かせる。Education/Academicと呼び出し方は同じ
+ * (=既存の1回のgenerateContent呼び出しパターンのまま、ペルソナ登録時に別途Geminiは呼ばない)。
+ * @param {{context: string, mode?: 'education'|'academic',
+ *   persona?: {personInfo: string, theirWords: string}, direction?: string,
  *   images?: {base64: string, mimeType?: string}[]}} params
  * @returns {Promise<{answer: string, mostRelevantSource: number|null}>}
  */
-async function summarizeSession({ context, mode, direction, images }) {
-  const styleInstruction =
-    mode === 'education'
+async function summarizeSession({ context, mode, persona, direction, images }) {
+  const styleInstruction = persona
+    ? 'あなたは今、次の人物になりきって書いてください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
+      `【人物情報】\n${persona.personInfo}\n\n` +
+      '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
+      `${persona.theirWords}`
+    : mode === 'education'
       ? '小学生・中学生にも分かるように、やさしい言葉と短い文で説明してください。専門用語はできるだけ避け、使う場合は簡単な説明を添えてください。'
       : '学術的な文体で、批評・美術史的な視点を踏まえて記述してください。必要に応じて専門用語を使って構いません。';
   const hasDirection = Boolean(direction && direction.trim());

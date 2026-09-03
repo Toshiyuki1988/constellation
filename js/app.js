@@ -19,6 +19,10 @@ const state = {
   // インフォメーションカードの「鑑賞可能日」を同期する専用Googleカレンダー(「展覧会」)のID。
   // 初回同期時に作成し、以後はこのIDを使い回す。
   exhibitionCalendarId: null,
+  // Crewsモジュール(js/modules/crews.js)のペルソナ一覧。複数セッション・複数年をまたいで
+  // 使い回すデータなので、カード単位ではなくここに持つ。
+  // { id, personInfo, theirWords, name, avatar, enabled, createdAt }
+  crews: [],
 };
 
 const FIRST_YEAR = 2025;
@@ -293,6 +297,7 @@ async function onSignedIn() {
     state.connections = data.connections || [];
     state.hiddenAutoLinks = data.hiddenAutoLinks || [];
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
+    state.crews = data.crews || [];
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -687,7 +692,8 @@ function renderCard(card) {
     (isTextCard ? ' star-card--text' : '') +
     (isSessionCard ? ' star-card--session' : '') +
     (isInfoCard ? ' star-card--info' : '') +
-    (isSummaryCard ? ' star-card--summary' : '');
+    (isSummaryCard ? ' star-card--summary' : '') +
+    (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
   el.dataset.y = String(card.y);
@@ -722,8 +728,15 @@ function renderCard(card) {
   } else if (isSummaryCard) {
     el.innerHTML = summaryCardInnerHtml(card);
   } else {
+    const crewHeadHtml = card.crewPersonaId
+      ? `<div class="star-card-crew-head">
+           <div class="star-card-crew-avatar">${escapeHtml(card.crewPersonaAvatar || '👤')}</div>
+           <div class="star-card-crew-name">${escapeHtml(card.crewPersonaName || '')}</div>
+         </div>`
+      : '';
     el.innerHTML = `
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
+      ${crewHeadHtml}
       <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
       ${EDIT_GUIDE_HANDLES_HTML}
       ${editGuideHexHtml(mediaType)}
@@ -1032,10 +1045,14 @@ function createInfoCard() {
 
 function summaryCardInnerHtml(card) {
   const session = getSessionById(card.sessionId);
+  // Crewsモジュール(js/modules/crews.js)が登録されていれば、ONのペルソナの数だけ
+  // ヘックスボタンを追加で並べる(未読み込み/未登録なら何も足さない)。
+  const crewHexHtml = window.crewsSummaryHexButtonsHtml ? window.crewsSummaryHexButtonsHtml() : '';
   return `
     <div class="star-card-summary-head">
       <button class="star-card-summary-btn" data-summary-mode="education" title="小中学生にも分かるように要約"><span class="emoji">👦</span>Education</button>
       <button class="star-card-summary-btn" data-summary-mode="academic" title="学術的な視点で要約"><span class="emoji">🎓</span>Academic</button>
+      ${crewHexHtml}
     </div>
     <p class="star-card-summary-session"><span class="dot"></span>SESSION: ${escapeHtml(session ? session.name : '(不明)')}</p>
     <p class="star-card-summary-label">要約の傾向(任意)</p>
@@ -1060,6 +1077,15 @@ function wireSummaryCard(card, el) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       handleSummaryGenerate(card, el, btn.dataset.summaryMode);
+    });
+  });
+  // Crewsモジュールが描画したペルソナのヘックス(.star-card-summary-crew-btn、data-crew-id持ち)。
+  // 通常のEducation/Academicボタンと同じhandleSummaryGenerate()を、モードの代わりにcrewIdで呼ぶ。
+  el.querySelectorAll('.star-card-summary-crew-btn').forEach((btn) => {
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleSummaryGenerate(card, el, btn.dataset.crewId);
     });
   });
 }
@@ -1157,27 +1183,43 @@ function collectConnectedImageParts(cardId) {
 
 const summaryInFlight = new Set();
 
-async function handleSummaryGenerate(card, el, mode) {
-  if (mode !== 'education' && mode !== 'academic') return;
+/**
+ * @param {string} modeOrCrewId 'education'|'academic'、またはCrewsモジュールのペルソナID。
+ *   ペルソナIDかどうかはwindow.getCrewById()に問い合わせて判定する(crews.js未読み込み時は
+ *   常にeducation/academicの2択のまま、従来通り動く)。
+ */
+async function handleSummaryGenerate(card, el, modeOrCrewId) {
+  const crew = window.getCrewById ? window.getCrewById(modeOrCrewId) : null;
+  const mode = crew ? null : modeOrCrewId;
+  if (!crew && mode !== 'education' && mode !== 'academic') return;
   if (summaryInFlight.has(card.id)) return;
   summaryInFlight.add(card.id);
-  const btns = el.querySelectorAll('.star-card-summary-btn');
+  const btns = el.querySelectorAll('.star-card-summary-btn, .star-card-summary-crew-btn');
   btns.forEach((b) => { b.disabled = true; });
 
-  setStatus('要約を作成中…');
+  const speakerLabel = crew ? crew.name : (mode === 'education' ? 'Education' : 'Academic');
+  setStatus(`${speakerLabel}の要約を作成中…`);
   try {
     const sources = [];
     const context = collectSessionTextContext(card.sessionId, sources);
     const direction = (el.querySelector('.star-card-summary-input')?.value || '').trim();
     card.summaryDirection = direction;
     const images = collectConnectedImageParts(card.id);
-    const { answer, mostRelevantSource } = await summarizeSession({ context, mode, direction, images });
+    const persona = crew ? { personInfo: crew.personInfo, theirWords: crew.theirWords } : undefined;
+    const { answer, mostRelevantSource } = await summarizeSession({ context, mode, persona, direction, images });
     // 要約傾向に質問文を入れても素直に回答が返ってくるため、後から見返した時に「何を
     // 指示して出てきた要約か」が分かるよう、指示文をQ.として冒頭に残しておく。
     const textWithDirection = direction ? `Q. ${direction}\n\n${answer}` : answer;
 
     const newCard = createTextCard(textWithDirection);
     newCard.summarySourceId = card.id;
+    if (crew) {
+      // 通常のテクストカードと一目で区別できるよう、renderCard()側で水色グラスモーフの
+      // 見た目(star-card--crew)とペルソナの名前・絵文字ヘッダーを付ける。
+      newCard.crewPersonaId = crew.id;
+      newCard.crewPersonaName = crew.name;
+      newCard.crewPersonaAvatar = crew.avatar;
+    }
     newCard.x = card.x + 260 + (Math.random() * 80 - 20);
     newCard.y = card.y + (Math.random() * 240 - 120);
     const newEl = cardElById(newCard.id);
@@ -1186,6 +1228,7 @@ async function handleSummaryGenerate(card, el, mode) {
       newEl.dataset.y = String(newCard.y);
       applyCardTransform(newEl);
     }
+    if (crew) rerenderCardInPlace(newCard, newEl); // crewPersonaId付与後のヘッダー表示を反映
     createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
 
     // Geminiが「最も参考にした出典」を番号で答えていれば、そのカードへも別途ASTR接続する
@@ -1194,7 +1237,7 @@ async function handleSummaryGenerate(card, el, mode) {
       const sourceCardId = sources[mostRelevantSource - 1];
       if (sourceCardId !== newCard.id) createAstrConnection(sourceCardId, newCard.id);
     }
-    setStatus(`${mode === 'education' ? 'Education' : 'Academic'}の要約を作成しました`);
+    setStatus(`${speakerLabel}の要約を作成しました`);
   } catch (err) {
     console.error(err);
     debugLog('サマリー生成エラー: ' + err.message);
@@ -2308,6 +2351,7 @@ async function handleSave() {
       connections: state.connections,
       hiddenAutoLinks: state.hiddenAutoLinks,
       exhibitionCalendarId: state.exhibitionCalendarId,
+      crews: state.crews,
     });
     setStatus('自動保存しました');
   } catch (err) {
