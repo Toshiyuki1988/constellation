@@ -143,6 +143,50 @@ function closeSettings() {
   els.settingsModal.classList.remove('visible');
 }
 
+/**
+ * 「OCRか手入力か」のような、両方とも意味のある選択肢が並ぶ二択を出す汎用ダイアログ。
+ * window.confirm()だと「OK」「キャンセル」という固定のボタン名しか使えず、
+ * 「キャンセルすると手入力になる」のように片方の選択肢がキャンセルに割り当てられてしまい
+ * 分かりにくい、というユーザー指摘(2026年9月)を受けて置き換えた。各選択肢は全て
+ * ラベル付きの対等なボタンとして並べ、背景クリックだけを「何も選ばない」という本当の意味での
+ * キャンセルとして扱う(その場合はnullを返す)。settings-modalと同じ.modal-overlay/.modalの
+ * 見た目を流用しつつ、内容は呼び出しごとに動的に組み立てる。
+ * @param {{title: string, options: {label: string, value: string, secondary?: boolean}[]}} params
+ * @returns {Promise<string|null>}
+ */
+function showChoiceDialog({ title, options }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay visible';
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    const heading = document.createElement('h2');
+    heading.textContent = title;
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    modal.appendChild(heading);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+
+    const finish = (value) => {
+      overlay.remove();
+      resolve(value);
+    };
+    options.forEach((opt) => {
+      const btn = document.createElement('button');
+      btn.textContent = opt.label;
+      if (opt.secondary) btn.className = 'secondary';
+      btn.addEventListener('click', () => finish(opt.value));
+      actions.appendChild(btn);
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) finish(null);
+    });
+
+    document.body.appendChild(overlay);
+  });
+}
+
 function handleSettingsSave() {
   const clientId = els.settingsClientId.value.trim();
   const apiKey = els.settingsApiKey.value.trim();
@@ -360,13 +404,16 @@ function enterSession(id, isYear) {
 }
 
 async function handleCreateSession() {
-  const useOcr = window.confirm(
-    'セッション名の入力方法を選んでください。\n\n' +
-    '「OK」: OCRで読み取る(カメラを起動)\n' +
-    '「キャンセル」: 手入力する'
-  );
+  const choice = await showChoiceDialog({
+    title: 'セッション名の入力方法',
+    options: [
+      { label: 'OCRで読み取る', value: 'ocr' },
+      { label: '手入力する', value: 'manual', secondary: true },
+    ],
+  });
+  if (!choice) return;
   let name;
-  if (useOcr) {
+  if (choice === 'ocr') {
     const result = await openCamera('caption');
     if (!result || result.kind !== 'text' || !result.text.trim()) return;
     name = result.text.trim();
@@ -2104,15 +2151,18 @@ function extensionForMime(mimeType, fallback) {
 /**
  * ボトムツールバー/CONSTELLATION PIEの「テクスト」ボタン。OCR(カメラでキャプションを撮影して
  * 読み取る)と直接入力(カメラを使わずその場で手入力する)のどちらにするかをまず確認する
- * (handleCreateSession()のセッション名入力で使っているのと同じ、window.confirmによる二択の踏襲)。
+ * (handleCreateSession()のセッション名入力と同じshowChoiceDialog()の二択を踏襲)。
  */
 async function handleOpenTextTool() {
-  const useOcr = window.confirm(
-    'テクストの入力方法を選んでください。\n\n' +
-    '「OK」: OCRで読み取る(カメラを起動)\n' +
-    '「キャンセル」: 直接入力する'
-  );
-  if (useOcr) {
+  const choice = await showChoiceDialog({
+    title: 'テクストの入力方法',
+    options: [
+      { label: 'OCRで読み取る', value: 'ocr' },
+      { label: '直接入力する', value: 'manual', secondary: true },
+    ],
+  });
+  if (!choice) return;
+  if (choice === 'ocr') {
     await handleOpenCamera('caption');
   } else {
     const card = createTextCard('');
