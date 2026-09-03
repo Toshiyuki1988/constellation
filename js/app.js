@@ -1080,13 +1080,28 @@ function wireSummaryCard(card, el) {
     });
   });
   // Crewsモジュールが描画したペルソナのヘックス(.star-card-summary-crew-btn、data-crew-id持ち)。
-  // 通常のEducation/Academicボタンと同じhandleSummaryGenerate()を、モードの代わりにcrewIdで呼ぶ。
+  // タップ(短押し)は通常のEducation/Academicボタンと同じhandleSummaryGenerate()を、モードの
+  // 代わりにcrewIdで呼ぶ。長押しは生成せず、window.showCrewInfoPopup()で【人物情報】【その言葉】を
+  // 見返せる(表示名=ニックネームだけでは元の人物情報を思い出せない、というユーザー要望への対応)。
   el.querySelectorAll('.star-card-summary-crew-btn').forEach((btn) => {
-    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    btn.addEventListener('click', (e) => {
+    let longPressTimer = null;
+    let longPressed = false;
+    btn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      handleSummaryGenerate(card, el, btn.dataset.crewId);
+      longPressed = false;
+      longPressTimer = setTimeout(() => {
+        longPressed = true;
+        if (window.showCrewInfoPopup) window.showCrewInfoPopup(btn.dataset.crewId);
+      }, CARD_LONG_PRESS_MS);
     });
+    const clearLongPress = () => { clearTimeout(longPressTimer); longPressTimer = null; };
+    btn.addEventListener('pointerup', (e) => {
+      e.stopPropagation();
+      clearLongPress();
+      if (!longPressed) handleSummaryGenerate(card, el, btn.dataset.crewId);
+    });
+    btn.addEventListener('pointerleave', clearLongPress);
+    btn.addEventListener('pointercancel', clearLongPress);
   });
 }
 

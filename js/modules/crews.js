@@ -18,20 +18,24 @@
 //   { id, personInfo, theirWords, name, avatar, enabled, createdAt }
 //   - personInfo:【人物情報】— 誰か・どの文献か(自由記述)
 //   - theirWords:【その言葉】— 本人の言葉の引用(自由記述)
-//   - name: personInfoの冒頭からクライアント側だけで自動生成する表示名(API不使用)
+//   - name: personInfoの冒頭からクライアント側だけで自動生成する表示名(API不使用、deriveName())
 //   - enabled: ONのペルソナだけがサマリーカードのヘックス候補になる
 //
 // 【設計上の重要な決定】ペルソナの「形成」(=人格になりきった実際の生成)は、登録・保存の
 // 時点ではGeminiを一切呼ばない。2026年9月、インフォメーションカードの展覧会リンク自動検索で
 // google_searchツール(検索グラウンディング)を追加した際、請求先アカウント非紐付けの無料キー
 // では割り当てがゼロで即座に429 RESOURCE_EXHAUSTEDになることが実機で判明した。この教訓を
-// 踏まえ、Crewsでも「登録のたびに余分なAPI呼び出しを増やす」設計は避けている。実際にGeminiが
-// 呼ばれるのは、ユーザーがサマリーカード上でそのペルソナのヘックスを押した瞬間だけ(=既存の
+// 踏まえ、Crewsでは「登録のたびに余分なAPI呼び出しを増やす」設計を避けている(表示名の自動
+// 抽出のようなAPI呼び出しも含めて、ユーザーの意向により見送った)。実際にGeminiが呼ばれるのは、
+// ユーザーがサマリーカード上でそのペルソナのヘックスを押した瞬間だけ(=既存の
 // summarizeSession()を1回呼ぶだけで、Education/Academicと全く同じ呼び出しパターン)。
 //
 // 統合ポイント(js/app.js側):
 //   - summaryCardInnerHtml() が window.crewsSummaryHexButtonsHtml() を呼び、ONのペルソナ数ぶん
 //     ヘックスボタンを追加で描画する。
+//   - wireSummaryCard() が各ヘックスにタップ(=生成)と長押し(=window.showCrewInfoPopup()で
+//     【人物情報】【その言葉】をコピー可能な形で見返す)の両方を割り当てる。表示名(ニックネーム)
+//     だけでは元の人物情報を思い出せない、というユーザー要望を受けて追加した(2026年9月)。
 //   - handleSummaryGenerate() が window.getCrewById() でmodeOrCrewIdがペルソナIDかどうかを判定し、
 //     ペルソナなら summarizeSession() に persona: {personInfo, theirWords} を渡す。
 //   - renderCard() が card.crewPersonaId を見て、水色グラスモーフ(.star-card--crew)と
@@ -46,6 +50,8 @@
   let crEls = null;
   let editingId = null; // 編集中のペルソナID。null なら「新規」
   let pendingAvatar = AVATAR_PALETTE[0];
+  let stylesInjected = false; // ペルソナ管理パネルと情報ポップアップ、どちらが先に開かれてもCSSを二重注入しない
+  let infoPopupEls = null;
 
   /* ---------------- DOM / CSS をこのファイルだけで自己完結させて注入する ---------------- */
 
@@ -178,6 +184,54 @@
         background: rgba(85, 230, 247, 0.08); border: 1px solid rgba(85, 230, 247, 0.22);
         font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; line-height: 1.8; color: rgba(255, 255, 255, 0.55);
       }
+
+      /* サマリーカードのペルソナのヘックスを長押しすると出る、人物情報・その言葉の閲覧/コピー用ポップアップ */
+      .crews-info-overlay {
+        position: fixed; inset: 0; z-index: 130;
+        display: flex; align-items: center; justify-content: center;
+        opacity: 0; pointer-events: none; transition: opacity 0.18s ease-out; padding: 16px;
+      }
+      .crews-info-overlay.open { opacity: 1; pointer-events: auto; }
+      .crews-info-backdrop { position: absolute; inset: 0; background: rgba(6, 10, 12, 0.72); }
+      .crews-info-modal {
+        position: relative; width: min(92vw, 420px); max-height: 82vh; overflow-y: auto;
+        background: rgba(9, 15, 18, 0.97); border: 1px solid rgba(85, 230, 247, 0.3); border-radius: 14px;
+        padding: 18px 18px 20px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+        transform: scale(0.94); transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+      }
+      .crews-info-overlay.open .crews-info-modal { transform: scale(1); }
+      .crews-info-head { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+      .crews-info-avatar {
+        width: 30px; height: 30px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+        font-size: 15px; background: rgba(85, 230, 247, 0.14); border: 1px solid rgba(85, 230, 247, 0.4);
+      }
+      .crews-info-name {
+        flex: 1; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 13px; color: #fff;
+      }
+      .crews-info-close {
+        width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+        background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(85, 230, 247, 0.3); color: rgba(255, 255, 255, 0.85);
+        font-size: 12px; cursor: pointer;
+      }
+      .crews-info-close:hover { background: rgba(85, 230, 247, 0.25); }
+      .crews-info-field { margin-bottom: 14px; }
+      .crews-info-field:last-child { margin-bottom: 0; }
+      .crews-info-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+      .crews-info-label {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.45);
+      }
+      .crews-info-copy {
+        padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(85, 230, 247, 0.35);
+        background: rgba(85, 230, 247, 0.1); color: #55e6f7; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px;
+        cursor: pointer;
+      }
+      .crews-info-copy:hover { background: rgba(85, 230, 247, 0.22); }
+      .crews-info-text {
+        margin: 0; padding: 9px 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 7px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 12px; line-height: 1.7;
+        color: rgba(255, 255, 255, 0.88); white-space: pre-wrap; word-break: break-word;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -224,7 +278,7 @@
             </div>
           </div>
         </div>
-        <p class="crews-rationale">保存時にGeminiは呼びません。実際にこの人格で語らせるのは、サマリーカード上でこのペルソナのヘックスを押した瞬間だけです(Education/Academicと同じ1回のAPI呼び出し)。</p>
+        <p class="crews-rationale">保存時にGeminiは呼びません。実際にこの人格になりきって語らせるのは、サマリーカード上でこのペルソナのヘックスを押した瞬間だけです(Education/Academicと同じ1回のAPI呼び出し)。長押しすると、召喚時に入力した【人物情報】【その言葉】をいつでも見返せます(コピーも可能)。</p>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -294,12 +348,17 @@
     return (state.crews || []).find((c) => c.id === id) || null;
   }
 
-  /** サマリーカードのヘックス行に追加するHTML(js/app.js の summaryCardInnerHtml() から呼ばれる) */
+  /**
+   * サマリーカードのヘックス行に追加するHTML(js/app.js の summaryCardInnerHtml() から呼ばれる)。
+   * 「名前：役割」形式は長くなりうるため、名前部分は.nameでラップしてCSS側(css/style.css)で
+   * 省略記号(…)にする。フルネームはtitle属性(ホバー/長押しで見える)に残す。
+   */
   function crewsSummaryHexButtonsHtml() {
     return getEnabledCrews()
       .map((c) => (
         `<button class="star-card-summary-crew-btn" data-crew-id="${c.id}" title="${escapeAttr(c.personInfo)}">` +
-        `<span class="emoji">${escapeHtmlLocal(c.avatar || '👤')}</span>${escapeHtmlLocal(c.name || '(無名)')}</button>`
+        `<span class="emoji">${escapeHtmlLocal(c.avatar || '👤')}</span>` +
+        `<span class="name">${escapeHtmlLocal(c.name || '(無名)')}</span></button>`
       ))
       .join('');
   }
@@ -457,13 +516,11 @@
     }
   }
 
-  /* ---------------- 開閉 ---------------- */
+  /* ---------------- 開閉(ペルソナ管理パネル) ---------------- */
 
   function openCrews() {
-    if (!crEls) {
-      injectStyles();
-      buildDom();
-    }
+    if (!stylesInjected) { injectStyles(); stylesInjected = true; }
+    if (!crEls) buildDom();
     renderRoster();
     if (editingId && getCrewById(editingId)) {
       loadPersonaIntoEditor(editingId);
@@ -477,12 +534,125 @@
     if (crEls) crEls.overlay.classList.remove('open');
   }
 
+  /* ---------------- 情報ポップアップ(サマリーカードのヘックスを長押しすると開く) ----------------
+   * ニックネーム(表示名)だけでは元の人物情報を思い出せない、というユーザー要望を受けて追加。
+   * 【人物情報】【その言葉】を全文表示し、それぞれコピーボタンを付ける。生成(=summarizeSession()
+   * の呼び出し)は一切行わない、完全にローカルな閲覧機能。 */
+
+  function buildInfoPopupDom() {
+    const overlay = document.createElement('div');
+    overlay.className = 'crews-info-overlay';
+    overlay.innerHTML = `
+      <div class="crews-info-backdrop"></div>
+      <div class="crews-info-modal">
+        <div class="crews-info-head">
+          <span class="crews-info-avatar"></span>
+          <span class="crews-info-name"></span>
+          <button class="crews-info-close" title="閉じる">✕</button>
+        </div>
+        <div class="crews-info-field">
+          <div class="crews-info-label-row">
+            <span class="crews-info-label">【人物情報】</span>
+            <button class="crews-info-copy" data-target="person">コピー</button>
+          </div>
+          <p class="crews-info-text crews-info-text-person"></p>
+        </div>
+        <div class="crews-info-field">
+          <div class="crews-info-label-row">
+            <span class="crews-info-label">【その言葉】</span>
+            <button class="crews-info-copy" data-target="words">コピー</button>
+          </div>
+          <p class="crews-info-text crews-info-text-words"></p>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    infoPopupEls = {
+      overlay,
+      avatar: overlay.querySelector('.crews-info-avatar'),
+      name: overlay.querySelector('.crews-info-name'),
+      personText: overlay.querySelector('.crews-info-text-person'),
+      wordsText: overlay.querySelector('.crews-info-text-words'),
+    };
+
+    overlay.querySelector('.crews-info-close').addEventListener('click', hideCrewInfoPopup);
+    overlay.querySelector('.crews-info-backdrop').addEventListener('click', hideCrewInfoPopup);
+    overlay.querySelectorAll('.crews-info-copy').forEach((btn) => {
+      btn.addEventListener('click', () => copyInfoPopupField(btn));
+    });
+  }
+
+  async function copyInfoPopupField(btn) {
+    const text = btn.dataset.target === 'person' ? infoPopupEls.personText.textContent : infoPopupEls.wordsText.textContent;
+    const original = btn.textContent;
+    const ok = await copyTextToClipboard(text || '');
+    btn.textContent = ok ? 'コピーしました' : 'コピーできません';
+    if (!ok) setStatus('コピーに失敗しました(ブラウザの権限を確認してください)', { important: true });
+    setTimeout(() => { btn.textContent = original; }, 1200);
+  }
+
+  /**
+   * navigator.clipboard.writeText()はモバイルブラウザによって権限まわりの挙動が揺れる
+   * (許可プロンプトへの応答待ちのままpromiseがresolve/rejectどちらもせず固まる、等)。
+   * 一定時間で諦めてdocument.execCommand('copy')にフォールバックし、ボタンが「コピー」の
+   * まま無反応になり続けることのないようにする。
+   * @returns {Promise<boolean>} コピーできたか
+   */
+  function copyTextToClipboard(text) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => { if (!settled) { settled = true; resolve(ok); } };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => finish(true)).catch(() => finish(execCommandCopy(text)));
+        setTimeout(() => finish(execCommandCopy(text)), 1500);
+      } else {
+        finish(execCommandCopy(text));
+      }
+    });
+  }
+
+  function execCommandCopy(text) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /** @param {string} crewId js/app.jsのwireSummaryCard()から、ヘックスの長押しで呼ばれる */
+  function showCrewInfoPopup(crewId) {
+    const crew = getCrewById(crewId);
+    if (!crew) return;
+    if (!stylesInjected) { injectStyles(); stylesInjected = true; }
+    if (!infoPopupEls) buildInfoPopupDom();
+    infoPopupEls.avatar.textContent = crew.avatar || '👤';
+    infoPopupEls.name.textContent = crew.name || '(無名)';
+    infoPopupEls.personText.textContent = crew.personInfo || '';
+    infoPopupEls.wordsText.textContent = crew.theirWords || '(未入力)';
+    infoPopupEls.overlay.classList.add('open');
+  }
+
+  function hideCrewInfoPopup() {
+    if (infoPopupEls) infoPopupEls.overlay.classList.remove('open');
+  }
+
   // 起動ジェスチャーはjs/module-launcher.js(背景2本指ダブルタップ→キーパッド)に一本化されている。
   // このモジュールはコード("456")を登録するだけでよい。
   registerModuleCode('456', openCrews);
 
-  // js/app.js側からの参照口(要約カードのヘックス描画・生成処理で使う)。
+  // js/app.js側からの参照口(要約カードのヘックス描画・生成・長押し閲覧で使う)。
   window.getCrewById = getCrewById;
   window.crewsSummaryHexButtonsHtml = crewsSummaryHexButtonsHtml;
+  window.showCrewInfoPopup = showCrewInfoPopup;
   window.openCrews = openCrews;
 })();

@@ -1017,7 +1017,14 @@ html, body {
 }
 .star-card-summary-crew-btn:hover:not(:disabled) { background: #83eefb; transform: translateY(-1px); }
 .star-card-summary-crew-btn:disabled { opacity: 0.55; cursor: default; }
-.star-card-summary-crew-btn .emoji { font-size: 12.5px; line-height: 1; }
+.star-card-summary-crew-btn .emoji { font-size: 12.5px; line-height: 1; flex: none; }
+/* 「名前：役割」形式は長くなりうるため省略記号にする(フルネームはtitle属性で見える) */
+.star-card-summary-crew-btn .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 68px;
+}
 
 /* Crewsが生成したテクストカード。通常のテクストカードと一目で区別できるよう水色グラスモーフにする */
 .star-card--crew {
