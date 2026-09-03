@@ -119,6 +119,8 @@
       }
       .ms-fetch-btn:hover { background: #59c67c; }
       .ms-fetch-btn:disabled { opacity: 0.55; cursor: default; }
+      .ms-fetch-status { margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; line-height: 1.6; color: rgba(255, 255, 255, 0.55); }
+      .ms-fetch-status.error { color: #ff8a70; }
       .ms-preview {
         width: 100%; height: 90px; border-radius: 8px; overflow: hidden; position: relative;
         background: repeating-conic-gradient(rgba(255, 255, 255, 0.05) 0% 25%, rgba(255, 255, 255, 0.02) 0% 50%) 0 0 / 12px 12px;
@@ -235,6 +237,7 @@
           <span class="ms-radius-val">150m</span>
         </div>
         <button class="ms-fetch-btn">この範囲を取得</button>
+        <p class="ms-fetch-status" hidden></p>
       </div>
       <div class="ms-block">
         <p class="ms-block-label">プレビュー</p>
@@ -259,6 +262,7 @@
       radiusInput: win.querySelector('.ms-radius-input'),
       radiusVal: win.querySelector('.ms-radius-val'),
       fetchBtn: win.querySelector('.ms-fetch-btn'),
+      fetchStatus: win.querySelector('.ms-fetch-status'),
       preview: win.querySelector('.ms-preview'),
       deployBtn: win.querySelector('.ms-deploy-btn'),
       currentBlock: win.querySelector('.ms-block-current'),
@@ -430,43 +434,85 @@
 
   /* ==================== 屋外: Geolocation + Overpass ==================== */
 
+  /**
+   * 画面上部の小さい#status表示だけだと見落とされやすい(「押しても何も起きないように見える」
+   * という報告があったため2026年9月に追加)。小窓のこのブロック内に、進捗・失敗を必ず表示する。
+   */
+  function showFetchStatus(text, isError) {
+    if (!msEls || !msEls.fetchStatus) return;
+    msEls.fetchStatus.textContent = text;
+    msEls.fetchStatus.hidden = false;
+    msEls.fetchStatus.classList.toggle('error', Boolean(isError));
+  }
+
+  /** Geolocation/Overpassの失敗理由を、原因ごとに分かりやすい日本語へ変換する。 */
+  function describeOutdoorError(err) {
+    if (err && err.name === 'AbortError') {
+      return '地図サーバーの応答がありませんでした(混雑している可能性があります。時間をおいて試してください)';
+    }
+    if (err && typeof err.code === 'number') {
+      if (err.code === 1) return '位置情報の利用が許可されませんでした(ブラウザ/端末の位置情報設定を確認してください)';
+      if (err.code === 2) return '現在地を取得できませんでした(電波状況の良い場所でもう一度お試しください)';
+      if (err.code === 3) return '現在地の取得がタイムアウトしました(位置情報の許可ダイアログが出ていないか確認してください)';
+    }
+    return err && err.message ? err.message : String(err);
+  }
+
+  // overpass-api.deは無料の公共サーバーで、実測(東京駅周辺・半径150m)で応答に20秒前後かかった
+  // (混雑時はさらに長くなりうる)。fetch自体にはタイムアウトが無いため、AbortControllerで
+  // 明示的に打ち切るが、正常なケースまで打ち切ってしまわないよう十分長く取る。
+  const OVERPASS_TIMEOUT_MS = 40000;
+
   async function fetchOutdoorMap() {
     if (!navigator.geolocation) {
-      setStatus('この端末では位置情報が使えません', { important: true });
+      showFetchStatus('この端末では位置情報が使えません', true);
       return;
     }
     msEls.fetchBtn.disabled = true;
     const originalLabel = msEls.fetchBtn.textContent;
     msEls.fetchBtn.textContent = '現在地を取得中…';
+    showFetchStatus('現在地の許可ダイアログが出ていたら「許可」を選んでください…', false);
     try {
       const pos = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 });
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 12000 });
       });
       const lat0 = pos.coords.latitude;
       const lon0 = pos.coords.longitude;
 
       msEls.fetchBtn.textContent = '地図データを取得中…';
+      showFetchStatus('地図サーバーへ問い合わせ中…(無料の公共サーバーのため20〜40秒程度かかることがあります。気長にお待ちください)', false);
       const query = buildOverpassQuery(lat0, lon0, radiusValue);
-      const res = await fetch(OVERPASS_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: query,
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
+      let res;
+      try {
+        res = await fetch(OVERPASS_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: query,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       if (!res.ok) throw new Error(`Overpass API error ${res.status}`);
       const json = await res.json();
       const built = buildShapesFromOverpass(json.elements || [], lat0, lon0);
       if (!built.shapes.length) {
-        setStatus('この範囲では名前のある主要建物が見つかりませんでした(半径を広げてみてください)', { important: true });
+        showFetchStatus('この範囲では建物・道路のデータが見つかりませんでした(半径を広げてみてください)', true);
         return;
       }
       pendingOutdoor = built;
       pendingIndoorCanvas = null;
       renderPendingPreview();
-      setStatus(`半径${radiusValue}mの地図データを取得しました(主要建物 ${built.buildingCount}件・道路 ${built.roadCount}件)`);
+      const detail = built.buildingCount
+        ? `主要建物 ${built.buildingCount}件・道路 ${built.roadCount}件`
+        : `名前のある建物は見つかりませんでしたが、道路 ${built.roadCount}件を取得しました`;
+      showFetchStatus(`取得しました(${detail})`, false);
+      setStatus(`半径${radiusValue}mの地図データを取得しました(${detail})`);
     } catch (err) {
       console.error(err);
-      const reason = err && err.code === 1 ? '位置情報の利用が許可されませんでした' : (err.message || String(err));
-      setStatus('地図データの取得に失敗しました: ' + reason, { important: true });
+      showFetchStatus('取得に失敗しました: ' + describeOutdoorError(err), true);
     } finally {
       msEls.fetchBtn.disabled = false;
       msEls.fetchBtn.textContent = originalLabel;
