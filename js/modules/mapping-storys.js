@@ -63,6 +63,7 @@
   let scanCamEls = null;
   let mode = 'indoor'; // 'indoor' | 'outdoor'
   let editingOpen = false; // この小窓が開いている間だけ地図を編集可能にする
+  let panelCollapsed = false; // 地図の移動・リサイズ中、設定パネル本体を上部バーだけにたたむ
 
   let pendingIndoorCanvas = null; // 二値化・緑線化・透明化まで済ませた、展開待ちのcanvas
   let pendingOutdoor = null; // { shapes, bboxWidth, bboxHeight, buildingCount, roadCount }
@@ -92,12 +93,22 @@
         font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em;
         color: #6fd48e; text-transform: uppercase;
       }
-      .ms-close {
+      .ms-top-btns { display: flex; align-items: center; gap: 6px; }
+      .ms-collapse-btn, .ms-close {
         width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
         background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(63, 174, 99, 0.35);
-        color: rgba(255, 255, 255, 0.85); font-size: 11px; cursor: pointer;
+        color: rgba(255, 255, 255, 0.85); font-size: 11px; cursor: pointer; padding: 0;
       }
-      .ms-close:hover { background: rgba(63, 174, 99, 0.25); }
+      .ms-collapse-btn:hover, .ms-close:hover { background: rgba(63, 174, 99, 0.25); }
+      /* たたんだ状態: 上部バーだけを残し、地図の移動・リサイズ中にパネル本体が
+         キャンバスを覆って邪魔になる問題(2026年9月、実機報告)に対応する。
+         小窓自体は開いたまま(editingOpenは維持)なので、ハンドルでの編集は続けられる。 */
+      .ms-window.collapsed { padding-bottom: 13px; width: auto; }
+      .ms-window.collapsed .ms-session-label,
+      .ms-window.collapsed .ms-mode-seg,
+      .ms-window.collapsed .ms-block,
+      .ms-window.collapsed .ms-hint { display: none; }
+      .ms-window.collapsed .ms-top { margin-bottom: 0; }
       .ms-session-label {
         font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(255, 255, 255, 0.55);
         margin: 0 0 10px; padding: 6px 9px; border-radius: 6px;
@@ -202,9 +213,14 @@
       /* vector-effect:non-scaling-strokeにより、地図が展開時に大きくズームアウトされても線幅は
          一定のCSS px幅を保つ(=描画自体は正しくても、ズームアウトすると相対的に細く見えて
          目立たない、という視認性の問題があったため、2026年9月に少し太くした)。 */
+      /* アステリズムの糸(#737373・2px、js/canvas.js/css/style.css)と交差した時に見分けが
+         つかなくなる不具合(2026年9月、ユーザー報告)への対応。彩度・太さを落とした暖色系の
+         土色(苔・枯野のトーン)に変え、アステリズムの冷たいグレーとは色相そのものが違う
+         ようにすることで、交差点でも瞬時に区別できるようにした。線を細く薄くした分、地図は
+         カード・接続線より一段後ろの「地面」として自然に後退して見える。 */
       .ms-shape { fill: none; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-      .ms-shape-building { stroke: #3fae63; stroke-width: 4; }
-      .ms-shape-highway { stroke: rgba(63, 174, 99, 0.65); stroke-width: 3; }
+      .ms-shape-building { stroke: rgba(124, 132, 98, 0.55); stroke-width: 1.75; }
+      .ms-shape-highway { stroke: rgba(124, 132, 98, 0.38); stroke-width: 1.25; }
       .ms-handle {
         position: absolute; width: 22px; height: 22px; border-radius: 50%;
         background: rgba(63, 174, 99, 0.92); border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -248,7 +264,10 @@
     win.innerHTML = `
       <div class="ms-top">
         <span class="ms-top-label">Mapping Storys</span>
-        <button class="ms-close" title="閉じる">✕</button>
+        <div class="ms-top-btns">
+          <button class="ms-collapse-btn" title="たたむ">︿</button>
+          <button class="ms-close" title="閉じる">✕</button>
+        </div>
       </div>
       <p class="ms-session-label"></p>
       <div class="ms-mode-seg">
@@ -285,6 +304,7 @@
     msEls = {
       win,
       closeBtn: win.querySelector('.ms-close'),
+      collapseBtn: win.querySelector('.ms-collapse-btn'),
       sessionLabel: win.querySelector('.ms-session-label'),
       modeOpts: Array.from(win.querySelectorAll('.ms-mode-opt')),
       indoorBlock: win.querySelector('.ms-block-indoor'),
@@ -306,6 +326,7 @@
     });
 
     msEls.closeBtn.addEventListener('click', closeMappingStorys);
+    msEls.collapseBtn.addEventListener('click', togglePanelCollapsed);
     msEls.modeOpts.forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
     msEls.scanBtn.addEventListener('click', openScanCamera);
     msEls.radiusInput.addEventListener('input', () => {
@@ -336,6 +357,19 @@
     });
   }
 
+  /**
+   * 地図の移動・リサイズ・回転はハンドル操作なので小窓を開いたままで良いが、
+   * パネル本体(画面右上)がキャンバスの一部を覆ってしまい、覆われた位置に地図を
+   * 動かしたい時などに邪魔になる、というユーザー報告への対応。上部バーだけを残して
+   * たためるようにし、編集自体(editingOpen)は継続したまま行える。
+   */
+  function togglePanelCollapsed() {
+    panelCollapsed = !panelCollapsed;
+    msEls.win.classList.toggle('collapsed', panelCollapsed);
+    msEls.collapseBtn.textContent = panelCollapsed ? '﹀' : '︿';
+    msEls.collapseBtn.title = panelCollapsed ? '展開する' : 'たたむ';
+  }
+
   function setMode(next) {
     mode = next;
     msEls.modeOpts.forEach((btn) => btn.classList.toggle('sel', btn.dataset.mode === mode));
@@ -364,6 +398,10 @@
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
     if (!msEls) buildDom();
     setMode(mode);
+    panelCollapsed = false;
+    msEls.win.classList.remove('collapsed');
+    msEls.collapseBtn.textContent = '︿';
+    msEls.collapseBtn.title = 'たたむ';
     editingOpen = true;
     refreshCurrentMapBlock();
     renderPendingPreview();
@@ -463,7 +501,8 @@
     for (let i = 0; i < data.length; i += 4) {
       const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
       if (gray < INDOOR_THRESHOLD) {
-        data[i] = 0x3f; data[i + 1] = 0xae; data[i + 2] = 0x63; data[i + 3] = 255;
+        // 屋外(ベクター)側と同じ退色フィールドのトーン(rgba(124,132,98,0.55)相当)に揃える。
+        data[i] = 124; data[i + 1] = 132; data[i + 2] = 98; data[i + 3] = 140;
       } else {
         data[i + 3] = 0;
       }
