@@ -287,7 +287,7 @@
         <p class="ms-block-label">現在地からスキャン</p>
         <div class="ms-radius-row">
           <span style="font-family:'IBM Plex Mono',monospace; font-size:9px; color:rgba(255,255,255,0.5);">半径</span>
-          <input type="range" class="ms-radius-input" min="30" max="200" step="10" value="150">
+          <input type="range" class="ms-radius-input" min="10" max="200" step="5" value="150">
           <span class="ms-radius-val">150m</span>
         </div>
         <button class="ms-fetch-btn">この範囲を取得</button>
