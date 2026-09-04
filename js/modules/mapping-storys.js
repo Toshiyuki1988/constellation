@@ -90,6 +90,12 @@
         color: rgba(255, 255, 255, 0.85); font-size: 11px; cursor: pointer;
       }
       .ms-close:hover { background: rgba(63, 174, 99, 0.25); }
+      .ms-session-label {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(255, 255, 255, 0.55);
+        margin: 0 0 10px; padding: 6px 9px; border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
       .ms-mode-seg { display: flex; gap: 5px; margin-bottom: 11px; }
       .ms-mode-opt {
         flex: 1; text-align: center; padding: 6px 4px; border-radius: 6px;
@@ -174,6 +180,12 @@
       .ms-maplayer.ms-editable { pointer-events: auto; cursor: grab; outline: 1px dashed rgba(63, 174, 99, 0.55); outline-offset: 6px; }
       .ms-maplayer.ms-editable:active { cursor: grabbing; }
       .ms-maplayer-img { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+      .ms-maplayer-error {
+        display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px;
+        background: rgba(179, 64, 43, 0.12); border: 2px dashed rgba(179, 64, 43, 0.55); border-radius: 8px;
+        font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #b3402b; box-sizing: border-box;
+      }
+      .ms-maplayer-error .ms-maplayer-img { display: none; }
       .ms-maplayer-vector svg { width: 100%; height: 100%; display: block; overflow: visible; }
       .ms-shape { fill: none; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
       .ms-shape-building { stroke: #3fae63; stroke-width: 2.6; }
@@ -221,6 +233,7 @@
         <span class="ms-top-label">Mapping Storys</span>
         <button class="ms-close" title="閉じる">✕</button>
       </div>
+      <p class="ms-session-label"></p>
       <div class="ms-mode-seg">
         <button class="ms-mode-opt" data-mode="indoor">屋内</button>
         <button class="ms-mode-opt" data-mode="outdoor">屋外</button>
@@ -255,6 +268,7 @@
     msEls = {
       win,
       closeBtn: win.querySelector('.ms-close'),
+      sessionLabel: win.querySelector('.ms-session-label'),
       modeOpts: Array.from(win.querySelectorAll('.ms-mode-opt')),
       indoorBlock: win.querySelector('.ms-block-indoor'),
       outdoorBlock: win.querySelector('.ms-block-outdoor'),
@@ -312,8 +326,17 @@
     msEls.outdoorBlock.hidden = mode !== 'outdoor';
   }
 
+  /**
+   * 地図は「今操作しているセッション」に紐づくため、小窓を開いたまま(キャンバスの操作は
+   * ブロックしていないので)別のセッションへ移動すると、保存先・表示対象が変わる。
+   * 「展開したのに見当たらない」というユーザー報告(2026年9月)を受け、今どのセッションを
+   * 見ているかを小窓に常時明示するようにした。renderMappingStorysLayer()からも呼ばれるため、
+   * セッション移動のたびに追従して更新される。
+   */
   function refreshCurrentMapBlock() {
+    if (!msEls) return;
     const session = getSessionById(activeSessionId());
+    msEls.sessionLabel.textContent = session ? `保存先セッション: ${session.name || '(無題)'}` : '保存先セッションが見つかりません';
     const hasMap = Boolean(session && session.mapLayer);
     msEls.currentBlock.hidden = !hasMap;
   }
@@ -700,7 +723,7 @@
 
       playMappingStorysDeploySound();
       renderMappingStorysLayer({ animate: true });
-      setStatus('地図をキャンバスへ展開しました');
+      setStatus(`「${session.name || '(無題)'}」へ地図を展開しました`, { important: true });
     } catch (err) {
       console.error(err);
       setStatus('地図の展開に失敗しました: ' + (err.message || err), { important: true });
@@ -737,6 +760,10 @@
 
   function renderMappingStorysLayer(opts) {
     const animate = Boolean(opts && opts.animate);
+    // 小窓を開いたままセッションを移動できるため(キャンバス操作をブロックしない設計)、
+    // カード再描画のたびに呼ばれるこの関数を使って、小窓側の表示も追従させる。
+    if (editingOpen && msEls) refreshCurrentMapBlock();
+
     const container = document.createElement('div');
     container.className = 'ms-maplayer-container';
     els.content.insertBefore(container, els.content.firstChild);
@@ -758,7 +785,13 @@
       img.draggable = false;
       getFileBlobUrlCached(layer.imageFileId)
         .then((url) => { img.src = url; })
-        .catch((err) => console.warn('Mapping Storys: 地図画像の取得に失敗', err));
+        .catch((err) => {
+          // サインイン切れなどで画像が取得できないと、以前は無言で何も表示されなかった
+          // (「展開したのに見当たらない」報告の一因)。枠だけでも見えるようにする。
+          console.warn('Mapping Storys: 地図画像の取得に失敗', err);
+          el.classList.add('ms-maplayer-error');
+          el.textContent = '地図画像を読み込めませんでした(サインイン状態を確認してください)';
+        });
       el.appendChild(img);
     } else {
       const svg = document.createElementNS(SVG_NS, 'svg');
