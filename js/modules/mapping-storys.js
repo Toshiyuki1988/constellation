@@ -36,6 +36,39 @@
 //   経由でキャンバスの最背面(カードより先にDOM挿入)に描画する。既定では pointer-events:none
 //   でカードのタッチ判定を一切邪魔しない。この小窓を開いている間だけ地図に pointer-events:auto
 //   を与え、ドラッグで移動、ハンドルでリサイズ・回転できるようにする。
+//
+// 【2026年9月追記: 屋外の第3の入力方式(kind: 'embed')】
+// Overpassでのベクター抽出とは別に、GoogleマップそのものをライブのiframeとしてPC/現地問わず
+// 呼び出して重ねる方式を追加した(過去の展覧会をセッション化する用途で、実測より「見慣れた
+// Googleマップの絵」の方が有用、というユーザー要望による)。設計の要点:
+// - APIキー・GCP請求先アカウントは一切使わない。Googleマップの「地図を埋め込む」共有機能と
+//   同じ consumer 向け no-key iframe(https://maps.google.com/maps?...&output=embed)を使う。
+//   公式のMaps Embed API/JavaScript APIはどちらも請求先アカウントの紐付けが必須で、
+//   CLAUDE.mdの絶対条件(請求先アカウントを絶対に紐付けない)と正面から矛盾するため採用しない。
+// - iframeはクロスオリジンのため、内部でネイティブにドラッグされた後の中心座標を親ページから
+//   読み取る手段が無い(postMessageのような手段も提供されていない)。そこで、ズームを
+//   deploy時点で固定した上で(zoom自体は検索欄への再入力でのみ変更)、iframeの手前に透明な
+//   捕捉レイヤー(.ms-embed-capture)を敷いてパンをこちらで丸ごと肩代わりする。ズームが
+//   動かない前提であれば、ピクセル→緯度経度の換算係数(Web Mercatorのmeters/pixel)は
+//   ドラッグ中ずっと定数になるため、ドラッグを離した瞬間に緯度経度を確定し
+//   session.mapLayer へ即座に上書き保存できる(=次回開いた時に何もしなくても最後の位置のまま)。
+// - 既定ズームは20(EMBED_DEFAULT_ZOOM)。東京近辺(緯度35.68°)で試算すると1pxあたり約0.12m
+//   (約8.3px/m)になり、旧ベクターモードの最終値PX_PER_METER=12に最も近い離散ズーム値。
+//   ズーム21の方が数値上はやや近いが、地方都市では航空写真タイルが対応していないことがあるため
+//   安全マージンを見て20を選んだ。
+// - 地図面の矩形(px)は「決まった縮尺の景色を覗く窓」で、既存のリサイズハンドルで伸縮しても
+//   中の縮尺・中心は変わらない(iframeは静止画ではなく実際に動いているページなので、CSSで
+//   箱のサイズを変えるだけで自動的に埋め直される。srcの再読み込みは不要)。
+// - 屋内/屋外(ベクター)と違い、抽出→プレビュー→「キャンバスへ展開する」という段階を踏まない。
+//   検索/現在地ボタンを押した瞬間にsession.mapLayerへ直接反映される「呼び出して重ねるだけ」の
+//   即時方式(ユーザー要望の核)。不透明度・グレースケール・地図種別も、デプロイ後にこの小窓を
+//   開けばいつでもそのままライブ編集できる(スライダーはCSSの opacity/filter だけで完結するため
+//   iframeの再読み込みは発生しない。地図種別・座標の変更だけがsrcの再読み込みを伴う)。
+// - 既知の制約: 回転ハンドルは他のkindと同様に使えるが、パンのピクセル→緯度経度換算は
+//   回転していない前提の計算のまま(回転させると自動保存の位置がずれる)。ペグマン・交通情報の
+//   レイヤーボタンはGoogle側のUIとして映り込み続け、消すパラメータが無い(実害は小さいため許容)。
+//   施設名などの自由文検索はジオコーディングAPIが必要になるため非対応。緯度経度、または
+//   GoogleマップのURL(@緯度,経度,ズームz を含む形式)の貼り付けのみ受け付ける。
 
 (function () {
   'use strict';
@@ -57,6 +90,11 @@
   const INDOOR_THRESHOLD = 150;
   const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
   const DEPLOY_ANIM_MS = 1100;
+  // Googleマップ埋め込み(kind:'embed')。ズームは固定し、パンのみ自前のドラッグ捕捉で処理する
+  // (詳細はファイル冒頭のコメント参照)。20は東京近辺で旧PX_PER_METER=12に最も近い離散ズーム値。
+  const EMBED_DEFAULT_ZOOM = 20;
+  const EMBED_DEFAULT_WIDTH = 480;
+  const EMBED_DEFAULT_HEIGHT = 360;
 
   let stylesInjected = false;
   let msEls = null;
@@ -146,6 +184,41 @@
       .ms-fetch-btn:disabled { opacity: 0.55; cursor: default; }
       .ms-fetch-status { margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; line-height: 1.6; color: rgba(255, 255, 255, 0.55); }
       .ms-fetch-status.error { color: #ff8a70; }
+
+      /* ---- Googleマップ埋め込み(kind:'embed')用の小窓UI ---- */
+      .ms-embed-search-row { display: flex; gap: 6px; margin-bottom: 8px; }
+      .ms-embed-input {
+        flex: 1; min-width: 0; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px;
+        padding: 7px 8px; font-size: 11px; background: rgba(255, 255, 255, 0.06); color: #fff;
+        font-family: 'Zen Kaku Gothic New', sans-serif;
+      }
+      .ms-embed-input::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .ms-embed-search-btn {
+        border: none; background: #3fae63; color: #06180d; border-radius: 6px; padding: 0 10px;
+        font-size: 11px; font-weight: 700; cursor: pointer; font-family: 'Zen Kaku Gothic New', sans-serif;
+      }
+      .ms-embed-search-btn:hover { background: #59c67c; }
+      .ms-embed-warn {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9px; line-height: 1.6; color: #ff8a70;
+        background: rgba(179, 64, 43, 0.12); border: 1px solid rgba(179, 64, 43, 0.35); border-radius: 6px;
+        padding: 6px 8px; margin: 0 0 8px;
+      }
+      .ms-embed-geo-btn {
+        width: 100%; padding: 8px; border-radius: 7px; border: 1px dashed rgba(255, 255, 255, 0.22);
+        background: none; color: rgba(255, 255, 255, 0.8); font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 11px; cursor: pointer; margin-bottom: 10px;
+      }
+      .ms-embed-geo-btn:hover { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
+      .ms-embed-maptype-row { display: flex; gap: 5px; background: rgba(255, 255, 255, 0.04); border-radius: 999px; padding: 3px; margin-bottom: 10px; }
+      .ms-embed-maptype-opt {
+        flex: 1; border: none; background: transparent; border-radius: 999px; padding: 6px 0;
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; color: rgba(255, 255, 255, 0.6); cursor: pointer;
+      }
+      .ms-embed-maptype-opt.sel { background: #3fae63; color: #06180d; font-weight: 700; }
+      .ms-embed-slider-row { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+      .ms-embed-slider-row span:first-child { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: rgba(255, 255, 255, 0.45); width: 62px; flex: none; }
+      .ms-embed-slider-row input[type=range] { flex: 1; accent-color: #3fae63; }
+      .ms-embed-slider-row span:last-child { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #fff; width: 32px; text-align: right; flex: none; }
       .ms-preview {
         width: 100%; height: 90px; border-radius: 8px; overflow: hidden; position: relative;
         background: repeating-conic-gradient(rgba(255, 255, 255, 0.05) 0% 25%, rgba(255, 255, 255, 0.02) 0% 50%) 0 0 / 12px 12px;
@@ -226,6 +299,16 @@
          広げているだけ(ジオメトリのバッファ計算はしていない)。fill:noneのまま太いstrokeで
          「帯状の塗り」に見せる。 */
       .ms-shape-highway { fill: none; stroke: rgba(124, 132, 98, 0.16); stroke-width: 8; }
+
+      /* ---- Googleマップ埋め込み(kind:'embed')のキャンバス上表示 ---- */
+      .ms-maplayer-embed { background: rgba(20, 24, 20, 0.4); }
+      .ms-embed-wrap { position: absolute; inset: 0; overflow: hidden; }
+      .ms-embed-iframe { width: 100%; height: 100%; border: 0; display: block; pointer-events: none; }
+      /* .ms-handle系と同じく、pointer-events:autoを個別に持つ要素。iframeはクロスオリジンで
+         内部の現在地を読み取れないため、ここでドラッグ量そのものを捕捉し、離した瞬間に
+         緯度経度へ変換してsrcを組み直す(ファイル冒頭のコメント参照)。 */
+      .ms-embed-capture { position: absolute; inset: 0; pointer-events: auto; cursor: grab; touch-action: none; }
+      .ms-embed-capture:active { cursor: grabbing; }
       .ms-handle {
         position: absolute; width: 22px; height: 22px; border-radius: 50%;
         background: rgba(63, 174, 99, 0.92); border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -277,7 +360,8 @@
       <p class="ms-session-label"></p>
       <div class="ms-mode-seg">
         <button class="ms-mode-opt" data-mode="indoor">屋内</button>
-        <button class="ms-mode-opt" data-mode="outdoor">屋外</button>
+        <button class="ms-mode-opt" data-mode="outdoor">ベクター</button>
+        <button class="ms-mode-opt" data-mode="embed">Google</button>
       </div>
       <div class="ms-block ms-block-indoor">
         <p class="ms-block-label">館内マップスキャン</p>
@@ -293,7 +377,36 @@
         <button class="ms-fetch-btn">この範囲を取得</button>
         <p class="ms-fetch-status" hidden></p>
       </div>
-      <div class="ms-block">
+      <div class="ms-block ms-block-embed" hidden>
+        <p class="ms-block-label">場所を呼び出す</p>
+        <div class="ms-embed-search-row">
+          <input type="text" class="ms-embed-input" placeholder="GoogleマップのURL、または「緯度,経度」">
+          <button class="ms-embed-search-btn">呼出</button>
+        </div>
+        <p class="ms-embed-warn" hidden></p>
+        <button class="ms-embed-geo-btn">📍 現在地から呼び出す</button>
+        <div class="ms-embed-maptype-row">
+          <button class="ms-embed-maptype-opt sel" data-type="m">地図</button>
+          <button class="ms-embed-maptype-opt" data-type="k">航空写真</button>
+        </div>
+        <div class="ms-embed-slider-row">
+          <span>不透明度</span>
+          <input type="range" class="ms-embed-opacity" min="10" max="100" value="55">
+          <span class="ms-embed-opacity-val">55%</span>
+        </div>
+        <div class="ms-embed-slider-row">
+          <span>グレースケール</span>
+          <input type="range" class="ms-embed-gray" min="0" max="100" value="35">
+          <span class="ms-embed-gray-val">35%</span>
+        </div>
+        <p class="ms-hint">
+          施設名の自由文検索は非対応(ジオコーディングAPIが必要になるため)。Googleマップで探した
+          場所のURLをコピーして貼るか、「緯度,経度」の形式で入力。ズームは固定で、変更したい時だけ
+          ズーム付きのURL(@緯度,経度,ズームz を含む形式)を貼り直す。地図面をドラッグすると、
+          離した瞬間にその場でパン&自動保存される。
+        </p>
+      </div>
+      <div class="ms-block ms-block-preview">
         <p class="ms-block-label">プレビュー</p>
         <div class="ms-preview empty"></div>
         <button class="ms-deploy-btn" disabled>キャンバスへ展開する</button>
@@ -320,9 +433,20 @@
       fetchBtn: win.querySelector('.ms-fetch-btn'),
       fetchStatus: win.querySelector('.ms-fetch-status'),
       preview: win.querySelector('.ms-preview'),
+      previewBlock: win.querySelector('.ms-block-preview'),
       deployBtn: win.querySelector('.ms-deploy-btn'),
       currentBlock: win.querySelector('.ms-block-current'),
       removeBtn: win.querySelector('.ms-remove-btn'),
+      embedBlock: win.querySelector('.ms-block-embed'),
+      embedInput: win.querySelector('.ms-embed-input'),
+      embedSearchBtn: win.querySelector('.ms-embed-search-btn'),
+      embedWarn: win.querySelector('.ms-embed-warn'),
+      embedGeoBtn: win.querySelector('.ms-embed-geo-btn'),
+      embedMaptypeOpts: Array.from(win.querySelectorAll('.ms-embed-maptype-opt')),
+      embedOpacity: win.querySelector('.ms-embed-opacity'),
+      embedOpacityVal: win.querySelector('.ms-embed-opacity-val'),
+      embedGray: win.querySelector('.ms-embed-gray'),
+      embedGrayVal: win.querySelector('.ms-embed-gray-val'),
     };
 
     // このウィンドウ内の操作が、下のキャンバスのパン/ジェスチャーに奪われないようにする
@@ -341,6 +465,23 @@
     msEls.fetchBtn.addEventListener('click', fetchOutdoorMap);
     msEls.deployBtn.addEventListener('click', deployToCanvas);
     msEls.removeBtn.addEventListener('click', removeDeployedMap);
+
+    msEls.embedSearchBtn.addEventListener('click', doEmbedSearch);
+    msEls.embedInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doEmbedSearch(); });
+    msEls.embedGeoBtn.addEventListener('click', doEmbedGeo);
+    msEls.embedMaptypeOpts.forEach((btn) => btn.addEventListener('click', () => setEmbedMapType(btn.dataset.type)));
+    msEls.embedOpacity.addEventListener('input', () => {
+      const v = Number(msEls.embedOpacity.value);
+      msEls.embedOpacityVal.textContent = `${v}%`;
+      applyLiveEmbedStyle('opacity', v);
+    });
+    msEls.embedOpacity.addEventListener('change', () => commitEmbedStyle('opacity', Number(msEls.embedOpacity.value)));
+    msEls.embedGray.addEventListener('input', () => {
+      const v = Number(msEls.embedGray.value);
+      msEls.embedGrayVal.textContent = `${v}%`;
+      applyLiveEmbedStyle('grayscale', v);
+    });
+    msEls.embedGray.addEventListener('change', () => commitEmbedStyle('grayscale', Number(msEls.embedGray.value)));
 
     // スワイプで左右に閉じる(モジュール共通デザイン言語)。ヘッダー(.ms-top)から
     // 始まった場合だけ判定し、プレビュー操作やスライダーのドラッグと紛れないようにする。
@@ -380,6 +521,11 @@
     msEls.modeOpts.forEach((btn) => btn.classList.toggle('sel', btn.dataset.mode === mode));
     msEls.indoorBlock.hidden = mode !== 'indoor';
     msEls.outdoorBlock.hidden = mode !== 'outdoor';
+    msEls.embedBlock.hidden = mode !== 'embed';
+    // embedは「呼び出したら即キャンバスへ反映」の即時方式で、屋内/屋外(ベクター)のような
+    // プレビュー→展開の段階を踏まないため、その段階専用のブロックごと隠す。
+    msEls.previewBlock.hidden = mode === 'embed';
+    if (mode === 'embed') syncEmbedControlsFromSession();
   }
 
   /**
@@ -395,6 +541,23 @@
     msEls.sessionLabel.textContent = session ? `保存先セッション: ${session.name || '(無題)'}` : '保存先セッションが見つかりません';
     const hasMap = Boolean(session && session.mapLayer);
     msEls.currentBlock.hidden = !hasMap;
+    if (mode === 'embed') syncEmbedControlsFromSession();
+  }
+
+  /** embedブロックのスライダー・地図種別トグルを、現在のセッションのライブな値に合わせる。 */
+  function syncEmbedControlsFromSession() {
+    if (!msEls || !msEls.embedOpacity) return;
+    const session = getSessionById(activeSessionId());
+    const layer = session && session.mapLayer && session.mapLayer.kind === 'embed' ? session.mapLayer : null;
+    const opacity = layer ? layer.opacity : 55;
+    const gray = layer ? layer.grayscale : 35;
+    const mapType = layer ? layer.mapType : 'm';
+    msEls.embedOpacity.value = opacity;
+    msEls.embedOpacityVal.textContent = `${opacity}%`;
+    msEls.embedGray.value = gray;
+    msEls.embedGrayVal.textContent = `${gray}%`;
+    msEls.embedMaptypeOpts.forEach((btn) => btn.classList.toggle('sel', btn.dataset.type === mapType));
+    msEls.embedWarn.hidden = true;
   }
 
   /* ==================== 開閉 ==================== */
@@ -681,6 +844,197 @@
     };
   }
 
+  /* ==================== Googleマップ埋め込み(kind:'embed') ==================== */
+
+  /**
+   * 入力文字列から緯度経度(と、あればズーム)を取り出す。施設名の自由文検索は
+   * ジオコーディングAPIが要るため非対応と割り切り、以下の2形式だけを受け付ける:
+   *   1. GoogleマップのURL中の "@緯度,経度,ズームz"
+   *   2. 「緯度,経度」のみのプレーンな数値ペア
+   * 短縮URL(maps.app.goo.gl)は展開先をfetch()で読み取れない(クロスオリジン)ため、
+   * 別途分かりやすいエラーメッセージへ誘導する。
+   */
+  function parseLatLngZoom(text) {
+    const v = (text || '').trim();
+    if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(v)) return { error: 'short' };
+    let m = v.match(/@(-?\d+\.\d+),(-?\d+\.\d+),(\d+(?:\.\d+)?)z/);
+    if (m) return { lat: Number(m[1]), lng: Number(m[2]), zoom: Math.round(Number(m[3])) };
+    m = v.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
+    if (m) return { lat: Number(m[1]), lng: Number(m[2]) };
+    return { error: 'unparsed' };
+  }
+
+  function buildEmbedSrc(layer) {
+    return `https://maps.google.com/maps?ll=${layer.lat},${layer.lng}&z=${layer.zoom}&t=${layer.mapType}&output=embed`;
+  }
+
+  /**
+   * 検索/現在地ボタンから呼ばれる共通処理。まだこのセッションに地図が無ければ新規作成して
+   * すぐキャンバスへ反映し(呼び出して重ねるだけの即時方式)、既にembedの地図があれば
+   * その位置(とズーム、指定があれば)だけを更新する。既にembed以外のkindがあれば
+   * 既存の展開フロー同様、置き換えの確認を挟む。
+   */
+  function ensureEmbedLayer(lat, lng, zoom) {
+    const sessionId = activeSessionId();
+    const session = getSessionById(sessionId);
+    if (!session) {
+      setStatus('セッションが見つかりません', { important: true });
+      return null;
+    }
+    let layer = session.mapLayer;
+    if (layer && layer.kind !== 'embed') {
+      if (!window.confirm('既にこのセッションに地図があります。置き換えますか?')) return null;
+      layer = null;
+    }
+    if (!layer) {
+      const center = worldViewportCenter();
+      layer = {
+        kind: 'embed',
+        lat,
+        lng,
+        zoom: zoom || EMBED_DEFAULT_ZOOM,
+        mapType: 'm',
+        opacity: 55,
+        grayscale: 35,
+        naturalWidth: EMBED_DEFAULT_WIDTH,
+        naturalHeight: EMBED_DEFAULT_HEIGHT,
+        scale: 1,
+        rotation: 0,
+        createdAt: new Date().toISOString(),
+      };
+      layer.x = center.x - EMBED_DEFAULT_WIDTH / 2;
+      layer.y = center.y - EMBED_DEFAULT_HEIGHT / 2;
+      session.mapLayer = layer;
+      scheduleAutoSave();
+      refreshCurrentMapBlock();
+      renderMappingStorysLayer({ animate: true });
+      fitViewportToMap(layer);
+      playMappingStorysDeploySound();
+      setStatus(`「${session.name || '(無題)'}」へGoogleマップを呼び出しました`, { important: true });
+      return layer;
+    }
+    layer.lat = lat;
+    layer.lng = lng;
+    if (zoom) layer.zoom = zoom;
+    scheduleAutoSave();
+    renderMappingStorysLayer();
+    setStatus('地図の位置を更新しました');
+    return layer;
+  }
+
+  function doEmbedSearch() {
+    const v = msEls.embedInput.value;
+    if (!v.trim()) return;
+    const parsed = parseLatLngZoom(v);
+    if (parsed.error === 'short') {
+      msEls.embedWarn.hidden = false;
+      msEls.embedWarn.textContent = '短縮リンク(maps.app.goo.gl)は座標を取り出せません。ブラウザで開いた後のアドレスバーのURLを貼ってください。';
+      return;
+    }
+    if (parsed.error) {
+      msEls.embedWarn.hidden = false;
+      msEls.embedWarn.textContent = '位置を特定できませんでした。GoogleマップのURL、または「緯度,経度」の形式で入力してください。';
+      return;
+    }
+    msEls.embedWarn.hidden = true;
+    ensureEmbedLayer(parsed.lat, parsed.lng, parsed.zoom);
+  }
+
+  function doEmbedGeo() {
+    if (!navigator.geolocation) {
+      msEls.embedWarn.hidden = false;
+      msEls.embedWarn.textContent = 'この端末では位置情報が使えません';
+      return;
+    }
+    msEls.embedWarn.hidden = true;
+    setStatus('Mapping Storys: 現在地を取得中…', { busy: true });
+    navigator.geolocation.getCurrentPosition(
+      (pos) => ensureEmbedLayer(pos.coords.latitude, pos.coords.longitude),
+      (err) => {
+        msEls.embedWarn.hidden = false;
+        msEls.embedWarn.textContent = describeOutdoorError(err);
+        setStatus('Mapping Storys: 現在地の取得に失敗しました', { important: true });
+      },
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  }
+
+  function setEmbedMapType(type) {
+    msEls.embedMaptypeOpts.forEach((btn) => btn.classList.toggle('sel', btn.dataset.type === type));
+    const session = getSessionById(activeSessionId());
+    const layer = session && session.mapLayer;
+    if (layer && layer.kind === 'embed') {
+      layer.mapType = type;
+      scheduleAutoSave();
+      renderMappingStorysLayer();
+    }
+  }
+
+  /** スライダーのinput中は見た目だけCSSで即反映する(iframeの再読み込みは発生しない)。 */
+  function applyLiveEmbedStyle(prop, value) {
+    const wrap = els.content.querySelector('.ms-embed-wrap');
+    if (!wrap) return;
+    if (prop === 'opacity') wrap.style.opacity = (value / 100).toString();
+    else if (prop === 'grayscale') wrap.style.filter = `grayscale(${value}%)`;
+  }
+
+  /** スライダーを離した(change)瞬間にだけ保存する。既存のドラッグ系ハンドルと同じ「操作中は
+   * 見た目だけ、離した時に1回だけscheduleAutoSave()」という設計に揃えている。 */
+  function commitEmbedStyle(prop, value) {
+    const session = getSessionById(activeSessionId());
+    const layer = session && session.mapLayer;
+    if (!layer || layer.kind !== 'embed') return;
+    layer[prop] = value;
+    scheduleAutoSave();
+  }
+
+  /**
+   * 埋め込み地図面のドラッグ捕捉。iframeの手前に敷いた透明なcaptureEl(.ms-embed-capture)が
+   * ドラッグ量を丸ごと受け取り、ドラッグ中はiframeにCSS transformをかけて見た目だけ動かす
+   * (Googleへの問い合わせは発生しない)。指を離した瞬間だけ、実際のスクリーン移動量を
+   * 「キャンバスの現在のズーム(viewportState.scale)× この地図レイヤー自身のズーム(layer.scale)」で
+   * 割り戻してiframeの内部px移動量に変換し、固定ズームのWeb Mercator定数(meters/pixel)を介して
+   * 緯度経度へ確定・保存する。回転(layer.rotation)は考慮していないため、回転させると
+   * この換算がずれる(ファイル冒頭コメントの既知の制約)。
+   */
+  function wireEmbedPan(captureEl, layer, iframeEl) {
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    captureEl.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      captureEl.setPointerCapture(e.pointerId);
+      e.stopPropagation();
+    });
+    captureEl.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      iframeEl.style.transform = `translate(${e.clientX - startX}px, ${e.clientY - startY}px)`;
+    });
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      iframeEl.style.transform = '';
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        const factor = viewportState.scale * layer.scale;
+        const dxInternal = dx / factor;
+        const dyInternal = dy / factor;
+        const mpp = (156543.03392 * Math.cos((layer.lat * Math.PI) / 180)) / Math.pow(2, layer.zoom);
+        const dLng = -(dxInternal * mpp) / (111320 * Math.cos((layer.lat * Math.PI) / 180));
+        const dLat = (dyInternal * mpp) / 110540;
+        layer.lat += dLat;
+        layer.lng += dLng;
+        iframeEl.src = buildEmbedSrc(layer);
+        scheduleAutoSave();
+      }
+    };
+    captureEl.addEventListener('pointerup', endDrag);
+    captureEl.addEventListener('pointercancel', endDrag);
+  }
+
   /* ==================== プレビュー ==================== */
 
   function renderPendingPreview() {
@@ -729,8 +1083,9 @@
    * 肝心の輪郭線は画面のはるか外にある、という不具合(2026年9月、実機報告)への対策。
    */
   function fitViewportToMap(layer) {
-    const w = (layer.kind === 'raster' ? layer.naturalWidth : layer.bboxWidth) * layer.scale;
-    const h = (layer.kind === 'raster' ? layer.naturalHeight : layer.bboxHeight) * layer.scale;
+    const hasNaturalSize = layer.kind === 'raster' || layer.kind === 'embed';
+    const w = (hasNaturalSize ? layer.naturalWidth : layer.bboxWidth) * layer.scale;
+    const h = (hasNaturalSize ? layer.naturalHeight : layer.bboxHeight) * layer.scale;
     if (!w || !h) return;
     const rect = els.viewport.getBoundingClientRect();
     const margin = 0.85; // 端まで目一杯にせず、少し余白を持たせる
@@ -875,12 +1230,31 @@
 
     const el = document.createElement('div');
     el.className = `ms-maplayer ms-maplayer-${layer.kind}${editingOpen ? ' ms-editable' : ''}`;
-    const w = layer.kind === 'raster' ? layer.naturalWidth : layer.bboxWidth;
-    const h = layer.kind === 'raster' ? layer.naturalHeight : layer.bboxHeight;
+    const hasNaturalSize = layer.kind === 'raster' || layer.kind === 'embed';
+    const w = hasNaturalSize ? layer.naturalWidth : layer.bboxWidth;
+    const h = hasNaturalSize ? layer.naturalHeight : layer.bboxHeight;
     el.style.width = `${w}px`;
     el.style.height = `${h}px`;
 
-    if (layer.kind === 'raster') {
+    if (layer.kind === 'embed') {
+      const wrap = document.createElement('div');
+      wrap.className = 'ms-embed-wrap';
+      wrap.style.opacity = (layer.opacity / 100).toString();
+      wrap.style.filter = `grayscale(${layer.grayscale}%)`;
+      const iframe = document.createElement('iframe');
+      iframe.className = 'ms-embed-iframe';
+      iframe.loading = 'lazy';
+      iframe.referrerPolicy = 'no-referrer-when-downgrade';
+      iframe.src = buildEmbedSrc(layer);
+      wrap.appendChild(iframe);
+      el.appendChild(wrap);
+      if (editingOpen) {
+        const capture = document.createElement('div');
+        capture.className = 'ms-embed-capture';
+        el.appendChild(capture);
+        wireEmbedPan(capture, layer, iframe);
+      }
+    } else if (layer.kind === 'raster') {
       const img = document.createElement('img');
       img.className = 'ms-maplayer-img';
       img.draggable = false;
