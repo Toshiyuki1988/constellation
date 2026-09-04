@@ -771,6 +771,15 @@
     // カード再描画のたびに呼ばれるこの関数を使って、小窓側の表示も追従させる。
     if (editingOpen && msEls) refreshCurrentMapBlock();
 
+    // 【重要】renderAllCards()経由(els.content.innerHTML='')ならこの関数のcontainerも一緒に
+    // 消えるが、deployToCanvas()/closeMappingStorys()/removeDeployedMap()はこの関数を直接
+    // 呼ぶため、それを経由しない。以前は古いcontainerを消さずに新しいcontainerを追加するだけ
+    // だったため、展開・開閉のたびに.ms-maplayer-containerが際限なく積み重なり、古い
+    // ハンドル(pointer-events:auto)がキャンバス上に残り続けて、ダブルタップ俯瞰・ピンチズームを
+    // 奪ったり、地図が一瞬しか見えないように見えたりする不具合の直接原因になっていた
+    // (2026年9月、実機ログを元に特定)。必ず全部消してから作り直す。
+    els.content.querySelectorAll('.ms-maplayer-container').forEach((node) => node.remove());
+
     const container = document.createElement('div');
     container.className = 'ms-maplayer-container';
     els.content.insertBefore(container, els.content.firstChild);
@@ -790,16 +799,23 @@
       const img = document.createElement('img');
       img.className = 'ms-maplayer-img';
       img.draggable = false;
+      const errorText = document.createElement('span');
+      errorText.className = 'ms-maplayer-error-text';
+      errorText.hidden = true;
+      errorText.textContent = '地図画像を読み込めませんでした(サインイン状態を確認してください)';
       getFileBlobUrlCached(layer.imageFileId)
         .then((url) => { img.src = url; })
         .catch((err) => {
           // サインイン切れなどで画像が取得できないと、以前は無言で何も表示されなかった
           // (「展開したのに見当たらない」報告の一因)。枠だけでも見えるようにする。
+          // el.textContent で直接書き換えると、img やこの後追加される移動/リサイズ/回転の
+          // ハンドルまで巻き添えで消えてしまうため、専用のテキスト要素だけを表示に切り替える。
           console.warn('Mapping Storys: 地図画像の取得に失敗', err);
           el.classList.add('ms-maplayer-error');
-          el.textContent = '地図画像を読み込めませんでした(サインイン状態を確認してください)';
+          errorText.hidden = false;
         });
       el.appendChild(img);
+      el.appendChild(errorText);
     } else {
       const svg = document.createElementNS(SVG_NS, 'svg');
       svg.setAttribute('viewBox', `0 0 ${layer.bboxWidth} ${layer.bboxHeight}`);
