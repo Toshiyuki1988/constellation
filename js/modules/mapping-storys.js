@@ -214,13 +214,18 @@
          一定のCSS px幅を保つ(=描画自体は正しくても、ズームアウトすると相対的に細く見えて
          目立たない、という視認性の問題があったため、2026年9月に少し太くした)。 */
       /* アステリズムの糸(#737373・2px、js/canvas.js/css/style.css)と交差した時に見分けが
-         つかなくなる不具合(2026年9月、ユーザー報告)への対応。彩度・太さを落とした暖色系の
-         土色(苔・枯野のトーン)に変え、アステリズムの冷たいグレーとは色相そのものが違う
-         ようにすることで、交差点でも瞬時に区別できるようにした。線を細く薄くした分、地図は
-         カード・接続線より一段後ろの「地面」として自然に後退して見える。 */
-      .ms-shape { fill: none; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-      .ms-shape-building { stroke: rgba(124, 132, 98, 0.55); stroke-width: 1.75; }
-      .ms-shape-highway { stroke: rgba(124, 132, 98, 0.38); stroke-width: 1.25; }
+         つかなくなる不具合(2026年9月、ユーザー報告)への対応。当初は建物・道とも彩度を
+         落とした暖色系の土色(苔・枯野のトーン)の輪郭線に変えたが、実際のセッション密度
+         (カード・接続線が多数重なる)ではそれでも「線 vs 線」の競合が残った。実在の観光
+         マップ(登山道マップ等)が採用している「面は地形、線はルートだけ」という役割分担を
+         参考に、建物・道ともアステリズムと同じ「線」をやめて「面(塗り)」にした。これで
+         地図側の語彙が完全に面へ統一され、アステリズムの細い線と構造的に競合しなくなる。 */
+      .ms-shape { stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+      .ms-shape-building { fill: rgba(124, 132, 98, 0.14); stroke: rgba(124, 132, 98, 0.32); stroke-width: 1; }
+      /* 道は実測の道幅データを持たないため、観光マップのデフォルメと同じく細い線を太い帯に
+         広げているだけ(ジオメトリのバッファ計算はしていない)。fill:noneのまま太いstrokeで
+         「帯状の塗り」に見せる。 */
+      .ms-shape-highway { fill: none; stroke: rgba(124, 132, 98, 0.16); stroke-width: 8; }
       .ms-handle {
         position: absolute; width: 22px; height: 22px; border-radius: 50%;
         background: rgba(63, 174, 99, 0.92); border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -690,7 +695,9 @@
       svg.setAttribute('viewBox', `0 0 ${pendingOutdoor.bboxWidth} ${pendingOutdoor.bboxHeight}`);
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       pendingOutdoor.shapes.forEach((shape) => {
-        const poly = document.createElementNS(SVG_NS, 'polyline');
+        // 建物は面(polygon)として塗りつぶす。道はデータ通りの折れ線(polyline)のまま、
+        // 太い帯状のstrokeで「塗りの帯」に見せる(実際の道幅のバッファ計算はしない)。
+        const poly = document.createElementNS(SVG_NS, shape.type === 'building' ? 'polygon' : 'polyline');
         poly.setAttribute('points', shape.points.map((p) => p.join(',')).join(' '));
         poly.setAttribute('class', `ms-shape ms-shape-${shape.type}`);
         svg.appendChild(poly);
@@ -898,7 +905,7 @@
       const svg = document.createElementNS(SVG_NS, 'svg');
       svg.setAttribute('viewBox', `0 0 ${layer.bboxWidth} ${layer.bboxHeight}`);
       layer.shapes.forEach((shape) => {
-        const poly = document.createElementNS(SVG_NS, 'polyline');
+        const poly = document.createElementNS(SVG_NS, shape.type === 'building' ? 'polygon' : 'polyline');
         poly.setAttribute('points', shape.points.map((p) => p.join(',')).join(' '));
         poly.setAttribute('class', `ms-shape ms-shape-${shape.type}`);
         if (shape.name) {
