@@ -41,8 +41,16 @@
   'use strict';
 
   // 写真カードの既定幅(約240px)を「人物2人分(目安3.4m)」とみなした簡易換算値。
-  // 屋外はGPS実距離(メートル)にこの係数を掛けるだけで、カードと釣り合うスケールになる。
-  const PX_PER_METER = 70;
+  // 屋外はGPS実距離(メートル)にこの係数を掛けるだけで、カードと釣り合うスケールになる…はずだったが、
+  // 実際に70px/mで計算すると、半径150m(既定値)だけでキャンバス全体が約21000px四方という、
+  // 既存アプリのズーム下限(MIN_SCALE=0.2、js/canvas.js)でも画面に収まらない巨大さになり、
+  // 展開しても移動ハンドルだけが見えて肝心の建物・道路は画面のはるか外、という不具合が
+  // 実機で見つかった(2026年9月)。既存の「全カードが収まるまでズームアウト」機能
+  // (fitAllCardsToScreen、js/canvas.js)もMIN_SCALEでクランプする設計になっており、
+  // アプリ全体でこの下限を尊重する方針のため、Mapping Storys側だけそれを無視するのではなく、
+  // この係数を下げてMIN_SCALEの範囲内に収まるようにした。「写真カード基準の正確な実寸」より
+  // 「展開したら必ず見える」ことを優先した判断。
+  const PX_PER_METER = 12;
   // 屋内は実寸を推定できないため、見た目のデフォルト表示幅で仮置きする(手動リサイズ前提)。
   const DEFAULT_INDOOR_DISPLAY_WIDTH = 480;
   // 0-255。紙の白地と印刷線の濃淡を分ける閾値(紙質・照明でノイズが出ることは許容する)。
@@ -191,9 +199,12 @@
       }
       .ms-maplayer-error .ms-maplayer-img { display: none; }
       .ms-maplayer-vector svg { width: 100%; height: 100%; display: block; overflow: visible; }
+      /* vector-effect:non-scaling-strokeにより、地図が展開時に大きくズームアウトされても線幅は
+         一定のCSS px幅を保つ(=描画自体は正しくても、ズームアウトすると相対的に細く見えて
+         目立たない、という視認性の問題があったため、2026年9月に少し太くした)。 */
       .ms-shape { fill: none; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-      .ms-shape-building { stroke: #3fae63; stroke-width: 2.6; }
-      .ms-shape-highway { stroke: rgba(63, 174, 99, 0.5); stroke-width: 2; }
+      .ms-shape-building { stroke: #3fae63; stroke-width: 4; }
+      .ms-shape-highway { stroke: rgba(63, 174, 99, 0.65); stroke-width: 3; }
       .ms-handle {
         position: absolute; width: 22px; height: 22px; border-radius: 50%;
         background: rgba(63, 174, 99, 0.92); border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -252,7 +263,7 @@
         <p class="ms-block-label">現在地からスキャン</p>
         <div class="ms-radius-row">
           <span style="font-family:'IBM Plex Mono',monospace; font-size:9px; color:rgba(255,255,255,0.5);">半径</span>
-          <input type="range" class="ms-radius-input" min="30" max="400" step="10" value="150">
+          <input type="range" class="ms-radius-input" min="30" max="200" step="10" value="150">
           <span class="ms-radius-val">150m</span>
         </div>
         <button class="ms-fetch-btn">この範囲を取得</button>
@@ -663,6 +674,29 @@
     };
   }
 
+  /**
+   * 展開直後、地図全体が画面に収まるようキャンバスを自動でズーム・パンする。
+   * 屋外は写真カード基準の換算係数(PX_PER_METER)のまま実距離どおりにスケールするため、
+   * 半径150m(既定値)でも地図全体は約21000px四方という、通常の画面をはるかに超える
+   * サイズになる。移動ハンドルは地図の中心に固定表示されるが、現在地からの相対座標である
+   * 実際の建物・道路は中心付近にあるとは限らないため、展開してもハンドルだけが見え、
+   * 肝心の輪郭線は画面のはるか外にある、という不具合(2026年9月、実機報告)への対策。
+   */
+  function fitViewportToMap(layer) {
+    const w = (layer.kind === 'raster' ? layer.naturalWidth : layer.bboxWidth) * layer.scale;
+    const h = (layer.kind === 'raster' ? layer.naturalHeight : layer.bboxHeight) * layer.scale;
+    if (!w || !h) return;
+    const rect = els.viewport.getBoundingClientRect();
+    const margin = 0.85; // 端まで目一杯にせず、少し余白を持たせる
+    const fitScale = Math.min((rect.width * margin) / w, (rect.height * margin) / h);
+    // 小さい地図(屋内スキャンなど)まで無闇に拡大しないよう上限を設ける
+    const newScale = Math.max(MIN_SCALE, Math.min(fitScale, 1.5));
+    viewportState.scale = newScale;
+    viewportState.x = rect.width / 2 - (layer.x + w / 2) * newScale;
+    viewportState.y = rect.height / 2 - (layer.y + h / 2) * newScale;
+    applyViewportTransform();
+  }
+
   async function deployToCanvas() {
     const sessionId = activeSessionId();
     const session = getSessionById(sessionId);
@@ -727,6 +761,7 @@
       renderPendingPreview();
       refreshCurrentMapBlock();
 
+      fitViewportToMap(newLayer);
       playMappingStorysDeploySound();
       renderMappingStorysLayer({ animate: true });
       setStatus(`「${session.name || '(無題)'}」へ地図を展開しました`, { important: true });
