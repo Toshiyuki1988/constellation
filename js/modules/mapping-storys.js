@@ -177,8 +177,12 @@
       /* ---- キャンバス背景としての地図レイヤー ---- */
       .ms-maplayer-container { position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; pointer-events: none; }
       .ms-maplayer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: center center; }
-      .ms-maplayer.ms-editable { pointer-events: auto; cursor: grab; outline: 1px dashed rgba(63, 174, 99, 0.55); outline-offset: 6px; }
-      .ms-maplayer.ms-editable:active { cursor: grabbing; }
+      /* 地図本体は常にpointer-events:noneのまま(展開直後のタップ/ダブルタップ/ピンチが誤って
+         地図の移動と解釈され、画面外へ吹き飛んで「一瞬出てすぐ消える」ように見えたり、地図の
+         広い当たり判定がキャンバスのピンチズーム/ダブルタップ俯瞰を奪ってしまう不具合が
+         あったため、2026年9月に「本体を掴んで移動」から「専用ハンドルでのみ移動」に変更した。
+         移動・リサイズ・回転はすべて.ms-handle系の小さな個別要素だけがpointer-events:autoを持つ。 */
+      .ms-maplayer.ms-editable { outline: 1px dashed rgba(63, 174, 99, 0.55); outline-offset: 6px; }
       .ms-maplayer-img { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
       .ms-maplayer-error {
         display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px;
@@ -197,6 +201,8 @@
       }
       .ms-handle-resize { right: 0; bottom: 0; cursor: nwse-resize; }
       .ms-handle-rotate { left: 50%; top: 0; cursor: grab; }
+      .ms-handle-move { left: 50%; top: 50%; cursor: grab; }
+      .ms-handle-move:active { cursor: grabbing; }
 
       /* ---- 展開時の演出(スキャン反射のように左から右へ広がる) ---- */
       .ms-maplayer.ms-deploying { animation: ms-deploy-reveal ${DEPLOY_ANIM_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
@@ -750,10 +756,11 @@
 
   /* ==================== キャンバス背景としての描画(js/app.jsのrenderAllCards()から呼ばれる) ==================== */
 
-  function applyMapLayerTransform(el, layer, resizeHandle, rotateHandle) {
+  function applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle) {
     el.style.transform = `translate(${layer.x}px, ${layer.y}px) rotate(${layer.rotation}deg) scale(${layer.scale})`;
     // ハンドル自体は常に一定の見た目サイズ・向きに保つため、親のscale/rotationを打ち消す
     const counter = `scale(${1 / layer.scale}) rotate(${-layer.rotation}deg)`;
+    if (moveHandle) moveHandle.style.transform = `translate(-50%, -50%) ${counter}`;
     if (resizeHandle) resizeHandle.style.transform = `translate(50%, 50%) ${counter}`;
     if (rotateHandle) rotateHandle.style.transform = `translate(-50%, -160%) ${counter}`;
   }
@@ -810,9 +817,15 @@
       el.appendChild(svg);
     }
 
+    let moveHandle = null;
     let resizeHandle = null;
     let rotateHandle = null;
     if (editingOpen) {
+      moveHandle = document.createElement('div');
+      moveHandle.className = 'ms-handle ms-handle-move';
+      moveHandle.title = 'ドラッグで移動';
+      moveHandle.textContent = '✥';
+      el.appendChild(moveHandle);
       resizeHandle = document.createElement('div');
       resizeHandle.className = 'ms-handle ms-handle-resize';
       resizeHandle.title = 'ドラッグでリサイズ';
@@ -821,10 +834,10 @@
       rotateHandle.className = 'ms-handle ms-handle-rotate';
       rotateHandle.title = 'ドラッグで回転';
       el.appendChild(rotateHandle);
-      wireEditHandlers(el, layer, resizeHandle, rotateHandle);
+      wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle);
     }
 
-    applyMapLayerTransform(el, layer, resizeHandle, rotateHandle);
+    applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
     container.appendChild(el);
 
     if (animate) {
@@ -837,27 +850,33 @@
 
   /* ==================== 移動・リサイズ・回転(小窓が開いている間だけ) ==================== */
 
-  function wireEditHandlers(el, layer, resizeHandle, rotateHandle) {
+  /**
+   * 移動・リサイズ・回転は、それぞれ専用の小さなハンドルからのみ開始する(地図本体は常に
+   * pointer-events:none)。以前は地図本体を直接ドラッグして移動できる設計だったが、展開直後の
+   * タップ/ダブルタップ/ピンチが誤って「移動」と解釈されて地図が画面外へ飛んでしまい、かつ
+   * 地図の広い当たり判定がキャンバスのピンチズーム・ダブルタップ俯瞰を奪ってしまう不具合が
+   * あったため、2026年9月にハンドル方式へ変更した。
+   */
+  function wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle) {
     let dragging = false;
     let dragStart = { x: 0, y: 0 };
     let origPos = { x: 0, y: 0 };
-    el.addEventListener('pointerdown', (e) => {
-      if (e.target === resizeHandle || e.target === rotateHandle) return;
+    moveHandle.addEventListener('pointerdown', (e) => {
       dragging = true;
       dragStart = { x: e.clientX, y: e.clientY };
       origPos = { x: layer.x, y: layer.y };
-      el.setPointerCapture(e.pointerId);
+      moveHandle.setPointerCapture(e.pointerId);
       e.stopPropagation();
     });
-    el.addEventListener('pointermove', (e) => {
+    moveHandle.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       layer.x = origPos.x + (e.clientX - dragStart.x) / viewportState.scale;
       layer.y = origPos.y + (e.clientY - dragStart.y) / viewportState.scale;
-      applyMapLayerTransform(el, layer, resizeHandle, rotateHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
     });
     const endDrag = () => { if (dragging) { dragging = false; scheduleAutoSave(); } };
-    el.addEventListener('pointerup', endDrag);
-    el.addEventListener('pointercancel', endDrag);
+    moveHandle.addEventListener('pointerup', endDrag);
+    moveHandle.addEventListener('pointercancel', endDrag);
 
     let resizing = false;
     let resizeStartX = 0;
@@ -874,7 +893,7 @@
       const dx = (e.clientX - resizeStartX) / viewportState.scale;
       const factor = 1 + dx / 200; // 200pxのドラッグでおよそ2倍、というざっくりした感度
       layer.scale = Math.max(0.05, Math.min(8, origScale * factor));
-      applyMapLayerTransform(el, layer, resizeHandle, rotateHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
     });
     const endResize = () => { if (resizing) { resizing = false; scheduleAutoSave(); } };
     resizeHandle.addEventListener('pointerup', endResize);
@@ -900,7 +919,7 @@
       const cy = rect.top + rect.height / 2;
       const angle = (Math.atan2(e.clientY - cy, e.clientX - cx) * 180) / Math.PI;
       layer.rotation = origRotation + (angle - rotateStartAngle);
-      applyMapLayerTransform(el, layer, resizeHandle, rotateHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
     });
     const endRotate = () => { if (rotating) { rotating = false; scheduleAutoSave(); } };
     rotateHandle.addEventListener('pointerup', endRotate);
