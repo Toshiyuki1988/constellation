@@ -793,8 +793,12 @@
 
   function applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle) {
     el.style.transform = `translate(${layer.x}px, ${layer.y}px) rotate(${layer.rotation}deg) scale(${layer.scale})`;
-    // ハンドル自体は常に一定の見た目サイズ・向きに保つため、親のscale/rotationを打ち消す
-    const counter = `scale(${1 / layer.scale}) rotate(${-layer.rotation}deg)`;
+    // ハンドルは常に一定の見た目サイズ・向きに保つため、親のscale/rotationを打ち消す。
+    // layer.scaleだけでなく、キャンバス全体のズーム(viewportState.scale、canvas-content配下に
+    // ハンドルもぶら下がっているため一緒に縮小されてしまう)も打ち消さないと、地図全体を画面に
+    // 収めるためキャンバスが大きくズームアウトされた時に、ハンドルが数px四方まで縮んで実質
+    // 操作できなくなる不具合があった(2026年9月、「編集機能が無い」という実機報告で判明)。
+    const counter = `scale(${1 / (layer.scale * viewportState.scale)}) rotate(${-layer.rotation}deg)`;
     if (moveHandle) moveHandle.style.transform = `translate(-50%, -50%) ${counter}`;
     if (resizeHandle) resizeHandle.style.transform = `translate(50%, 50%) ${counter}`;
     if (rotateHandle) rotateHandle.style.transform = `translate(-50%, -160%) ${counter}`;
