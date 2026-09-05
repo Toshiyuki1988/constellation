@@ -64,9 +64,11 @@
 //   即時方式(ユーザー要望の核)。不透明度・グレースケール・地図種別も、デプロイ後にこの小窓を
 //   開けばいつでもそのままライブ編集できる(スライダーはCSSの opacity/filter だけで完結するため
 //   iframeの再読み込みは発生しない。地図種別・座標の変更だけがsrcの再読み込みを伴う)。
-// - 既知の制約: 回転ハンドルは他のkindと同様に使えるが、パンのピクセル→緯度経度換算は
-//   回転していない前提の計算のまま(回転させると自動保存の位置がずれる)。ペグマン・交通情報の
-//   レイヤーボタンはGoogle側のUIとして映り込み続け、消すパラメータが無い(実害は小さいため許容)。
+// - 既知の制約: embedは回転ハンドルを持たない(2026年9月、ユーザー指示により非搭載にした)。
+//   もともとパンのピクセル→緯度経度換算(wireEmbedPan)が回転していない前提の計算式だったため、
+//   回転させると自動保存の位置がずれる不具合があった。ハンドル自体を無くすことで解消している
+//   (屋内/屋外ベクターのkindは従来どおり回転できる)。ペグマン・交通情報のレイヤーボタンは
+//   Google側のUIとして映り込み続け、消すパラメータが無い(実害は小さいため許容)。
 //   施設名などの自由文検索はジオコーディングAPIが必要になるため非対応。緯度経度、または
 //   GoogleマップのURL(@緯度,経度,ズームz を含む形式)の貼り付けのみ受け付ける。
 
@@ -1305,10 +1307,16 @@
       resizeHandle.className = 'ms-handle ms-handle-resize';
       resizeHandle.title = 'ドラッグでリサイズ';
       el.appendChild(resizeHandle);
-      rotateHandle = document.createElement('div');
-      rotateHandle.className = 'ms-handle ms-handle-rotate';
-      rotateHandle.title = 'ドラッグで回転';
-      el.appendChild(rotateHandle);
+      // Googleマップ埋め込み(kind:'embed')は回転ハンドルを持たない。回転させると
+      // パンのピクセル→緯度経度換算(wireEmbedPan、回転していない前提の計算)がずれる
+      // 既知の不具合があった上、ユーザーからも「小窓の回転機能はいらない」と明示された
+      // ため、2026年9月にembedのみ非搭載にした(屋内/屋外ベクターは従来どおり回転できる)。
+      if (layer.kind !== 'embed') {
+        rotateHandle = document.createElement('div');
+        rotateHandle.className = 'ms-handle ms-handle-rotate';
+        rotateHandle.title = 'ドラッグで回転';
+        el.appendChild(rotateHandle);
+      }
       wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle);
     }
 
@@ -1373,6 +1381,8 @@
     const endResize = () => { if (resizing) { resizing = false; scheduleAutoSave(); } };
     resizeHandle.addEventListener('pointerup', endResize);
     resizeHandle.addEventListener('pointercancel', endResize);
+
+    if (!rotateHandle) return; // embed(Googleマップ)は回転ハンドルを持たないため、以降の配線をスキップする
 
     let rotating = false;
     let rotateStartAngle = 0;

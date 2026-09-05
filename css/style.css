@@ -935,6 +935,97 @@ html, body {
 }
 .star-card-info-resync-btn:hover { border-color: var(--text); }
 
+/* ---------------- ストリートビューカード ---------------- */
+.star-card--streetview {
+  padding: 8px 8px 10px;
+}
+
+.star-card-streetview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: grab;
+}
+
+.star-card-streetview-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.star-card-streetview-change-btn {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.star-card-streetview-change-btn:hover { color: var(--text); border-color: var(--text); }
+
+/* .star-card-mediaの汎用ルール(flex:1・min-height:40px)を継承しつつ、パノラマが
+   窮屈にならないよう既定の最小高さだけ底上げする。 */
+.star-card-media-streetview { min-height: 140px; position: relative; overflow: hidden; }
+
+/*
+ * iframeはpointer-events:autoのまま(=中は本物のストリートビューとして自由にドラッグ・
+ * ズームできる)。クロスオリジンiframe内で起きたpointerdownはそもそも親のカード移動
+ * リスナーまでバブリングしてこないため、カードの移動はヘッダー帯かハンドルから行う設計。
+ */
+.star-card-streetview-iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.star-card-streetview-setup {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--surface-2);
+  border-radius: 4px;
+}
+.star-card-streetview-input {
+  flex: 1;
+  min-height: 50px;
+  resize: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 7px 8px;
+  background: #fff;
+}
+.star-card-streetview-go-btn {
+  display: block;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  background: var(--text);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 0;
+  cursor: pointer;
+}
+.star-card-streetview-go-btn:hover { opacity: 0.85; }
+.star-card-streetview-warn {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--rust);
+}
+
 /* ---------------- サマリーカード ---------------- */
 .star-card--summary {
   padding: 10px 12px 12px;

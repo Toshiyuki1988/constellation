@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolSession = document.getElementById('tool-session');
   els.toolInfo = document.getElementById('tool-info');
   els.toolSummary = document.getElementById('tool-summary');
+  els.toolStreetview = document.getElementById('tool-streetview');
   els.status = document.getElementById('status');
   els.statusProgress = document.getElementById('statusProgress');
   els.statusProgressBar = document.getElementById('statusProgressBar');
@@ -99,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolSession.addEventListener('click', handleCreateSession);
   els.toolInfo.addEventListener('click', createInfoCard);
   els.toolSummary.addEventListener('click', () => createSummaryCard());
+  els.toolStreetview.addEventListener('click', createStreetviewCard);
   els.infoTicker.addEventListener('click', () => {
     const card = infoTickerItems[infoTickerIndex];
     if (card) jumpToInfoCard(card);
@@ -261,6 +263,7 @@ function toggleAuthUI(signedIn) {
   els.toolSession.disabled = !signedIn;
   els.toolInfo.disabled = !signedIn;
   els.toolSummary.disabled = !signedIn;
+  els.toolStreetview.disabled = !signedIn;
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
@@ -565,7 +568,12 @@ function redrawAsterismLines() {
   // サマリー出力同士が(作成時刻が近いというだけで)自動的に繋がってしまい、意図した
   // 「出典への接続」と紛らわしくなる。
   const sessionCards = state.cards.filter(
-    (c) => c.sessionId === currentId && c.mediaType !== 'info' && c.mediaType !== 'summary' && !c.summarySourceId
+    (c) =>
+      c.sessionId === currentId &&
+      c.mediaType !== 'info' &&
+      c.mediaType !== 'summary' &&
+      c.mediaType !== 'streetview' &&
+      !c.summarySourceId
   );
 
   // 自動: 追加した順(見た順)に隣同士をつなぐ。ただしhideAutoLink()で個別に消されたペアは除く
@@ -665,6 +673,11 @@ function editGuideHexHtml(mediaType) {
   if (mediaType === 'summary') {
     return astrHex + hex('delete', 'Delete');
   }
+  // ストリートビューカードも場所のリマインダー的な性質(インフォと同様)なので、見た順の
+  // ASTRは搭載しない。位置の変更は本体の「変更」ボタンから行うため、Captionも不要。
+  if (mediaType === 'streetview') {
+    return hex('edit', 'Edit') + hex('depth', 'Depth') + hex('delete', 'Delete');
+  }
   if (mediaType === 'session') {
     return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
   }
@@ -707,6 +720,7 @@ function renderCard(card) {
   const isSessionCard = mediaType === 'session';
   const isInfoCard = mediaType === 'info';
   const isSummaryCard = mediaType === 'summary';
+  const isStreetviewCard = mediaType === 'streetview';
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
@@ -716,6 +730,7 @@ function renderCard(card) {
     (isSessionCard ? ' star-card--session' : '') +
     (isInfoCard ? ' star-card--info' : '') +
     (isSummaryCard ? ' star-card--summary' : '') +
+    (isStreetviewCard ? ' star-card--streetview' : '') +
     (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
@@ -750,6 +765,8 @@ function renderCard(card) {
     el.innerHTML = infoCardInnerHtml(card);
   } else if (isSummaryCard) {
     el.innerHTML = summaryCardInnerHtml(card);
+  } else if (isStreetviewCard) {
+    el.innerHTML = streetviewCardInnerHtml(card);
   } else {
     const crewHeadHtml = card.crewPersonaId
       ? `<div class="star-card-crew-head">
@@ -858,6 +875,9 @@ function renderCard(card) {
   }
   if (isSummaryCard) {
     wireSummaryCard(card, el);
+  }
+  if (isStreetviewCard) {
+    wireStreetviewCard(card, el);
   }
 
   if (!isSessionCard && (card.imageFileId || card.thumbDataUrl)) {
@@ -1051,6 +1071,129 @@ function createInfoCard() {
   renderCard(card);
   redrawAsterismLines();
   setStatus('インフォメーションカードを追加しました');
+  scheduleAutoSave();
+  return card;
+}
+
+/* ---------------- ストリートビューカード(基本機能) ----------------
+ * 指定した場所のGoogleストリートビューをカード内に埋め込む、場所の記録用カード種別。
+ * APIキー・GCP請求先アカウントは一切使わない。js/modules/mapping-storys.js の
+ * Googleマップ埋め込み(kind:'embed')と同じ「地図を共有/埋め込む」consumer向けno-key iframe
+ * (output=svembed)を流用する。ストリートビュー内は本物の360°パノラマとして素手で
+ * ドラッグ・ズーム・矢印移動ができる(iframeそのものをpointer-events:autoのまま置く)ため、
+ * カード自体の移動・長押し編集ガイドは専用のヘッダー帯(iframeの外)から行う。
+ * (iframeの領域は独立したブラウジングコンテキストのため、そこでのpointerdownは
+ * そもそもカード側のドラッグリスナーまでバブリングしてこない。リサイズハンドルは
+ * .star-cardの子として後からDOMに追加されるため、iframeの上に重なっていても描画順で
+ * 手前になり、従来どおりつかんで操作できる)。 */
+
+/** ストリートビュー埋め込み用のURLを組み立てる。cbpの第2値(heading)以外は固定値で良い
+ * (向きはiframe内のドラッグでいつでも自由に変えられるため、初期値の精度はさほど重要でない)。 */
+function buildStreetviewEmbedSrc(card) {
+  const heading = Number.isFinite(card.streetviewHeading) ? card.streetviewHeading : 0;
+  return `https://www.google.com/maps?layer=c&cbll=${card.streetviewLat},${card.streetviewLng}&cbp=12,${heading},,0,0&output=svembed`;
+}
+
+/**
+ * Googleマップ上でストリートビューを開いた時のアドレスバーURL(例: "@35.68,139.76,3a,75y,90h,90t/…")、
+ * 通常の地図URL(例: "@35.68,139.76,17z")、または「緯度,経度」のプレーンな数値ペアから
+ * 緯度経度(と、あれば向き)を取り出す。施設名の自由文検索はジオコーディングAPIが必要になるため
+ * 非対応、というjs/modules/mapping-storys.jsのparseLatLngZoom()と同じ割り切り。
+ */
+function parseStreetviewInput(text) {
+  const v = (text || '').trim();
+  if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(v)) return { error: 'short' };
+  let m = v.match(/@(-?\d+\.\d+),(-?\d+\.\d+),[^/]*?(\d+(?:\.\d+)?)h/);
+  if (m) return { lat: Number(m[1]), lng: Number(m[2]), heading: Number(m[3]) };
+  m = v.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m) return { lat: Number(m[1]), lng: Number(m[2]), heading: 0 };
+  m = v.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
+  if (m) return { lat: Number(m[1]), lng: Number(m[2]), heading: 0 };
+  return { error: 'unparsed' };
+}
+
+function streetviewCardInnerHtml(card) {
+  const hasLocation = typeof card.streetviewLat === 'number' && typeof card.streetviewLng === 'number';
+  const bodyHtml = hasLocation
+    ? `<iframe class="star-card-streetview-iframe" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeHtml(buildStreetviewEmbedSrc(card))}"></iframe>`
+    : `<div class="star-card-streetview-setup">
+         <textarea class="star-card-streetview-input" placeholder="ストリートビューのURL、または「緯度,経度」"></textarea>
+         <button class="star-card-streetview-go-btn">呼び出す</button>
+         <p class="star-card-streetview-warn" hidden></p>
+       </div>`;
+  return `
+    <div class="star-card-streetview-head" title="ドラッグで移動">
+      <span class="star-card-streetview-label">📍 ストリートビュー</span>
+      ${hasLocation ? '<button class="star-card-streetview-change-btn">変更</button>' : ''}
+    </div>
+    <div class="star-card-media star-card-media-streetview">${bodyHtml}</div>
+    <textarea class="star-card-memo" placeholder="メモ" ${card.memo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
+    ${EDIT_GUIDE_HANDLES_HTML}
+    ${editGuideHexHtml('streetview')}
+  `;
+}
+
+function wireStreetviewCard(card, el) {
+  const changeBtn = el.querySelector('.star-card-streetview-change-btn');
+  const input = el.querySelector('.star-card-streetview-input');
+  const goBtn = el.querySelector('.star-card-streetview-go-btn');
+  const warnEl = el.querySelector('.star-card-streetview-warn');
+
+  if (changeBtn) {
+    changeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    changeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      card.streetviewLat = null;
+      card.streetviewLng = null;
+      scheduleAutoSave();
+      rerenderCardInPlace(card, el);
+    });
+  }
+  if (input) input.addEventListener('pointerdown', (e) => e.stopPropagation());
+  if (goBtn) {
+    goBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    goBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const parsed = parseStreetviewInput(input.value);
+      if (parsed.error) {
+        warnEl.hidden = false;
+        warnEl.textContent =
+          parsed.error === 'short'
+            ? '短縮リンク(maps.app.goo.gl)は座標を取り出せません。ブラウザで開いた後のアドレスバーのURLを貼ってください。'
+            : '位置を特定できませんでした。ストリートビューのURL、または「緯度,経度」の形式で入力してください。';
+        return;
+      }
+      card.streetviewLat = parsed.lat;
+      card.streetviewLng = parsed.lng;
+      card.streetviewHeading = parsed.heading || 0;
+      scheduleAutoSave();
+      rerenderCardInPlace(card, el);
+      setStatus('ストリートビューを呼び出しました');
+    });
+  }
+}
+
+function createStreetviewCard() {
+  const card = {
+    id: crypto.randomUUID(),
+    x: 40,
+    y: 40,
+    width: 280,
+    height: 240,
+    memo: '',
+    tags: [],
+    mediaType: 'streetview',
+    streetviewLat: null,
+    streetviewLng: null,
+    streetviewHeading: 0,
+    imageFileId: null,
+    sessionId: activeSessionId(),
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  redrawAsterismLines();
+  setStatus('ストリートビューカードを追加しました');
   scheduleAutoSave();
   return card;
 }
