@@ -1114,8 +1114,12 @@ function parseStreetviewInput(text) {
 
 function streetviewCardInnerHtml(card) {
   const hasLocation = typeof card.streetviewLat === 'number' && typeof card.streetviewLng === 'number';
+  // sandboxでiframeからトップページ遷移・新規ウィンドウを開く権限自体を奪っておく(iframe内は
+  // 本物のストリートビューとして自由にドラッグ・ズームできる設計のため、Mapping Storysのembedと
+  // 違いpointer-events:noneには頼れない。「Googleマップで見る」等のリンクをうっかりタップしても、
+  // アプリ全体がブラウザのGoogleマップへ遷移することがなくなる)。
   const bodyHtml = hasLocation
-    ? `<iframe class="star-card-streetview-iframe" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeHtml(buildStreetviewEmbedSrc(card))}"></iframe>`
+    ? `<iframe class="star-card-streetview-iframe" loading="lazy" referrerpolicy="no-referrer-when-downgrade" sandbox="allow-scripts allow-same-origin" src="${escapeHtml(buildStreetviewEmbedSrc(card))}"></iframe>`
     : `<div class="star-card-streetview-setup">
          <textarea class="star-card-streetview-input" placeholder="ストリートビューのURL、または「緯度,経度」"></textarea>
          <button class="star-card-streetview-go-btn">呼び出す</button>

@@ -1245,8 +1245,19 @@
       wrap.style.filter = `grayscale(${layer.grayscale}%)`;
       const iframe = document.createElement('iframe');
       iframe.className = 'ms-embed-iframe';
-      iframe.loading = 'lazy';
+      // この地図はキャンバスの最背面に常時表示され続ける背景レイヤーで、画面外にスクロール
+      // して初めて意味を持つ「遅延読み込みでお得な」要素ではない。loading="lazy"のままだと、
+      // リロード直後にタイルの読み込みが遅れ、ハンドルで動かせる枠は正しい位置・サイズに
+      // 一瞬で描画されるのに中身だけ空白のまま数秒残り、「リサイズ・移動がリセットされている」
+      // ように見える不具合(2026年9月、実機のgetBoundingClientRect検証で枠自体は常に正しい
+      // 値だったことを確認済み)の原因だったため外した。
       iframe.referrerPolicy = 'no-referrer-when-downgrade';
+      // pointer-events:noneだけに頼らず、iframe自体からトップページ遷移・新規ウィンドウを開く
+      // 権限を奪っておく。タップがpointer-events:noneをすり抜けても(iframe特有の当たり判定の
+      // 癖でモバイルブラウザでは起こりうる)、Googleマップ内の「View larger map」等のリンクが
+      // アプリ全体をブラウザのGoogleマップへ遷移させることが構造的にできなくなる(2026年9月、
+      // モジュール未起動時に地図タップでブラウザの地図ページに飛ぶという実機報告への対応)。
+      iframe.sandbox = 'allow-scripts allow-same-origin';
       iframe.src = buildEmbedSrc(layer);
       wrap.appendChild(iframe);
       el.appendChild(wrap);
