@@ -28,8 +28,11 @@
 // - 屋内マップには正確な縮尺情報が無いため、自動スケール推定はできない(見た目のデフォルト
 //   サイズで仮置きし、以後は手動リサイズに委ねる)。屋外はGPS実距離を写真カードの既定幅
 //   (約240px ≒ 人物2人分[目安3.4m]相当)に合わせた換算係数(PX_PER_METER)でスケールする。
-// - 地図データは session.mapLayer に保存する(既存の cards/sessions と同じ constellation-data.json
-//   へオートセーブされる)。屋内の画像はDriveのセッションmediaフォルダへ通常の写真と同じ経路
+// - 地図データは session.mapLayers(配列)に保存する(既存の cards/sessions と同じ
+//   constellation-data.json へオートセーブされる)。1セッションに何枚でも地図を重ねて置ける
+//   (2026年9月、「広範囲を1枚だと粗い」というユーザー要望による。詳細は getMapLayers() 直前の
+//   コメント参照。旧データの単一 session.mapLayer は getMapLayers() が自動で配列へ移行する)。
+//   屋内の画像はDriveのセッションmediaフォルダへ通常の写真と同じ経路
 //   (resolveSessionMediaFolderId + uploadFile)でアップロードする。屋外はベクター(緯度経度から
 //   換算したローカル座標の配列)なので画像アップロードは発生しない。
 // - 地図レイヤーは js/app.js の renderAllCards() から呼ばれる window.renderMappingStorysLayer()
@@ -51,7 +54,8 @@
 //   捕捉レイヤー(.ms-embed-capture)を敷いてパンをこちらで丸ごと肩代わりする。ズームが
 //   動かない前提であれば、ピクセル→緯度経度の換算係数(Web Mercatorのmeters/pixel)は
 //   ドラッグ中ずっと定数になるため、ドラッグを離した瞬間に緯度経度を確定し
-//   session.mapLayer へ即座に上書き保存できる(=次回開いた時に何もしなくても最後の位置のまま)。
+//   session.mapLayers 内の該当レイヤーへ即座に上書き保存できる(=次回開いた時に何もしなくても
+//   最後の位置のまま)。
 // - 既定ズームは20(EMBED_DEFAULT_ZOOM)。東京近辺(緯度35.68°)で試算すると1pxあたり約0.12m
 //   (約8.3px/m)になり、旧ベクターモードの最終値PX_PER_METER=12に最も近い離散ズーム値。
 //   ズーム21の方が数値上はやや近いが、地方都市では航空写真タイルが対応していないことがあるため
@@ -60,9 +64,10 @@
 //   中の縮尺・中心は変わらない(iframeは静止画ではなく実際に動いているページなので、CSSで
 //   箱のサイズを変えるだけで自動的に埋め直される。srcの再読み込みは不要)。
 // - 屋内/屋外(ベクター)と違い、抽出→プレビュー→「キャンバスへ展開する」という段階を踏まない。
-//   検索/現在地ボタンを押した瞬間にsession.mapLayerへ直接反映される「呼び出して重ねるだけ」の
-//   即時方式(ユーザー要望の核)。不透明度・グレースケール・地図種別も、デプロイ後にこの小窓を
-//   開けばいつでもそのままライブ編集できる(スライダーはCSSの opacity/filter だけで完結するため
+//   検索/現在地ボタンを押した瞬間に新しいレイヤーとしてsession.mapLayersへ追加される
+//   「呼び出して重ねるだけ」の即時方式(ユーザー要望の核。押すたびに1枚ずつ増える)。
+//   不透明度・グレースケール・地図種別は、小窓の「配置済みの地図」欄から地図ごとに個別に
+//   いつでもライブ編集できる(スライダーはCSSの opacity/filter だけで完結するため
 //   iframeの再読み込みは発生しない。地図種別・座標の変更だけがsrcの再読み込みを伴う)。
 // - 既知の制約: embedは回転ハンドルを持たない(2026年9月、ユーザー指示により非搭載にした)。
 //   もともとパンのピクセル→緯度経度換算(wireEmbedPan)が回転していない前提の計算式だったため、
@@ -109,6 +114,29 @@
   let pendingOutdoor = null; // { shapes, bboxWidth, bboxHeight, buildingCount, roadCount }
   let scanStream = null;
   let radiusValue = 150;
+
+  /**
+   * 【2026年9月: 単一地図(session.mapLayer)→複数地図(session.mapLayers配列)への変更】
+   * 「広範囲を1枚のGoogleマップ/ベクターで覆うと、ズームが粗くて建物・道路が細かすぎて
+   * 潰れる」というユーザー報告を受け、1セッションに何枚でも地図を重ねて置けるようにした。
+   * 例えば広いエリアを、ズームの効いた(=解像度の高い)Googleマップ数枚をタイル状に並べて
+   * カバーする、という使い方を想定している。各地図は互いに独立してドラッグ・リサイズ・
+   * 回転・削除できる(カード同様、個別のハンドルを持つ)。
+   * 旧データ(単一の session.mapLayer)は初回アクセス時にこの関数で自動的に1要素の配列へ
+   * 移行する(id を持たない旧レイヤーには genLayerId() で新規付与)。
+   */
+  function genLayerId() {
+    return `ms-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function getMapLayers(session) {
+    if (!session.mapLayers) {
+      session.mapLayers = session.mapLayer ? [session.mapLayer] : [];
+      delete session.mapLayer;
+    }
+    session.mapLayers.forEach((layer) => { if (!layer.id) layer.id = genLayerId(); });
+    return session.mapLayers;
+  }
 
   /* ==================== CSS注入 ==================== */
 
@@ -236,12 +264,21 @@
         background: #fff; color: #0c2417; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 11.5px; cursor: pointer;
       }
       .ms-deploy-btn:disabled { opacity: 0.4; cursor: default; }
-      .ms-remove-btn {
-        width: 100%; padding: 8px; border-radius: 7px; border: 1px solid rgba(255, 255, 255, 0.18);
-        background: transparent; color: rgba(255, 255, 255, 0.6); font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; cursor: pointer;
-      }
-      .ms-remove-btn:hover { border-color: #b3402b; color: #ff8a70; }
       .ms-hint { font-family: 'IBM Plex Mono', monospace; font-size: 8px; color: rgba(255, 255, 255, 0.35); margin: 2px 0 0; line-height: 1.6; }
+
+      /* ---- 配置済みの地図の一覧(複数地図対応、2026年9月) ---- */
+      .ms-maprow-list { display: flex; flex-direction: column; gap: 8px; }
+      .ms-maprow { background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 8px 9px; }
+      .ms-maprow-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+      .ms-maprow-label { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.78); }
+      .ms-maprow-remove {
+        width: 20px; height: 20px; border-radius: 50%; flex: none;
+        border: 1px solid rgba(255, 255, 255, 0.18); background: transparent;
+        color: rgba(255, 255, 255, 0.55); font-size: 10px; cursor: pointer; padding: 0;
+      }
+      .ms-maprow-remove:hover { border-color: #b3402b; color: #ff8a70; }
+      .ms-maprow .ms-embed-maptype-row, .ms-maprow .ms-embed-slider-row { margin: 0 0 6px; }
+      .ms-maprow .ms-embed-slider-row:last-child { margin-bottom: 0; }
 
       /* ---- 自前の簡易スキャンカメラ(js/camera.jsは既存モードが固定DOMなので流用せず、
               このモジュール専用に最小構成で実装する) ---- */
@@ -380,42 +417,28 @@
         <p class="ms-fetch-status" hidden></p>
       </div>
       <div class="ms-block ms-block-embed" hidden>
-        <p class="ms-block-label">場所を呼び出す</p>
+        <p class="ms-block-label">場所を呼び出す(押すたびに1枚追加)</p>
         <div class="ms-embed-search-row">
           <input type="text" class="ms-embed-input" placeholder="GoogleマップのURL、または「緯度,経度」">
           <button class="ms-embed-search-btn">呼出</button>
         </div>
         <p class="ms-embed-warn" hidden></p>
         <button class="ms-embed-geo-btn">📍 現在地から呼び出す</button>
-        <div class="ms-embed-maptype-row">
-          <button class="ms-embed-maptype-opt sel" data-type="m">地図</button>
-          <button class="ms-embed-maptype-opt" data-type="k">航空写真</button>
-        </div>
-        <div class="ms-embed-slider-row">
-          <span>不透明度</span>
-          <input type="range" class="ms-embed-opacity" min="10" max="100" value="55">
-          <span class="ms-embed-opacity-val">55%</span>
-        </div>
-        <div class="ms-embed-slider-row">
-          <span>グレースケール</span>
-          <input type="range" class="ms-embed-gray" min="0" max="100" value="35">
-          <span class="ms-embed-gray-val">35%</span>
-        </div>
         <p class="ms-hint">
           施設名の自由文検索は非対応(ジオコーディングAPIが必要になるため)。Googleマップで探した
-          場所のURLをコピーして貼るか、「緯度,経度」の形式で入力。ズームは固定で、変更したい時だけ
-          ズーム付きのURL(@緯度,経度,ズームz を含む形式)を貼り直す。地図面をドラッグすると、
-          離した瞬間にその場でパン&自動保存される。
+          場所のURLをコピーして貼るか、「緯度,経度」の形式で入力。広い範囲は1枚だと粗くなるため、
+          ズームの効いたURLを何度も呼び出して並べて敷き詰める使い方を想定している。地図種別・
+          不透明度・グレースケールは下の「配置済みの地図」欄から地図ごとに調整できる。
         </p>
       </div>
       <div class="ms-block ms-block-preview">
         <p class="ms-block-label">プレビュー</p>
         <div class="ms-preview empty"></div>
-        <button class="ms-deploy-btn" disabled>キャンバスへ展開する</button>
+        <button class="ms-deploy-btn" disabled>キャンバスへ追加する</button>
       </div>
       <div class="ms-block ms-block-current" hidden>
-        <p class="ms-block-label">このセッションの地図</p>
-        <button class="ms-remove-btn">地図を削除</button>
+        <p class="ms-block-label">配置済みの地図</p>
+        <div class="ms-maprow-list"></div>
       </div>
       <p class="ms-hint">この窓を開いている間だけ、展開済みの地図をドラッグ・ハンドルで動かせます。閉じると固定され、カードのタッチ判定を邪魔しません。</p>
     `;
@@ -438,17 +461,12 @@
       previewBlock: win.querySelector('.ms-block-preview'),
       deployBtn: win.querySelector('.ms-deploy-btn'),
       currentBlock: win.querySelector('.ms-block-current'),
-      removeBtn: win.querySelector('.ms-remove-btn'),
+      currentList: win.querySelector('.ms-maprow-list'),
       embedBlock: win.querySelector('.ms-block-embed'),
       embedInput: win.querySelector('.ms-embed-input'),
       embedSearchBtn: win.querySelector('.ms-embed-search-btn'),
       embedWarn: win.querySelector('.ms-embed-warn'),
       embedGeoBtn: win.querySelector('.ms-embed-geo-btn'),
-      embedMaptypeOpts: Array.from(win.querySelectorAll('.ms-embed-maptype-opt')),
-      embedOpacity: win.querySelector('.ms-embed-opacity'),
-      embedOpacityVal: win.querySelector('.ms-embed-opacity-val'),
-      embedGray: win.querySelector('.ms-embed-gray'),
-      embedGrayVal: win.querySelector('.ms-embed-gray-val'),
     };
 
     // このウィンドウ内の操作が、下のキャンバスのパン/ジェスチャーに奪われないようにする
@@ -466,24 +484,10 @@
     });
     msEls.fetchBtn.addEventListener('click', fetchOutdoorMap);
     msEls.deployBtn.addEventListener('click', deployToCanvas);
-    msEls.removeBtn.addEventListener('click', removeDeployedMap);
 
     msEls.embedSearchBtn.addEventListener('click', doEmbedSearch);
     msEls.embedInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doEmbedSearch(); });
     msEls.embedGeoBtn.addEventListener('click', doEmbedGeo);
-    msEls.embedMaptypeOpts.forEach((btn) => btn.addEventListener('click', () => setEmbedMapType(btn.dataset.type)));
-    msEls.embedOpacity.addEventListener('input', () => {
-      const v = Number(msEls.embedOpacity.value);
-      msEls.embedOpacityVal.textContent = `${v}%`;
-      applyLiveEmbedStyle('opacity', v);
-    });
-    msEls.embedOpacity.addEventListener('change', () => commitEmbedStyle('opacity', Number(msEls.embedOpacity.value)));
-    msEls.embedGray.addEventListener('input', () => {
-      const v = Number(msEls.embedGray.value);
-      msEls.embedGrayVal.textContent = `${v}%`;
-      applyLiveEmbedStyle('grayscale', v);
-    });
-    msEls.embedGray.addEventListener('change', () => commitEmbedStyle('grayscale', Number(msEls.embedGray.value)));
 
     // スワイプで左右に閉じる(モジュール共通デザイン言語)。ヘッダー(.ms-top)から
     // 始まった場合だけ判定し、プレビュー操作やスライダーのドラッグと紛れないようにする。
@@ -527,7 +531,7 @@
     // embedは「呼び出したら即キャンバスへ反映」の即時方式で、屋内/屋外(ベクター)のような
     // プレビュー→展開の段階を踏まないため、その段階専用のブロックごと隠す。
     msEls.previewBlock.hidden = mode === 'embed';
-    if (mode === 'embed') syncEmbedControlsFromSession();
+    if (mode === 'embed' && msEls.embedWarn) msEls.embedWarn.hidden = true;
   }
 
   /**
@@ -541,25 +545,96 @@
     if (!msEls) return;
     const session = getSessionById(activeSessionId());
     msEls.sessionLabel.textContent = session ? `保存先セッション: ${session.name || '(無題)'}` : '保存先セッションが見つかりません';
-    const hasMap = Boolean(session && session.mapLayer);
-    msEls.currentBlock.hidden = !hasMap;
-    if (mode === 'embed') syncEmbedControlsFromSession();
+    renderCurrentMapsList(session);
   }
 
-  /** embedブロックのスライダー・地図種別トグルを、現在のセッションのライブな値に合わせる。 */
-  function syncEmbedControlsFromSession() {
-    if (!msEls || !msEls.embedOpacity) return;
-    const session = getSessionById(activeSessionId());
-    const layer = session && session.mapLayer && session.mapLayer.kind === 'embed' ? session.mapLayer : null;
-    const opacity = layer ? layer.opacity : 55;
-    const gray = layer ? layer.grayscale : 35;
-    const mapType = layer ? layer.mapType : 'm';
-    msEls.embedOpacity.value = opacity;
-    msEls.embedOpacityVal.textContent = `${opacity}%`;
-    msEls.embedGray.value = gray;
-    msEls.embedGrayVal.textContent = `${gray}%`;
-    msEls.embedMaptypeOpts.forEach((btn) => btn.classList.toggle('sel', btn.dataset.type === mapType));
-    msEls.embedWarn.hidden = true;
+  /**
+   * 「配置済みの地図」欄を、現在のセッションのレイヤー配列から丸ごと作り直す。
+   * embed(Googleマップ)の地図種別・不透明度・グレースケールは地図ごとに独立した値を
+   * 持つため、行ごとにクロージャで対象レイヤーを直接束縛し、グローバルな「今どれを
+   * 編集中か」という状態を持たずに済ませている。
+   */
+  function renderCurrentMapsList(session) {
+    if (!msEls || !msEls.currentList) return;
+    const layers = session ? getMapLayers(session) : [];
+    msEls.currentBlock.hidden = layers.length === 0;
+    msEls.currentList.innerHTML = '';
+    layers.forEach((layer) => {
+      const row = document.createElement('div');
+      row.className = 'ms-maprow';
+      row.dataset.layerId = layer.id;
+      const kindLabel = layer.kind === 'embed' ? 'Googleマップ' : layer.kind === 'raster' ? '屋内マップ' : '屋外ベクター';
+      const head = document.createElement('div');
+      head.className = 'ms-maprow-head';
+      head.innerHTML = `<span class="ms-maprow-label">${kindLabel}</span>`;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'ms-maprow-remove';
+      removeBtn.title = 'この地図を削除';
+      removeBtn.textContent = '✕';
+      removeBtn.addEventListener('click', () => removeMapLayer(layer.id));
+      head.appendChild(removeBtn);
+      row.appendChild(head);
+
+      if (layer.kind === 'embed') {
+        const maptypeRow = document.createElement('div');
+        maptypeRow.className = 'ms-embed-maptype-row';
+        [['m', '地図'], ['k', '航空写真']].forEach(([type, label]) => {
+          const btn = document.createElement('button');
+          btn.className = 'ms-embed-maptype-opt' + (layer.mapType === type ? ' sel' : '');
+          btn.textContent = label;
+          btn.addEventListener('click', () => {
+            layer.mapType = type;
+            scheduleAutoSave();
+            renderMappingStorysLayer();
+            renderCurrentMapsList(session);
+          });
+          maptypeRow.appendChild(btn);
+        });
+        row.appendChild(maptypeRow);
+        row.appendChild(buildMapRowSlider('不透明度', layer.opacity, 10, layer.id, (v) => {
+          layer.opacity = v;
+          scheduleAutoSave();
+        }));
+        row.appendChild(buildMapRowSlider('グレースケール', layer.grayscale, 0, layer.id, (v) => {
+          layer.grayscale = v;
+          scheduleAutoSave();
+        }));
+      }
+      msEls.currentList.appendChild(row);
+    });
+  }
+
+  /**
+   * embed地図1枚ぶんの不透明度/グレースケールスライダー。input中はCSSだけ即時反映し
+   * (iframeの再読み込みは発生しない)、離した(change)瞬間に1回だけ保存する。
+   */
+  function buildMapRowSlider(label, value, min, layerId, onCommit) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ms-embed-slider-row';
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = '100';
+    input.value = String(value);
+    const valSpan = document.createElement('span');
+    valSpan.textContent = `${value}%`;
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('input', () => {
+      const v = Number(input.value);
+      valSpan.textContent = `${v}%`;
+      const wrapEl = els.content.querySelector(`.ms-maplayer[data-layer-id="${layerId}"] .ms-embed-wrap`);
+      if (wrapEl) {
+        if (label === '不透明度') wrapEl.style.opacity = (v / 100).toString();
+        else wrapEl.style.filter = `grayscale(${v}%)`;
+      }
+    });
+    input.addEventListener('change', () => onCommit(Number(input.value)));
+    wrap.appendChild(labelSpan);
+    wrap.appendChild(input);
+    wrap.appendChild(valSpan);
+    return wrap;
   }
 
   /* ==================== 開閉 ==================== */
@@ -879,10 +954,10 @@
   }
 
   /**
-   * 検索/現在地ボタンから呼ばれる共通処理。まだこのセッションに地図が無ければ新規作成して
-   * すぐキャンバスへ反映し(呼び出して重ねるだけの即時方式)、既にembedの地図があれば
-   * その位置(とズーム、指定があれば)だけを更新する。既にembed以外のkindがあれば
-   * 既存の展開フロー同様、置き換えの確認を挟む。
+   * 検索/現在地ボタンから呼ばれる共通処理。押すたびに新しいembed地図を1枚追加する
+   * (複数地図対応、2026年9月。既存の地図があっても置き換えず、独立した1枚として重ねる)。
+   * 同じ場所を続けて呼び出すと真上に重なってしまうため、既存の枚数に応じて少しずつ
+   * 位置をずらして配置し(カスケード)、後からハンドルで好きな位置へドラッグしてもらう前提。
    */
   function ensureEmbedLayer(lat, lng, zoom) {
     const sessionId = activeSessionId();
@@ -891,44 +966,36 @@
       setStatus('セッションが見つかりません', { important: true });
       return null;
     }
-    let layer = session.mapLayer;
-    if (layer && layer.kind !== 'embed') {
-      if (!window.confirm('既にこのセッションに地図があります。置き換えますか?')) return null;
-      layer = null;
-    }
-    if (!layer) {
-      const center = worldViewportCenter();
-      layer = {
-        kind: 'embed',
-        lat,
-        lng,
-        zoom: zoom || EMBED_DEFAULT_ZOOM,
-        mapType: 'm',
-        opacity: 55,
-        grayscale: 35,
-        naturalWidth: EMBED_DEFAULT_WIDTH,
-        naturalHeight: EMBED_DEFAULT_HEIGHT,
-        scale: 1,
-        rotation: 0,
-        createdAt: new Date().toISOString(),
-      };
-      layer.x = center.x - EMBED_DEFAULT_WIDTH / 2;
-      layer.y = center.y - EMBED_DEFAULT_HEIGHT / 2;
-      session.mapLayer = layer;
-      scheduleAutoSave();
-      refreshCurrentMapBlock();
-      renderMappingStorysLayer({ animate: true });
-      fitViewportToMap(layer);
-      playMappingStorysDeploySound();
-      setStatus(`「${session.name || '(無題)'}」へGoogleマップを呼び出しました`, { important: true });
-      return layer;
-    }
-    layer.lat = lat;
-    layer.lng = lng;
-    if (zoom) layer.zoom = zoom;
+    const layers = getMapLayers(session);
+    const wasEmpty = layers.length === 0;
+    const center = worldViewportCenter();
+    const cascade = (layers.length % 6) * 32;
+    const layer = {
+      id: genLayerId(),
+      kind: 'embed',
+      lat,
+      lng,
+      zoom: zoom || EMBED_DEFAULT_ZOOM,
+      mapType: 'm',
+      opacity: 55,
+      grayscale: 35,
+      naturalWidth: EMBED_DEFAULT_WIDTH,
+      naturalHeight: EMBED_DEFAULT_HEIGHT,
+      scale: 1,
+      rotation: 0,
+      createdAt: new Date().toISOString(),
+    };
+    layer.x = center.x - EMBED_DEFAULT_WIDTH / 2 + cascade;
+    layer.y = center.y - EMBED_DEFAULT_HEIGHT / 2 + cascade;
+    layers.push(layer);
     scheduleAutoSave();
-    renderMappingStorysLayer();
-    setStatus('地図の位置を更新しました');
+    refreshCurrentMapBlock();
+    renderMappingStorysLayer({ animate: true, animateLayerId: layer.id });
+    // 2枚目以降はカメラを動かさない(新しい地図だけにフィットすると、並べて敷き詰めたい
+    // 既存の地図が画面外に消えてしまうため)。最初の1枚目だけ、これまで通り自動でフィットする。
+    if (wasEmpty) fitViewportToMap(layer);
+    playMappingStorysDeploySound();
+    setStatus(`「${session.name || '(無題)'}」へGoogleマップを追加しました`, { important: true });
     return layer;
   }
 
@@ -967,35 +1034,6 @@
       },
       { enableHighAccuracy: true, timeout: 12000 }
     );
-  }
-
-  function setEmbedMapType(type) {
-    msEls.embedMaptypeOpts.forEach((btn) => btn.classList.toggle('sel', btn.dataset.type === type));
-    const session = getSessionById(activeSessionId());
-    const layer = session && session.mapLayer;
-    if (layer && layer.kind === 'embed') {
-      layer.mapType = type;
-      scheduleAutoSave();
-      renderMappingStorysLayer();
-    }
-  }
-
-  /** スライダーのinput中は見た目だけCSSで即反映する(iframeの再読み込みは発生しない)。 */
-  function applyLiveEmbedStyle(prop, value) {
-    const wrap = els.content.querySelector('.ms-embed-wrap');
-    if (!wrap) return;
-    if (prop === 'opacity') wrap.style.opacity = (value / 100).toString();
-    else if (prop === 'grayscale') wrap.style.filter = `grayscale(${value}%)`;
-  }
-
-  /** スライダーを離した(change)瞬間にだけ保存する。既存のドラッグ系ハンドルと同じ「操作中は
-   * 見た目だけ、離した時に1回だけscheduleAutoSave()」という設計に揃えている。 */
-  function commitEmbedStyle(prop, value) {
-    const session = getSessionById(activeSessionId());
-    const layer = session && session.mapLayer;
-    if (!layer || layer.kind !== 'embed') return;
-    layer[prop] = value;
-    scheduleAutoSave();
   }
 
   /**
@@ -1115,14 +1153,14 @@
       setStatus('セッションが見つかりません', { important: true });
       return;
     }
-    if (session.mapLayer && !window.confirm('既にこのセッションに地図があります。置き換えますか?')) return;
+    const layers = getMapLayers(session);
+    const wasEmpty = layers.length === 0;
 
     msEls.deployBtn.disabled = true;
     const originalLabel = msEls.deployBtn.textContent;
-    msEls.deployBtn.textContent = '展開中…';
-    setStatus('Mapping Storys: 地図を展開中…', { busy: true });
+    msEls.deployBtn.textContent = '追加中…';
+    setStatus('Mapping Storys: 地図を追加中…', { busy: true });
     try {
-      const oldLayer = session.mapLayer;
       let newLayer;
       if (mode === 'indoor') {
         if (!pendingIndoorCanvas) return;
@@ -1132,6 +1170,7 @@
         const folderId = await resolveSessionMediaFolderId(sessionId);
         const imageFileId = await uploadFile(folderId, blob, `mapping-storys-${Date.now()}.png`);
         newLayer = {
+          id: genLayerId(),
           kind: 'raster',
           imageFileId,
           naturalWidth: pendingIndoorCanvas.width,
@@ -1143,6 +1182,7 @@
       } else {
         if (!pendingOutdoor || !pendingOutdoor.shapes.length) return;
         newLayer = {
+          id: genLayerId(),
           kind: 'vector',
           shapes: pendingOutdoor.shapes,
           bboxWidth: pendingOutdoor.bboxWidth,
@@ -1153,44 +1193,46 @@
         };
       }
 
+      // 複数枚を続けて追加した時に真上へ重ならないよう、既存の枚数に応じて少しずつ位置をずらす
+      // (カスケード)。屋内/屋外(ベクター)も複数地図対応(2026年9月)の一環でembedと同じ挙動に揃えた。
       const center = worldViewportCenter();
+      const cascade = (layers.length % 6) * 32;
       const w = newLayer.kind === 'raster' ? newLayer.naturalWidth : newLayer.bboxWidth;
       const h = newLayer.kind === 'raster' ? newLayer.naturalHeight : newLayer.bboxHeight;
-      newLayer.x = center.x - (w * newLayer.scale) / 2;
-      newLayer.y = center.y - (h * newLayer.scale) / 2;
+      newLayer.x = center.x - (w * newLayer.scale) / 2 + cascade;
+      newLayer.y = center.y - (h * newLayer.scale) / 2 + cascade;
 
-      session.mapLayer = newLayer;
+      layers.push(newLayer);
       scheduleAutoSave();
-
-      // 置き換え前の屋内スキャン画像はベストエフォートで削除する(容量節約、失敗しても致命的ではない)
-      if (oldLayer && oldLayer.kind === 'raster' && oldLayer.imageFileId) {
-        deleteFile(oldLayer.imageFileId).catch((err) => console.warn('Mapping Storys: 旧地図画像の削除に失敗', err));
-      }
 
       pendingIndoorCanvas = null;
       pendingOutdoor = null;
       renderPendingPreview();
       refreshCurrentMapBlock();
 
-      fitViewportToMap(newLayer);
+      // 2枚目以降はカメラを動かさない(新しい地図だけにフィットすると、並べて敷き詰めたい
+      // 既存の地図が画面外に消えてしまうため)。最初の1枚目だけ、これまで通り自動でフィットする。
+      if (wasEmpty) fitViewportToMap(newLayer);
       playMappingStorysDeploySound();
-      renderMappingStorysLayer({ animate: true });
-      setStatus(`「${session.name || '(無題)'}」へ地図を展開しました`, { important: true });
+      renderMappingStorysLayer({ animate: true, animateLayerId: newLayer.id });
+      setStatus(`「${session.name || '(無題)'}」へ地図を追加しました`, { important: true });
     } catch (err) {
       console.error(err);
-      setStatus('地図の展開に失敗しました: ' + (err.message || err), { important: true });
+      setStatus('地図の追加に失敗しました: ' + (err.message || err), { important: true });
     } finally {
       msEls.deployBtn.disabled = false;
       msEls.deployBtn.textContent = originalLabel;
     }
   }
 
-  function removeDeployedMap() {
+  function removeMapLayer(layerId) {
     const session = getSessionById(activeSessionId());
-    if (!session || !session.mapLayer) return;
-    if (!window.confirm('このセッションの地図を削除しますか?')) return;
-    const layer = session.mapLayer;
-    session.mapLayer = null;
+    if (!session) return;
+    const layers = getMapLayers(session);
+    const idx = layers.findIndex((l) => l.id === layerId);
+    if (idx === -1) return;
+    if (!window.confirm('この地図を削除しますか?')) return;
+    const [layer] = layers.splice(idx, 1);
     scheduleAutoSave();
     if (layer.kind === 'raster' && layer.imageFileId) {
       deleteFile(layer.imageFileId).catch((err) => console.warn('Mapping Storys: 地図画像の削除に失敗', err));
@@ -1217,12 +1259,17 @@
 
   function renderMappingStorysLayer(opts) {
     const animate = Boolean(opts && opts.animate);
+    // 複数地図対応(2026年9月)により、この関数の呼び出しごとに全レイヤーのDOMを作り直す
+    // (下記コメント参照)ため、animate指定時にどのレイヤー「だけ」を展開演出させるかを
+    // animateLayerIdで区別する。指定が無ければ、既存の地図まで巻き添えで再演出しないよう
+    // 一切アニメーションしない。
+    const animateLayerId = opts && opts.animateLayerId;
     // 小窓を開いたままセッションを移動できるため(キャンバス操作をブロックしない設計)、
     // カード再描画のたびに呼ばれるこの関数を使って、小窓側の表示も追従させる。
     if (editingOpen && msEls) refreshCurrentMapBlock();
 
     // 【重要】renderAllCards()経由(els.content.innerHTML='')ならこの関数のcontainerも一緒に
-    // 消えるが、deployToCanvas()/closeMappingStorys()/removeDeployedMap()はこの関数を直接
+    // 消えるが、deployToCanvas()/closeMappingStorys()/removeMapLayer()はこの関数を直接
     // 呼ぶため、それを経由しない。以前は古いcontainerを消さずに新しいcontainerを追加するだけ
     // だったため、展開・開閉のたびに.ms-maplayer-containerが際限なく積み重なり、古い
     // ハンドル(pointer-events:auto)がキャンバス上に残り続けて、ダブルタップ俯瞰・ピンチズームを
@@ -1235,11 +1282,15 @@
     els.content.insertBefore(container, els.content.firstChild);
 
     const session = getSessionById(activeSessionId());
-    const layer = session && session.mapLayer;
-    if (!layer) return;
+    const layers = session ? getMapLayers(session) : [];
+    layers.forEach((layer) => renderOneMapLayer(container, layer, animate && layer.id === animateLayerId));
+  }
 
+  /** 地図レイヤー1枚ぶんのDOM(地図本体+編集ハンドル)を組み立て、containerへ追加する。 */
+  function renderOneMapLayer(container, layer, animateThis) {
     const el = document.createElement('div');
     el.className = `ms-maplayer ms-maplayer-${layer.kind}${editingOpen ? ' ms-editable' : ''}`;
+    el.dataset.layerId = layer.id;
     const hasNaturalSize = layer.kind === 'raster' || layer.kind === 'embed';
     const w = hasNaturalSize ? layer.naturalWidth : layer.bboxWidth;
     const h = hasNaturalSize ? layer.naturalHeight : layer.bboxHeight;
@@ -1342,7 +1393,7 @@
     applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
     container.appendChild(el);
 
-    if (animate) {
+    if (animateThis) {
       requestAnimationFrame(() => {
         el.classList.add('ms-deploying');
         setTimeout(() => el.classList.remove('ms-deploying'), DEPLOY_ANIM_MS + 60);
