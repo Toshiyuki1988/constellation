@@ -861,6 +861,14 @@
     if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(v)) return { error: 'short' };
     let m = v.match(/@(-?\d+\.\d+),(-?\d+\.\d+),(\d+(?:\.\d+)?)z/);
     if (m) return { lat: Number(m[1]), lng: Number(m[2]), zoom: Math.round(Number(m[3])) };
+    // 広域(縮尺の大きい)表示だと、Googleマップは"@緯度,経度,ズームz"ではなく
+    // "@緯度,経度,高度m"(カメラ高度メートル)形式のURLを生成する。ズームへ近似変換して受け付ける。
+    m = v.match(/@(-?\d+\.\d+),(-?\d+\.\d+),(\d+(?:\.\d+)?)m/);
+    if (m) {
+      const altitude = Number(m[3]);
+      const zoom = Math.round(25.32 - Math.log2(altitude));
+      return { lat: Number(m[1]), lng: Number(m[2]), zoom: Math.min(21, Math.max(3, zoom)) };
+    }
     m = v.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
     if (m) return { lat: Number(m[1]), lng: Number(m[2]) };
     return { error: 'unparsed' };
