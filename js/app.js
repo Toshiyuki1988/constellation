@@ -68,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.infoTickerProgress = document.getElementById('infoTickerProgress');
 
   initCanvas(els.viewport, els.content);
+  initExtractRegionPicker();
 
   els.settingsBtn.addEventListener('click', () => openSettings());
   els.settingsSaveBtn.addEventListener('click', handleSettingsSave);
@@ -2367,8 +2368,12 @@ async function handleCardCaption(card, el) {
 }
 
 /**
- * 写真カードの編集ガイド「Extract」: 写真に写っている文字をOCRで抜き出す。抽出は1回だけ行い、
- * その後どう使うかを2択で確認する。
+ * 写真カードの編集ガイド「Extract」: 写真に写っている文字をOCRで抜き出す。
+ * **2026年9月に範囲選択機能を追加**: 押すとまず`openExtractRegionPicker()`のオーバーレイが開き、
+ * 読み取りたい部分を自由形状(なぞって囲む、四角形限定ではない)で選べるようにした。何も囲まずに
+ * 「画像全体を読み取る」を押せば、これまで通り画像全体が対象になる。キャンバス上の小さいカード
+ * 表示のまま範囲を選ばせると精度が出ないため、専用のフルスクリーンオーバーレイで元画像の
+ * 表示サイズいっぱいに描かせる。抽出は1回だけ行い、その後どう使うかを2択で確認する。
  * - OK(破棄): mediaTypeをimageからtextへ完全に作り替え、Drive上の元画像も削除する(元に戻せない)
  * - キャンセル(残す): 元の写真カードには一切触れず、抽出した文字だけを新しいテクストカードとして
  *   作る(サマリーカードの出力と同じ経路: createAstrConnection()で星座線を繋ぎ、効果音・発光
@@ -2382,12 +2387,28 @@ async function handleCardExtract(card, el) {
     return;
   }
 
+  setStatus('画像を読み込み中…', { busy: true });
+  let originalBlob;
+  try {
+    const blobUrl = await getFileBlobUrlCached(card.imageFileId);
+    originalBlob = await (await fetch(blobUrl)).blob();
+  } catch (err) {
+    console.error(err);
+    setStatus(`画像の読み込みに失敗しました: ${err.message}`, { important: true });
+    return;
+  }
+
+  const picked = await openExtractRegionPicker(originalBlob);
+  if (picked.mode === 'cancel') {
+    setStatus('範囲選択をキャンセルしました');
+    return;
+  }
+  const targetBlob = picked.mode === 'region' ? picked.blob : originalBlob;
+
   setStatus('文字を読み取り中…', { busy: true });
   let text;
   try {
-    const blobUrl = await getFileBlobUrlCached(card.imageFileId);
-    const blob = await (await fetch(blobUrl)).blob();
-    text = await ocrImage(blob);
+    text = await ocrImage(targetBlob);
   } catch (err) {
     console.error(err);
     setStatus(`抽出に失敗しました: ${err.message}`, { important: true });
@@ -2437,6 +2458,162 @@ async function handleCardExtract(card, el) {
     createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
     setStatus('抽出した文字を新しいテクストカードにしました');
   }
+}
+
+/* ---------------- Extract範囲選択オーバーレイ(2026年9月追加) ----------------
+ * handleCardExtract()専用。指/マウスでなぞった自由形状のパスをそのままクリップパスとして使い、
+ * 元画像から「選んだ範囲の外側は白地」の切り抜き画像を作ってOCRへ渡す(四角形限定ではなく、
+ * 斜めのキャプションや、隣の作品の文字を避けたい時にも対応できるようにするため)。
+ * camera.jsの常時黒背景オーバーレイと同じ、アプリ本体のテーマとは独立した見た目にしている。
+ */
+const erxEls = {};
+let erxPoints = [];
+let erxDrawing = false;
+let erxResolve = null;
+let erxNaturalW = 0;
+let erxNaturalH = 0;
+
+function initExtractRegionPicker() {
+  erxEls.overlay = document.getElementById('extract-region-overlay');
+  erxEls.closeBtn = document.getElementById('extract-region-close');
+  erxEls.img = document.getElementById('extract-region-img');
+  erxEls.canvas = document.getElementById('extract-region-canvas');
+  erxEls.ctx = erxEls.canvas.getContext('2d');
+  erxEls.redoBtn = document.getElementById('extract-region-redo');
+  erxEls.wholeBtn = document.getElementById('extract-region-whole');
+  erxEls.goBtn = document.getElementById('extract-region-go');
+
+  erxEls.canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    erxDrawing = true;
+    erxPoints = [];
+    const rect = erxEls.canvas.getBoundingClientRect();
+    erxPoints.push({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    erxEls.canvas.setPointerCapture(e.pointerId);
+    erxRedrawPath();
+  });
+  erxEls.canvas.addEventListener('pointermove', (e) => {
+    if (!erxDrawing) return;
+    const rect = erxEls.canvas.getBoundingClientRect();
+    erxPoints.push({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    erxRedrawPath();
+  });
+  const endDraw = () => {
+    if (!erxDrawing) return;
+    erxDrawing = false;
+    erxEls.goBtn.disabled = erxPoints.length < 3;
+  };
+  erxEls.canvas.addEventListener('pointerup', endDraw);
+  erxEls.canvas.addEventListener('pointercancel', endDraw);
+
+  erxEls.redoBtn.addEventListener('click', erxClearPath);
+  erxEls.closeBtn.addEventListener('click', () => erxFinish({ mode: 'cancel' }));
+  erxEls.wholeBtn.addEventListener('click', () => erxFinish({ mode: 'whole' }));
+  erxEls.goBtn.addEventListener('click', erxHandleGoClick);
+}
+
+function erxClearPath() {
+  erxPoints = [];
+  erxDrawing = false;
+  erxEls.ctx.clearRect(0, 0, erxEls.canvas.width, erxEls.canvas.height);
+  erxEls.goBtn.disabled = true;
+}
+
+function erxRedrawPath() {
+  const ctx = erxEls.ctx;
+  ctx.clearRect(0, 0, erxEls.canvas.width, erxEls.canvas.height);
+  if (erxPoints.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(erxPoints[0].x, erxPoints[0].y);
+  for (let i = 1; i < erxPoints.length; i++) ctx.lineTo(erxPoints[i].x, erxPoints[i].y);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(63, 174, 99, 0.25)';
+  ctx.fill();
+  ctx.strokeStyle = '#3fae63';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function erxFinish(payload) {
+  erxEls.overlay.classList.remove('open');
+  if (erxEls.img.src) URL.revokeObjectURL(erxEls.img.src);
+  erxEls.img.removeAttribute('src');
+  erxClearPath();
+  if (erxResolve) {
+    const resolve = erxResolve;
+    erxResolve = null;
+    resolve(payload);
+  }
+}
+
+/** 選んだパスの外側を白地にした切り抜き画像(bboxサイズのcanvas)をBlobにして解決する */
+function erxHandleGoClick() {
+  if (erxPoints.length < 3) return;
+  const sx = erxNaturalW / erxEls.canvas.width;
+  const sy = erxNaturalH / erxEls.canvas.height;
+  const natPoints = erxPoints.map((p) => ({ x: p.x * sx, y: p.y * sy }));
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  natPoints.forEach((p) => {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  });
+  minX = Math.max(0, Math.floor(minX));
+  minY = Math.max(0, Math.floor(minY));
+  maxX = Math.min(erxNaturalW, Math.ceil(maxX));
+  maxY = Math.min(erxNaturalH, Math.ceil(maxY));
+  const w = Math.max(1, maxX - minX);
+  const h = Math.max(1, maxY - minY);
+
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const octx = out.getContext('2d');
+  octx.save();
+  octx.beginPath();
+  octx.moveTo(natPoints[0].x - minX, natPoints[0].y - minY);
+  for (let i = 1; i < natPoints.length; i++) octx.lineTo(natPoints[i].x - minX, natPoints[i].y - minY);
+  octx.closePath();
+  // 選択範囲の外側は白地で塗ってからクリップする(OCRの背景として自然に見えるようにするため。
+  // 透明のままだと、実装によっては黒として読まれてしまうことがある)。
+  octx.fillStyle = '#ffffff';
+  octx.fillRect(0, 0, w, h);
+  octx.clip();
+  octx.drawImage(erxEls.img, -minX, -minY, erxNaturalW, erxNaturalH);
+  octx.restore();
+  out.toBlob((blob) => erxFinish({ mode: 'region', blob }), 'image/png');
+}
+
+/**
+ * @param {Blob} sourceBlob 範囲選択の対象にする元画像
+ * @returns {Promise<{mode: 'region', blob: Blob} | {mode: 'whole'} | {mode: 'cancel'}>}
+ */
+function openExtractRegionPicker(sourceBlob) {
+  return new Promise((resolve) => {
+    erxResolve = resolve;
+    erxClearPath();
+    const url = URL.createObjectURL(sourceBlob);
+    erxEls.img.onload = () => {
+      erxNaturalW = erxEls.img.naturalWidth;
+      erxNaturalH = erxEls.img.naturalHeight;
+      // 表示サイズはCSSのmax-width/max-height任せでレイアウトされるため、実際に確定した
+      // サイズを次のフレームで読み取ってcanvasへ反映する(canvasの座標系を画像の表示px
+      // ぴったりに揃えることで、あとの自然座標への換算が単純な倍率計算だけで済む)。
+      requestAnimationFrame(() => {
+        const rect = erxEls.img.getBoundingClientRect();
+        erxEls.canvas.width = rect.width;
+        erxEls.canvas.height = rect.height;
+        erxEls.canvas.style.width = `${rect.width}px`;
+        erxEls.canvas.style.height = `${rect.height}px`;
+      });
+    };
+    erxEls.img.src = url;
+    erxEls.overlay.classList.add('open');
+  });
 }
 
 function getCardById(id) {

@@ -1324,6 +1324,59 @@ html, body {
   color: var(--muted);
 }
 
+/* ---------- Extract範囲選択オーバーレイ(自由形状でなぞって範囲を選ぶ、2026年9月追加) ----------
+   常時黒背景のカメラオーバーレイと同じ、アプリ本体のテーマとは独立した見た目にする
+   (フルスクリーンで写真そのものに集中させたいため)。 */
+#extract-region-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  background: #0a0a0a;
+  color: #fff;
+  font-family: 'IBM Plex Mono', monospace;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  -webkit-user-select: none;
+  user-select: none;
+}
+#extract-region-overlay.open { display: flex; }
+
+#extract-region-close {
+  position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); right: 8px; z-index: 20;
+  background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.25); color: #fff;
+  font-family: inherit; font-size: 10px; padding: 7px 10px; border-radius: 14px; cursor: pointer;
+}
+
+.erx-hint {
+  margin: 0; font-size: 10px; letter-spacing: 0.05em; color: rgba(255, 255, 255, 0.65);
+  text-align: center;
+}
+
+.erx-stage {
+  position: relative; touch-action: none; line-height: 0;
+  max-width: min(92vw, 900px); max-height: 58vh;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.erx-stage img { display: block; max-width: min(92vw, 900px); max-height: 58vh; user-select: none; -webkit-user-drag: none; }
+.erx-stage canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+.erx-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.erx-btn-primary, .erx-btn-secondary {
+  padding: 9px 14px; border-radius: 6px; font-family: 'Zen Kaku Gothic New', sans-serif;
+  font-weight: 700; font-size: 12px; cursor: pointer;
+}
+.erx-btn-primary { border: none; background: #3fae63; color: #06180d; }
+.erx-btn-primary:hover:not(:disabled) { background: #59c67c; }
+.erx-btn-primary:disabled { opacity: 0.4; cursor: default; }
+.erx-btn-secondary { border: 1px solid rgba(255, 255, 255, 0.25); background: transparent; color: #fff; }
+.erx-btn-secondary:hover { border-color: rgba(63, 174, 99, 0.6); }
+
 /* ---------- CONSTELLATION PIE(キャンバス長押しメニュー) ---------- */
 
 #pie-menu {
