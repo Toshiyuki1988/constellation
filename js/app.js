@@ -804,9 +804,6 @@ function renderCard(card) {
   const isChatCard = mediaType === 'chat';
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
-  // 画像・動画・音声カード(observeMediaForLazyLoad()でDriveの実体を遅延読み込みする種別)には
-  // CSSのcontent-visibility:autoを付けない(2026年9月、下記参照)。
-  const isPlainMediaCard = !isTextCard && !isSessionCard && !isInfoCard && !isSummaryCard && !isStreetviewCard && !isChatCard;
   const el = document.createElement('div');
   el.className =
     'star-card' +
@@ -816,7 +813,6 @@ function renderCard(card) {
     (isSummaryCard ? ' star-card--summary' : '') +
     (isStreetviewCard ? ' star-card--streetview' : '') +
     (isChatCard ? ' star-card--chat' : '') +
-    (isPlainMediaCard ? ' star-card--media' : '') +
     (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);

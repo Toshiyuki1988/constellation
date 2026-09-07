@@ -408,29 +408,17 @@ html, body {
 
 /*
  * 俯瞰でカードが多いセッションを開くとモバイル端末でカクつく、という実機報告(2026年9月)
- * への対応。renderAllCards()は現在のセッションのカードを画面外かどうかに関わらず全てフルDOM
- * (編集ガイド一式・メディア・メモ欄)で描画しており、仮想化(画面外のカードをDOMから
- * 間引く仕組み)は持たない。仮想化はドラッグ・リサイズ・ASTR接続・編集ガイドなど「カードの
- * DOMが常に存在する」前提のコードが多数あるため影響範囲が大きく、今回は見送った。
- * 代わりに content-visibility:auto を使う。DOM上には残したまま(既存のJS・イベント配線は
- * 一切変えずに済む)、ブラウザが画面外と判断したカードだけレイアウト/ペイントを自動で
- * 省略してくれる、CSSだけで完結する軽量な対策。対応ブラウザでのみ効果があり、非対応
- * ブラウザでは単に無視されるだけなので安全側に倒したフォールバックになる。
- *
- * **画像・動画・音声カード(.star-card--media)には適用しない**(2026年9月、実機報告で判明)。
- * これらのカードは js/app.js の observeMediaForLazyLoad() が「画面内に入ったらDriveの
- * 実体(フル解像度)に差し替える」IntersectionObserverを、他ならぬこの.star-card要素自体に
- * 対して仕掛けている。content-visibility:autoを同じ要素へ付けると、モバイルブラウザでは
- * このIntersectionObserverが期待通り発火しなくなることがあり、ズームインした写真がいつまで
- * 経っても低解像度のサムネイル(長辺240px・JPEG品質0.6、当初は概観用の仮画像のつもりだった
- * もの)のままになる、という画質劣化の実機報告につながった。パフォーマンスより画質を優先し、
- * このカード種別だけ対象から除外した(テクスト/セッション/インフォ/サマリー/ストリートビュー/
- * 座談会カードはこのIntersectionObserverに依存しないため、content-visibility:autoの対象のまま)。
+ * への対応として、一時期 .star-card へ content-visibility:auto を付けていたが撤回した。
+ * 理由: content-visibility:auto は「画面外と判断された時だけ」ではなく常に
+ * contain:layout style paint 相当を伴う(spec上、画面内表示に戻っても paint containment 自体は
+ * 外れない)。このアプリの編集ガイドのヘックスバッジ(.star-card-hex、カード枠から意図的に
+ * はみ出す配置)やサマリーカードのヘックスタブ(.star-card-summary-head、カード上辺をまたぐ
+ * 配置)は、まさにこの paint containment で常時クリップされてしまい、「サマリーの人物アイコンが
+ * 上端で見切れる」「編集ガイドのヘックスが表示されない」という実機報告(2026年9月)につながった。
+ * ヘックスのはみ出しはCONSTELLATION全体の統一UI言語のため、カード種別ごとの除外では対処
+ * しきれず、content-visibility:auto自体を撤回した。俯瞰時のカクつき対策は、代わりに
+ * js/app.js の本画像フェッチの同時実行数制限(MEDIA_FETCH_CONCURRENCY)で対応している。
  */
-.star-card:not(.star-card--media) {
-  content-visibility: auto;
-  contain-intrinsic-size: 240px 180px;
-}
 
 /* 長押し開始直後(編集ガイドが出る前)の予兆: 影を徐々に濃くする */
 .star-card--pressing {
