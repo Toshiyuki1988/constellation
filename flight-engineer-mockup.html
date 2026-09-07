@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flight Engineer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --surface:#ffffff; --surface-2:#f2f2ef;
+    --line:rgba(0,0,0,0.14); --text:#000000; --muted:#6e7268;
+    --rust:#b3402b;
+    --serif:'Fraunces',serif; --mono:'IBM Plex Mono',monospace; --sans:'Zen Kaku Gothic New',sans-serif;
+    /* Flight Engineer固有: 矩形選択・パネルの識別色を青にする(ユーザー指定) */
+    --sky:#1c5fd6; --sky-bright:#4f8cff;
+    --sky-glass:rgba(28,95,214,0.14); --sky-glass-strong:rgba(28,95,214,0.24);
+    --sky-line:rgba(28,95,214,0.55); --sky-ink:#0b2354;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);}
+  body{
+    background-color:var(--bg);
+    background-image:radial-gradient(circle, rgba(0,0,0,0.1) 1px, transparent 1px);
+    background-size:26px 26px;
+    padding:40px 24px 100px;
+  }
+  h1,h2,h3{margin:0; text-wrap:balance;}
+  .wrap{max-width:980px; margin:0 auto;}
+
+  .eyebrow{font-family:var(--mono); font-size:10.5px; letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); display:flex; align-items:center; gap:8px;}
+  .eyebrow .chip{background:var(--sky-glass-strong); border:1px solid var(--sky-line); color:var(--sky-ink); padding:2px 8px; border-radius:999px; letter-spacing:0.08em;}
+  .page-title{font-family:var(--serif); font-weight:500; font-size:38px; margin:10px 0 8px; letter-spacing:-0.01em;}
+  .page-sub{font-size:14px; line-height:1.7; color:var(--muted); max-width:64ch; margin:0 0 6px;}
+  .page-head{margin-bottom:48px; padding-bottom:28px; border-bottom:1px solid var(--line);}
+
+  .stage{margin-bottom:60px;}
+  .stage-head{display:flex; align-items:baseline; gap:10px; margin-bottom:16px;}
+  .stage-num{font-family:var(--mono); font-size:11px; color:var(--sky-ink); background:var(--sky-glass-strong); border:1px solid var(--sky-line); border-radius:4px; padding:2px 7px;}
+  .stage-title{font-family:var(--serif); font-size:19px; font-weight:500;}
+  .stage-note{font-family:var(--mono); font-size:10.5px; color:var(--muted); margin:6px 0 0; line-height:1.8; max-width:74ch;}
+
+  /* ================= 懸念一覧 ================= */
+  .concerns{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  @media (max-width:760px){ .concerns{grid-template-columns:1fr;} }
+  .concern{background:var(--surface); padding:16px 18px;}
+  .concern-n{font-family:var(--mono); font-size:9.5px; color:var(--sky); letter-spacing:0.1em;}
+  .concern-t{font-family:var(--serif); font-size:14.5px; font-weight:500; margin:4px 0 6px;}
+  .concern-d{font-size:12px; line-height:1.75; color:var(--muted);}
+  .concern-d b{color:var(--text); font-weight:600;}
+
+  /* ================= 決定事項 ================= */
+  .decisions{display:flex; flex-direction:column; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .decision{background:var(--surface); padding:12px 16px; display:flex; gap:14px; align-items:baseline;}
+  .decision .dk{font-family:var(--serif); font-size:13.5px; font-weight:500; flex:0 0 200px; color:var(--sky-ink);}
+  .decision .dv{font-size:12.5px; line-height:1.7; color:var(--text);}
+  .decision .dv b{color:var(--sky-ink);}
+  .followup{
+    margin-top:14px; padding:14px 16px; border:1px dashed var(--sky-line); border-radius:10px;
+    background:var(--sky-glass); font-size:12px; line-height:1.85; color:var(--text);
+  }
+  .followup .ft{font-family:var(--mono); font-size:10px; letter-spacing:0.1em; color:var(--sky-ink); text-transform:uppercase; margin-bottom:6px;}
+
+  /* ================= インタラクティブ・ステージ ================= */
+  .fe-panelwrap{position:relative;}
+  .fe-help{
+    font-family:var(--mono); font-size:10.5px; color:var(--muted); line-height:1.9;
+    background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:16px;
+  }
+  .fe-toolbar-note{font-family:var(--mono); font-size:9px; color:var(--muted); text-align:center; margin:8px 0 14px;}
+  .fe-toolbar{
+    position:relative; z-index:9;
+    display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
+    margin-bottom:14px; padding:9px 16px;
+    background:rgba(255,255,255,0.66); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+    border:1px solid var(--sky-line); border-radius:999px;
+    box-shadow:0 10px 26px rgba(11,35,84,0.14), 0 0 0 1px var(--sky-glass);
+  }
+  .fe-toolbar-group{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .fe-toggle{
+    font-family:var(--mono); font-size:11.5px; letter-spacing:0.03em; cursor:pointer; user-select:none;
+    display:flex; align-items:center; gap:8px; padding:7px 14px; border-radius:999px;
+    border:1px solid var(--line); background:var(--surface); color:var(--muted);
+    transition:background .15s, border-color .15s, color .15s, box-shadow .15s;
+  }
+  .fe-toggle .dot{width:7px; height:7px; border-radius:50%; background:var(--muted); transition:background .15s, box-shadow .15s;}
+  .fe-toggle.on{ background:var(--sky-glass); border-color:var(--sky-line); color:var(--sky-ink); box-shadow:0 0 0 3px var(--sky-glass); }
+  .fe-toggle.on .dot{ background:var(--sky-bright); box-shadow:0 0 8px 1px var(--sky-bright); animation:dotpulse 1.6s ease-in-out infinite; }
+  .fe-code-hint{font-family:var(--mono); font-size:9.5px; color:var(--muted);}
+  .fe-sound{display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10px; color:var(--muted);}
+
+  .fe-bar-btn{
+    font-family:var(--mono); font-size:11px; cursor:pointer; border:1px solid var(--sky-line);
+    background:rgba(255,255,255,0.5); color:var(--sky-ink); border-radius:999px; padding:6px 12px;
+    display:inline-flex; align-items:center; gap:5px; transition:background .12s, opacity .12s;
+  }
+  .fe-bar-btn:hover:not(:disabled){background:var(--sky-glass-strong);}
+  .fe-bar-btn:disabled{opacity:.35; cursor:not-allowed;}
+  .fe-hist-wrap{position:relative;}
+  .fe-badge{background:var(--sky); color:#fff; font-size:9px; border-radius:999px; padding:1px 6px; min-width:14px; text-align:center; font-family:var(--mono);}
+  .fe-history-panel{
+    display:none; position:absolute; top:calc(100% + 10px); right:0; z-index:20; width:270px; max-height:270px; overflow-y:auto;
+    background:rgba(255,255,255,0.88); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--sky-line); border-radius:10px;
+    box-shadow:0 14px 34px rgba(11,35,84,0.2); padding:8px;
+  }
+  .fe-history-panel.open{display:block;}
+  .hist-row{display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:10px; padding:6px 6px; border-radius:6px;}
+  .hist-row.latest{background:var(--sky-glass);}
+  .hist-row .hist-ico{flex:0 0 auto; color:var(--sky-ink);}
+  .hist-row .hist-label{flex:1; color:var(--text);}
+  .hist-row .hist-time{color:var(--muted); font-size:8.5px;}
+  .hist-row.redo-row{opacity:.5; text-decoration:line-through;}
+  .hist-sep{font-family:var(--mono); font-size:8.5px; color:var(--muted); margin:8px 2px 2px; letter-spacing:.08em;}
+  .hist-empty{font-family:var(--mono); font-size:10px; color:var(--muted); padding:10px 4px; line-height:1.7;}
+
+  .fe-stage{
+    position:relative; height:460px; border-radius:14px; overflow:hidden;
+    background-color:#fbfbf8;
+    background-image:radial-gradient(circle, rgba(0,0,0,0.07) 1px, transparent 1px);
+    background-size:24px 24px;
+    border:1px solid var(--line); box-shadow:inset 0 0 0 1px rgba(255,255,255,0.5);
+    transition:box-shadow .2s, border-color .2s;
+  }
+  .fe-stage.fe-active{ border-color:var(--sky-line); box-shadow:inset 0 0 0 2px var(--sky-glass-strong), 0 0 0 3px var(--sky-glass); cursor:crosshair; }
+  .fe-stage:not(.fe-active){ cursor:grab; }
+  .fe-stage:not(.fe-active).panning{ cursor:grabbing; }
+  /* Shiftを押している間はFE起動中でも一時的に通常操作(パン)へ戻す(PC限定) */
+  .fe-stage.fe-active.fe-shift{ cursor:grab; border-color:var(--line); box-shadow:inset 0 0 0 2px rgba(0,0,0,0.1), 0 0 0 3px rgba(0,0,0,0.05); }
+  .fe-stage.fe-active.fe-shift.panning{ cursor:grabbing; }
+  .fe-stage:not(.fe-active) .fe-card{ cursor:grab; }
+  .fe-stage.fe-active.fe-shift .fe-card{ cursor:grab; }
+  .fe-stage.fe-active:not(.fe-shift) .fe-card{ cursor:default; }
+
+  .fe-crumb{position:absolute; top:0; left:0; right:0; height:32px; z-index:5; display:flex; align-items:center; gap:6px; padding:0 14px; background:rgba(255,255,255,0.85); backdrop-filter:blur(6px); border-bottom:1px solid var(--line); font-family:var(--mono); font-size:10px; color:var(--muted);}
+
+  .fe-world{position:absolute; top:0; left:0; will-change:transform;}
+  .fe-world svg{position:absolute; top:0; left:0; overflow:visible; pointer-events:none;}
+  .asterism-line{stroke:rgba(0,0,0,0.28); stroke-width:1.2;}
+  .asterism-line.cutting{stroke:var(--rust); stroke-width:2.2;}
+
+  .fe-card{
+    position:absolute; background:var(--surface); border:1px solid var(--line); border-radius:6px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.08); overflow:hidden; display:flex; flex-direction:column;
+    transition:left .4s cubic-bezier(.2,.8,.2,1), top .4s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .3s;
+    user-select:none;
+  }
+  .fe-world.dragging .fe-card{ transition:none; }
+  .fe-card .hd{height:16px; flex:0 0 auto; font-family:var(--mono); font-size:7.5px; color:var(--muted); padding:0 6px; display:flex; align-items:center; border-bottom:1px solid var(--line);}
+  .fe-card.photo .bd{flex:1; background:repeating-linear-gradient(115deg,#eceae1 0 10px,#e2ded0 10px 11px);}
+  .fe-card.text .bd{flex:1; padding:6px 7px; font-family:var(--serif); font-size:10.5px; line-height:1.4; color:var(--text);}
+  .fe-card.session{border-color:var(--sky-line); box-shadow:0 4px 14px rgba(28,95,214,0.16);}
+  .fe-card.session .bd{flex:1; display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); padding:1px;}
+  .fe-card.session .bd i{background:var(--sky-glass);}
+  .fe-card.session .cnt{position:absolute; right:5px; bottom:4px; font-family:var(--mono); font-size:8px; color:var(--sky-ink); background:rgba(255,255,255,0.85); border:1px solid var(--sky-line); border-radius:999px; padding:1px 6px;}
+  .fe-card.selected{ outline:2px solid var(--sky-bright); outline-offset:2px; box-shadow:0 0 0 5px var(--sky-glass), 0 4px 12px rgba(0,0,0,0.1); }
+  .fe-card.pop-in{ animation:popIn .5s cubic-bezier(.2,1.4,.4,1); }
+  .fe-card.burst-in{ animation:burstIn .45s cubic-bezier(.2,1.2,.4,1); }
+  .fe-card.converging{ opacity:0; transform:scale(.35); }
+
+  .fe-tray{position:absolute; border:1px dashed var(--sky-line); border-radius:8px; background:var(--sky-glass); pointer-events:none;}
+  .fe-tray .lbl{position:absolute; top:-9px; left:8px; font-family:var(--mono); font-size:8px; color:var(--sky-ink); background:var(--surface); padding:0 5px; border-radius:3px; border:1px solid var(--sky-line);}
+
+  .fe-rect{
+    position:absolute; z-index:6; border-radius:4px; pointer-events:none;
+    background:var(--sky-glass); border:1.5px solid var(--sky-bright);
+    box-shadow:0 0 0 1px var(--sky-glass-strong), 0 0 22px 2px var(--sky-glass-strong);
+    animation:rectPulse 1.1s ease-in-out infinite;
+  }
+  .fe-rect.dragging-group{ background:var(--sky-glass-strong); animation:none; box-shadow:0 0 0 1px var(--sky-glass-strong), 0 0 30px 6px var(--sky-glass-strong); }
+  .fe-rect-hint{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:9px; color:var(--sky-ink); opacity:.6; white-space:nowrap; overflow:hidden;}
+  .fe-rect-count{
+    position:absolute; z-index:7; font-family:var(--mono); font-size:11px; color:#fff; background:var(--sky);
+    padding:3px 8px; border-radius:999px; box-shadow:0 3px 10px rgba(28,95,214,0.4); white-space:nowrap;
+  }
+
+  .fe-panel{
+    position:absolute; z-index:8; min-width:214px; border-radius:12px; padding:12px 14px 13px;
+    background:rgba(255,255,255,0.72); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--sky-line); box-shadow:0 12px 30px rgba(11,35,84,0.18), 0 0 0 1px var(--sky-glass);
+    animation:panelIn .28s cubic-bezier(.2,1.2,.4,1), rectPulse 2.4s ease-in-out infinite;
+  }
+  .fe-panel .p-head{font-family:var(--mono); font-size:11.5px; color:var(--sky-ink); font-weight:600; display:flex; align-items:center; gap:6px;}
+  .fe-panel .p-sub{font-family:var(--mono); font-size:9.5px; color:var(--muted); margin:3px 0 10px;}
+  .fe-panel .p-sub.warn{color:var(--rust);}
+  .fe-panel .p-actions{display:flex; flex-direction:column; gap:6px;}
+  .fe-btn{
+    font-family:var(--mono); font-size:10.5px; text-align:left; cursor:pointer;
+    border:1px solid var(--sky-line); background:rgba(255,255,255,0.6); color:var(--sky-ink);
+    border-radius:7px; padding:7px 10px; transition:background .12s, transform .08s;
+  }
+  .fe-btn:hover:not(:disabled){background:var(--sky-glass-strong);}
+  .fe-btn:active:not(:disabled){transform:scale(.98);}
+  .fe-btn:disabled{opacity:.35; cursor:not-allowed;}
+  .fe-btn.ghost{border-color:var(--line); color:var(--muted); background:transparent;}
+  .fe-btn.danger{border-color:rgba(179,64,43,0.5); color:var(--rust);}
+  .fe-btn.danger:hover:not(:disabled){background:rgba(179,64,43,0.1);}
+
+  @keyframes rectPulse{0%,100%{box-shadow:0 0 0 1px var(--sky-glass-strong), 0 0 16px 1px var(--sky-glass-strong);} 50%{box-shadow:0 0 0 1px var(--sky-glass-strong), 0 0 30px 6px var(--sky-glass-strong);}}
+  @keyframes dotpulse{0%,100%{opacity:1;} 50%{opacity:.35;}}
+  @keyframes popIn{0%{opacity:0; transform:scale(.55);} 70%{opacity:1; transform:scale(1.08);} 100%{opacity:1; transform:scale(1);}}
+  @keyframes burstIn{0%{opacity:0; transform:scale(.3) rotate(-8deg);} 60%{opacity:1; transform:scale(1.12) rotate(3deg);} 100%{opacity:1; transform:scale(1) rotate(0);}}
+  @keyframes panelIn{0%{opacity:0; transform:translateY(-6px) scale(.96);} 100%{opacity:1; transform:translateY(0) scale(1);}}
+
+  .fe-log{margin-top:10px; font-family:var(--mono); font-size:10px; color:var(--muted); line-height:1.9; max-height:96px; overflow-y:auto; border-top:1px solid var(--line); padding-top:8px;}
+  .fe-log div span{color:var(--sky-ink);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-head">
+    <div class="eyebrow"><span class="chip">MODULE PROPOSAL</span> flight engineer / 一括編成モジュール</div>
+    <h1 class="page-title">Flight Engineer</h1>
+    <p class="page-sub">
+      キャンバスの既定操作(パン)を、モジュール起動中だけ「矩形選択」へ切り替える一括編成モジュール案。
+      選択したカード群を新規セッションへ格納/セッション外へ排出/その場で整列/まとめて移動できる、効率重視の操作を想定している。
+      懸念の整理→決定事項→実際にドラッグして試せる操作モックアップ、の順に並べている。
+    </p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-num">01</span><span class="stage-title">懸念</span></div>
+    <p class="stage-note">既存の3モジュール(WormGate/Crews/Mapping Storys)は全て「独立したオーバーレイ/小窓を被せるだけ」で完結していたが、Flight Engineerはキャンバス本体の既定ジェスチャーそのものを差し替える初めてのモジュールになる。その前提で気になった点(下の決定事項で回答済みのものも記録として残す)。</p>
+    <div class="concerns">
+      <div class="concern"><div class="concern-n">01</div><div class="concern-t">キャンバス既定操作の奪取</div><div class="concern-d"><b>js/canvas.js</b>のviewportはinteract.jsのdraggable(パン)・gesturable(ピンチ)を握っている。ON中だけパンを止めて背景ドラッグを矩形選択に回す必要があり、「1モジュール=1ファイルで完結」という既存ルールから外れる最初の例外になる。canvas.js側に薄いフックを1本足す設計になりそう。</div></div>
+      <div class="concern"><div class="concern-n">02</div><div class="concern-t">選択判定は交差か完全包含か</div><div class="concern-d">Figma等は「左→右ドラッグ=完全に囲んだものだけ」「右→左ドラッグ=一部でも触れたら選択」を使い分けるが、単純に一部交差で統一するかは決めが要る。→<b>交差判定に決定</b>。</div></div>
+      <div class="concern"><div class="concern-n">03</div><div class="concern-t">「またぐ」の判定基準</div><div class="concern-d">線が矩形の境界を視覚的に交差するかではなく、繋がっている2枚が操作後に別セッション所属になるかで切る方が自然。→<b>後者(所属の変化)で確定</b>。</div></div>
+      <div class="concern"><div class="concern-n">04</div><div class="concern-t">排出の行き先</div><div class="concern-d">1階層だけ親に戻すのか、ルートまで一気に出すのか。→<b>常に1階層だけ親へ戻す、で固定</b>。</div></div>
+      <div class="concern"><div class="concern-n">05</div><div class="concern-t">取り消し手段が無いことへの安全弁</div><div class="concern-d">複数カード・複数ASTRを一度に書き換えるこの操作は誤操作の被害が大きい。→<b>格納/解体のみ編集履歴を持たせることで確定</b>(詳細は決定事項)。</div></div>
+      <div class="concern"><div class="concern-n">06</div><div class="concern-t">新規セッション名がスピード感を損なう懸念</div><div class="concern-d">既存の<b>handleCreateSession()</b>のOCR/手入力の二択ダイアログを毎回挟むと目的に反するため、仮称で即時作成し後から改名する方針で異論なし。</div></div>
+      <div class="concern"><div class="concern-n">07</div><div class="concern-t">起動コードの空き番号</div><div class="concern-d">洛書配置は123/456/789で3行を使い切っている。→<b>147で確定</b>。</div></div>
+      <div class="concern"><div class="concern-n">08</div><div class="concern-t">モードの可視化</div><div class="concern-d">全画面の挙動が変わるモード切替型のため常時見えるインジケーターが要る。→<b>ヘッダー直下の浮遊バーで常設表示することで解決</b>(決定事項参照)。</div></div>
+      <div class="concern"><div class="concern-n">09</div><div class="concern-t">一括移動と格納/排出の操作系統の分離</div><div class="concern-d">選択枠を掴んで「まとめて移動」する操作と、パネルの確定操作ボタンが誤爆しないよう当たり判定を分ける必要がある。→<b>選択枠を掴む方式で確定</b>。</div></div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-num">02</span><span class="stage-title">決定事項(2026年9月)</span></div>
+    <div class="decisions">
+      <div class="decision"><div class="dk">矩形選択の判定</div><div class="dv"><b>交差判定</b>。カードの一部でも矩形に触れていれば選択対象にする(完全包含は採用しない)。</div></div>
+      <div class="decision"><div class="dk">ASTRの「またぐ」判定</div><div class="dv">見た目の交差ではなく、<b>接続している2枚が操作後に別セッション所属になるか</b>で切断する。</div></div>
+      <div class="decision"><div class="dk">排出の行き先</div><div class="dv">ネストの深さによらず<b>常に1階層だけ親へ戻す</b>で固定(ルートまで一気に出す選択肢は設けない)。</div></div>
+      <div class="decision"><div class="dk">起動コード</div><div class="dv"><b>147</b>(モジュール共通キーパッド、電車の左列)。</div></div>
+      <div class="decision"><div class="dk">一括移動の方式</div><div class="dv">確定後に残る<b>選択枠そのものを掴んでドラッグ</b>する。カード個別のドラッグとは別動作として明確に分離する。</div></div>
+      <div class="decision"><div class="dk">Undo / Redo</div><div class="dv">編集履歴を持つのは<b>「格納」「解体」のみ</b>。排出・整理・一括移動は履歴を取らない(元に戻す対象にしない)。履歴は直近<b>10件</b>まで保持し、それを超えたら古いものから捨てる。新しい操作を行うと、その時点で「やり直し」待ちのぶんは破棄される(一般的なUndo/Redoの挙動)。</div></div>
+      <div class="decision"><div class="dk">UIデザイン</div><div class="dv">ヘッダー直下あたりに常設する<b>浮遊するグラスモーフィズムのバー</b>に、起動トグル・起動コード表示・Undo/Redo・履歴パネル・効果音トグルを横並びに格納する(下のモックアップの上部バーがその実装イメージ)。</div></div>
+      <div class="decision"><div class="dk">矩形選択の挙動</div><div class="dv">ドラッグで選択。<b>選択範囲外を一度タップすると、選択の解除とアクティブなカードの選択解除を同時に行う</b>。</div></div>
+      <div class="decision"><div class="dk">Shiftオーバーライド(PC限定)</div><div class="dv">Flight Engineer起動中でも<b>Shift+背景ドラッグ=通常のパン</b>、<b>Shift+カードのドラッグ=そのカード単体の移動</b>、<b>Shift+ホイール=ズーム</b>で、一時的に矩形選択より従来の操作を優先する。タッチ操作(スマホ・タブレット)にShiftキーは無いため、この上書きはPCのみの機能でよい。</div></div>
+    </div>
+    <div class="followup">
+      <div class="ft">補足: 履歴は何件まで持てるか</div>
+      1件あたりの記録は「どのカードがどこにあったか」「どのASTRを切ったか」程度の軽いデータなので、保存容量の面では10件どころか50〜100件でも実務上は問題にならない。上限を10件にしているのは容量の都合ではなく、「10手も前の格納操作を正確に覚えていて元に戻したくなることは稀」という実用面の判断で、増やすこと自体はいつでも軽い変更で可能。
+      ただし今回のモックアップは「元に戻す/やり直す」処理そのものをJavaScriptの関数(クロージャ)として履歴に積んでいるだけなので、<b>ブラウザを開いている間だけ有効な一時的な履歴</b>になっている。「アプリを閉じて再度開いても履歴が残っている」ところまで求めるなら、各履歴をカードID・座標だけのプレーンなデータへ書き直し、<b>constellation-data.jsonへ保存する</b>一手間が要る(容量自体はごくわずかなので、保存すること自体は無理なく可能)。
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-num">03</span><span class="stage-title">操作モックアップ(実際に動きます)</span></div>
+    <div class="fe-help">
+      ① 上のバーで「Flight Engineer」を押して起動 → ② キャンバス背景をドラッグして矩形選択(交差判定、数がリアルタイム表示される) → ③ 出てきたパネルで「格納 / 排出 / 整理 / 解体」を選ぶ、または④ 選択枠そのものをつかんでドラッグすると選択中のカードをまとめて移動できる。<br>
+      選択範囲外を一度タップすると選択は解除される。「既存セッション」カード(格納で新しくできたセッションも含む)をダブルクリックすると中身が開き、その中のカードを選べば「排出」を試せる。1枚だけセッションカードを選ぶと「解体」が有効になり、Undo(↺)で元の格納状態に戻せる。起動していない間は通常どおり背景ドラッグでキャンバスがパンし、カードは直接ドラッグで動かせる。<br>
+      <b>PC限定:</b> Flight Engineer起動中でも<b>Shiftを押しながら</b>背景をドラッグすれば通常のパン、<b>Shift+カードのドラッグ</b>でそのカード単体を移動、<b>Shift+ホイール</b>でズームできる(いずれも一時的に矩形選択より優先)。
+    </div>
+    <div class="fe-toolbar">
+      <div class="fe-toolbar-group">
+        <div id="feToggle" class="fe-toggle"><span class="dot"></span><span id="feToggleLabel">Flight Engineer — OFF</span></div>
+        <span class="fe-code-hint">起動コード: 147</span>
+      </div>
+      <div class="fe-toolbar-group">
+        <button id="histUndoBtn" class="fe-bar-btn" title="元に戻す(格納・解体のみ)">↺ 元に戻す</button>
+        <button id="histRedoBtn" class="fe-bar-btn" title="やり直す">↻ やり直す</button>
+        <div class="fe-hist-wrap">
+          <button id="historyToggle" class="fe-bar-btn">履歴 <span id="historyBadge" class="fe-badge">0</span></button>
+          <div id="historyList" class="fe-history-panel"></div>
+        </div>
+        <label class="fe-sound"><input type="checkbox" id="soundToggle"> 🔈 効果音</label>
+      </div>
+    </div>
+    <p class="fe-toolbar-note">実装イメージ: アプリ本体ではこのバーをヘッダー直下に常設固定し、Flight Engineer起動中のインジケーターを兼ねる想定。</p>
+    <div class="fe-panelwrap">
+      <div id="feStage" class="fe-stage">
+        <div class="fe-crumb">2026 › ある展覧会 <span id="crumbExtra"></span></div>
+        <div id="feWorld" class="fe-world">
+          <svg id="feSvg" width="900" height="460"></svg>
+        </div>
+      </div>
+    </div>
+    <div id="feLog" class="fe-log"></div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var HISTORY_CAP = 10;
+  var MIN_SCALE = 0.4, MAX_SCALE = 2.4;
+
+  // ---------- 状態 ----------
+  var state = {
+    fe: false,
+    pan: { x: 40, y: 24 },
+    scale: 1,
+    panDrag: null,
+    selectDrag: null,
+    cardDrag: null,
+    selectedIds: {},
+    soundOn: false,
+    shiftHeld: false,
+  };
+
+  var cards = [
+    { id:'c1', type:'photo', x:30,  y:60,  w:104, h:90, label:'#1' },
+    { id:'c2', type:'text',  x:190, y:34,  w:132, h:78, label:'考察', text:'この筆致は…' },
+    { id:'c3', type:'photo', x:400, y:96,  w:104, h:90, label:'#2' },
+    { id:'c4', type:'text',  x:560, y:50,  w:132, h:66, label:'引用', text:'キャプションより' },
+    { id:'c5', type:'photo', x:260, y:236, w:104, h:90, label:'#3' },
+    { id:'c6', type:'session', x:480, y:212, w:150, h:104, label:'既存セッション', open:false, childCount:3 },
+    { id:'c7', type:'photo', x:660, y:190, w:104, h:90, label:'#4' },
+    // 既存セッション c6 の中身(tray開放時のみ描画対象)
+    { id:'t1', type:'photo', w:64, h:56, label:'a', inTray:true, parent:'c6' },
+    { id:'t2', type:'photo', w:64, h:56, label:'b', inTray:true, parent:'c6' },
+    { id:'t3', type:'text',  w:64, h:56, label:'c', inTray:true, parent:'c6', text:'memo' },
+  ];
+  var links = [ {id:'l1', a:'c1', b:'c2'}, {id:'l2', a:'c2', b:'c3'}, {id:'l3', a:'c3', b:'c4'}, {id:'l4', a:'c1', b:'c5'} ];
+
+  var els = {};
+  var svg = document.getElementById('feSvg');
+  var worldEl = document.getElementById('feWorld');
+  var stageEl = document.getElementById('feStage');
+  var logEl = document.getElementById('feLog');
+  var crumbExtra = document.getElementById('crumbExtra');
+  var newSessionSeq = 1;
+  var undoStack = [];
+  var redoStack = [];
+  var historyOpen = false;
+
+  // ---------- サウンド(WebAudio、控えめな音量。既定オフ) ----------
+  var actx;
+  function ensureAudio(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); return actx; }
+  function tone(f0, f1, dur, opts){
+    if (!state.soundOn) return;
+    opts = opts || {};
+    var ctx = ensureAudio();
+    var t0 = ctx.currentTime;
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = opts.type || 'sine';
+    osc.frequency.setValueAtTime(f0, t0);
+    osc.frequency.linearRampToValueAtTime(f1, t0 + dur);
+    var peak = opts.peak || 0.045;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.02);
+  }
+  function sfxToggle(on){ tone(on?520:340, on?680:260, 0.12, {type:'sine', peak:0.05}); }
+  function sfxSelect(){ tone(500, 560, 0.05, {type:'sine', peak:0.02}); }
+  function sfxPanel(){ tone(480,620,0.07,{type:'sine',peak:0.035}); setTimeout(function(){tone(620,760,0.07,{type:'sine',peak:0.03});},70); }
+  function sfxStow(){ tone(320,920,0.4,{type:'triangle',peak:0.06}); }
+  function sfxCut(){ tone(760,140,0.14,{type:'sawtooth',peak:0.045}); }
+  function sfxEject(){ tone(520,180,0.32,{type:'sine',peak:0.05}); }
+  function sfxTidy(){ [0,90,180].forEach(function(d,i){ setTimeout(function(){ tone(440+i*120,470+i*120,0.09,{type:'triangle',peak:0.035}); }, d); }); }
+  function sfxUndo(){ tone(600,320,0.16,{type:'sine',peak:0.05}); }
+  function sfxRedo(){ tone(320,600,0.16,{type:'sine',peak:0.05}); }
+
+  function log(html){
+    var d = document.createElement('div');
+    var t = new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    d.innerHTML = '<span>['+t+']</span> '+html;
+    logEl.prepend(d);
+  }
+
+  // ---------- レイアウト / 可視性 ----------
+  function trayCard(id){ return cards.find(function(c){return c.id===id;}); }
+  function isVisible(c){
+    if (!c.inTray) return true;
+    var p = trayCard(c.parent);
+    return !!(p && p.open);
+  }
+  function layoutTrayFor(hostId){
+    var host = trayCard(hostId);
+    if (!host) return;
+    var kids = cards.filter(function(c){ return c.inTray && c.parent===hostId; });
+    var startX = host.x + 10, startY = host.y + host.h + 34;
+    kids.forEach(function(k, i){ k.x = startX + i*(k.w+10); k.y = startY; });
+  }
+
+  // ---------- 描画 ----------
+  function cardHtml(c){
+    if (c.type === 'session'){
+      return '<div class="hd">SESSION</div><div class="bd"><i></i><i></i><i></i><i></i></div>'+
+             '<div class="cnt">'+c.childCount+'枚</div>'+
+             '<div style="position:absolute;left:6px;bottom:4px;font-family:var(--mono);font-size:8px;color:var(--sky-ink);">'+c.label+'</div>';
+    }
+    if (c.type === 'text'){
+      return '<div class="hd">TEXT</div><div class="bd">'+(c.text||c.label)+'</div>';
+    }
+    return '<div class="hd">PHOTO '+c.label+'</div><div class="bd"></div>';
+  }
+
+  function render(){
+    worldEl.style.transform = 'translate('+state.pan.x+'px,'+state.pan.y+'px) scale('+state.scale+')';
+    worldEl.style.transformOrigin = '0 0';
+
+    // 開いているセッションのトレイ背景(複数同時オープンに対応)
+    var openHosts = cards.filter(function(c){ return c.type==='session' && c.open; });
+    var openIds = {};
+    openHosts.forEach(function(h){
+      openIds[h.id] = true;
+      var key = 'tray_'+h.id;
+      var trayBg = els[key];
+      if (!trayBg){ trayBg = document.createElement('div'); trayBg.className='fe-tray'; worldEl.appendChild(trayBg); els[key]=trayBg; }
+      trayBg.style.display='block';
+      trayBg.style.left=(h.x-6)+'px'; trayBg.style.top=(h.y+h.h+22)+'px';
+      trayBg.style.width=(h.w+12)+'px'; trayBg.style.height='72px';
+      trayBg.innerHTML='<span class="lbl">'+h.label+'の中身</span>';
+    });
+    Object.keys(els).forEach(function(k){
+      if (k.indexOf('tray_')===0 && !openIds[k.slice(5)]) els[k].style.display='none';
+    });
+    crumbExtra.textContent = openHosts.length ? ('› '+openHosts.map(function(h){return h.label;}).join('・')+'(展開中)') : '';
+
+    cards.forEach(function(c){
+      if (!isVisible(c)) { if (els[c.id]) els[c.id].style.display='none'; return; }
+      var el = els[c.id];
+      if (!el){
+        el = document.createElement('div');
+        el.className = 'fe-card ' + c.type;
+        el.dataset.id = c.id;
+        wireCard(el, c);
+        worldEl.appendChild(el);
+        els[c.id] = el;
+      }
+      el.style.display='flex';
+      el.style.left = c.x+'px'; el.style.top = c.y+'px';
+      el.style.width = c.w+'px'; el.style.height = c.h+'px';
+      el.innerHTML = cardHtml(c);
+      el.classList.toggle('selected', !!state.selectedIds[c.id]);
+    });
+
+    var svgLines = links.filter(function(l){
+      var a = trayCard(l.a), b = trayCard(l.b);
+      return a && b && isVisible(a) && isVisible(b);
+    }).map(function(l){
+      var a = trayCard(l.a), b = trayCard(l.b);
+      var cx1=a.x+a.w/2, cy1=a.y+a.h/2, cx2=b.x+b.w/2, cy2=b.y+b.h/2;
+      return '<line class="asterism-line'+(l.cutting?' cutting':'')+'" data-lid="'+l.id+'" x1="'+cx1+'" y1="'+cy1+'" x2="'+cx2+'" y2="'+cy2+'"/>';
+    }).join('');
+    svg.innerHTML = svgLines;
+  }
+
+  // ---------- カードのポインタ処理(背景パン/矩形選択と衝突しないようstopPropagation) ----------
+  // 通常時、またはFlight Engineer起動中でもShiftを押していれば、カード単体をドラッグで動かせる
+  // (FE起動中・Shiftなしの場合だけ、矩形選択を優先してカード単体の移動は止める)
+  function wireCard(el, c){
+    el.addEventListener('pointerdown', function(ev){
+      ev.stopPropagation();
+      if (state.fe && !ev.shiftKey) return; // FE中はShiftが無いと個別移動を止める
+      var startX = ev.clientX, startY = ev.clientY;
+      var ox = c.x, oy = c.y;
+      var moved = false;
+      el.setPointerCapture(ev.pointerId);
+      worldEl.classList.add('dragging');
+      function onMove(ev2){
+        var dx = (ev2.clientX - startX) / state.scale;
+        var dy = (ev2.clientY - startY) / state.scale;
+        if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+        c.x = ox + dx; c.y = oy + dy;
+        render();
+      }
+      function onUp(){
+        el.removeEventListener('pointermove', onMove);
+        el.removeEventListener('pointerup', onUp);
+        worldEl.classList.remove('dragging');
+        if (moved) log('『'+(c.label||c.id)+'』を移動しました。(履歴には残りません)');
+      }
+      el.addEventListener('pointermove', onMove);
+      el.addEventListener('pointerup', onUp);
+    });
+    if (c.type === 'session'){
+      el.addEventListener('dblclick', function(ev){
+        ev.stopPropagation();
+        c.open = !c.open;
+        if (c.open) layoutTrayFor(c.id);
+        clearSelection();
+        render();
+      });
+    }
+  }
+
+  // ---------- 背景操作: パン(FE off) / 矩形選択(FE on) ----------
+  var rectEl=null, rectCountEl=null, panelEl=null;
+
+  stageEl.addEventListener('pointerdown', function(ev){
+    if (ev.target !== stageEl && ev.target !== worldEl && ev.target !== svg) return; // カード上・選択枠上は無視
+    clearSelectRectVisual();
+    clearPanelOnly();
+    state.selectedIds = {};
+    render(); // タップ即解除(選択枠内の各カードのハイライトも即座に消す)
+    var rect = stageEl.getBoundingClientRect();
+    var sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+    if (state.fe && !ev.shiftKey){
+      state.selectDrag = { x0:sx, y0:sy, x1:sx, y1:sy };
+      sfxSelect();
+    } else {
+      // FE停止中は常にパン。FE起動中でもShiftを押していれば従来どおりパンに戻す(PC限定)。
+      state.panDrag = { x0:ev.clientX, y0:ev.clientY, px0:state.pan.x, py0:state.pan.y };
+      stageEl.classList.add('panning');
+    }
+    stageEl.setPointerCapture(ev.pointerId);
+  });
+
+  stageEl.addEventListener('pointermove', function(ev){
+    var rect = stageEl.getBoundingClientRect();
+    if (state.panDrag){
+      state.pan.x = state.panDrag.px0 + (ev.clientX - state.panDrag.x0);
+      state.pan.y = state.panDrag.py0 + (ev.clientY - state.panDrag.y0);
+      render();
+    } else if (state.selectDrag){
+      state.selectDrag.x1 = ev.clientX - rect.left;
+      state.selectDrag.y1 = ev.clientY - rect.top;
+      updateSelectRect();
+    }
+  });
+
+  stageEl.addEventListener('pointerup', function(){
+    if (state.panDrag){ state.panDrag=null; stageEl.classList.remove('panning'); }
+    if (state.selectDrag){
+      finalizeSelection();
+      state.selectDrag = null;
+    }
+  });
+
+  function selectionScreenRect(){
+    var d = state.selectDrag;
+    return { left: Math.min(d.x0,d.x1), top: Math.min(d.y0,d.y1), w: Math.abs(d.x1-d.x0), h: Math.abs(d.y1-d.y0) };
+  }
+  function selectionWorldRect(){
+    var r = selectionScreenRect();
+    return {
+      left: (r.left - state.pan.x) / state.scale,
+      top: (r.top - state.pan.y) / state.scale,
+      w: r.w / state.scale,
+      h: r.h / state.scale,
+    };
+  }
+  function intersects(a, bx,by,bw,bh){
+    return a.left < bx+bw && a.left+a.w > bx && a.top < by+bh && a.top+a.h > by;
+  }
+
+  function updateSelectRect(){
+    var r = selectionScreenRect();
+    if (!rectEl){
+      rectEl = document.createElement('div'); rectEl.className='fe-rect'; stageEl.appendChild(rectEl);
+      rectCountEl = document.createElement('div'); rectCountEl.className='fe-rect-count'; stageEl.appendChild(rectCountEl);
+    }
+    rectEl.style.left=r.left+'px'; rectEl.style.top=r.top+'px'; rectEl.style.width=r.w+'px'; rectEl.style.height=r.h+'px';
+
+    var wr = selectionWorldRect();
+    var sel = {};
+    cards.forEach(function(c){
+      if (!isVisible(c)) return;
+      if (intersects(wr, c.x, c.y, c.w, c.h)) sel[c.id]=true; // 交差判定
+    });
+    state.selectedIds = sel;
+    var n = Object.keys(sel).length;
+    rectCountEl.textContent = n+'枚選択中';
+    rectCountEl.style.left = (r.left + r.w + 8)+'px';
+    rectCountEl.style.top = Math.max(4, r.top - 2)+'px';
+    render();
+  }
+
+  function clearSelectRectVisual(){
+    if (rectEl){ rectEl.remove(); rectEl=null; }
+    if (rectCountEl){ rectCountEl.remove(); rectCountEl=null; }
+  }
+  function clearPanelOnly(){ if (panelEl){ panelEl.remove(); panelEl=null; } }
+  function clearSelection(){
+    state.selectedIds = {};
+    clearSelectRectVisual();
+    clearPanelOnly();
+    render();
+  }
+
+  function finalizeSelection(){
+    var ids = Object.keys(state.selectedIds);
+    if (ids.length === 0){ clearSelectRectVisual(); return; }
+    if (rectEl){
+      rectEl.style.pointerEvents = 'auto';
+      rectEl.style.cursor = 'move';
+      rectEl.innerHTML = '<div class="fe-rect-hint">⇕ ドラッグで移動</div>';
+      wireGroupDrag(rectEl);
+    }
+    showPanel();
+  }
+
+  // ---------- 選択枠を掴んでの一括移動 ----------
+  function wireGroupDrag(handleEl){
+    handleEl.addEventListener('pointerdown', function(ev){
+      ev.stopPropagation();
+      var ids = Object.keys(state.selectedIds);
+      if (ids.length === 0) return;
+      var origins = ids.map(trayCard).map(function(c){ return { c:c, x:c.x, y:c.y }; });
+      var startX = ev.clientX, startY = ev.clientY;
+      var rStart = { left: parseFloat(rectEl.style.left)||0, top: parseFloat(rectEl.style.top)||0 };
+      var countStart = rectCountEl ? { left: parseFloat(rectCountEl.style.left)||0, top: parseFloat(rectCountEl.style.top)||0 } : null;
+      var panelStart = panelEl ? { left: parseFloat(panelEl.style.left)||0, top: parseFloat(panelEl.style.top)||0 } : null;
+      var moved = false;
+      handleEl.setPointerCapture(ev.pointerId);
+      handleEl.classList.add('dragging-group');
+      worldEl.classList.add('dragging');
+
+      function onMove(ev2){
+        var sdx = ev2.clientX - startX, sdy = ev2.clientY - startY; // 画面px(オーバーレイ用)
+        var wdx = sdx / state.scale, wdy = sdy / state.scale;      // ワールドpx(カード座標用)
+        if (Math.abs(sdx) + Math.abs(sdy) > 2) moved = true;
+        origins.forEach(function(o){ o.c.x = o.x + wdx; o.c.y = o.y + wdy; });
+        handleEl.style.left = (rStart.left + sdx) + 'px';
+        handleEl.style.top = (rStart.top + sdy) + 'px';
+        if (rectCountEl && countStart){
+          rectCountEl.style.left = (countStart.left + sdx) + 'px';
+          rectCountEl.style.top = (countStart.top + sdy) + 'px';
+        }
+        if (panelEl && panelStart){
+          panelEl.style.left = (panelStart.left + sdx) + 'px';
+          panelEl.style.top = (panelStart.top + sdy) + 'px';
+        }
+        render();
+      }
+      function onUp(){
+        handleEl.removeEventListener('pointermove', onMove);
+        handleEl.removeEventListener('pointerup', onUp);
+        handleEl.classList.remove('dragging-group');
+        worldEl.classList.remove('dragging');
+        if (moved) log(ids.length+'枚をまとめて移動しました。(履歴には残りません)');
+      }
+      handleEl.addEventListener('pointermove', onMove);
+      handleEl.addEventListener('pointerup', onUp);
+    });
+  }
+
+  // ---------- コマンドパネル ----------
+  function showPanel(){
+    clearPanelOnly();
+    var ids = Object.keys(state.selectedIds);
+    var selCards = ids.map(trayCard);
+    var allInTray = selCards.every(function(c){ return c.inTray; });
+    var allTop = selCards.every(function(c){ return !c.inTray; });
+    var mixed = !allInTray && !allTop;
+    var soloSession = ids.length===1 && !selCards[0].inTray && selCards[0].type==='session';
+
+    var crossing = links.filter(function(l){
+      var aIn = !!state.selectedIds[l.a], bIn = !!state.selectedIds[l.b];
+      return aIn !== bIn;
+    });
+
+    panelEl = document.createElement('div');
+    panelEl.className = 'fe-panel';
+    var r = selectionScreenRect();
+    panelEl.style.left = Math.min(r.left, stageEl.clientWidth-232)+'px';
+    panelEl.style.top = (r.top + r.h + 12)+'px';
+
+    var subHtml = '';
+    if (mixed){
+      subHtml = '<div class="p-sub warn">トレイ内外の混在は選択できません(モックアップの割り切り)</div>';
+    } else if (allInTray){
+      subHtml = '<div class="p-sub">セッション内のカード / 排出のみ有効</div>';
+    } else {
+      subHtml = '<div class="p-sub">切断されるASTR接続: '+crossing.length+'本</div>';
+    }
+
+    panelEl.innerHTML =
+      '<div class="p-head">🔷 '+ids.length+'枚を選択中</div>'+
+      subHtml+
+      '<div class="p-actions">'+
+        '<button class="fe-btn" id="btnStow" '+(mixed||allInTray?'disabled':'')+'>⇲ 新規セッションに格納</button>'+
+        '<button class="fe-btn" id="btnEject" '+(mixed||allTop?'disabled':'')+'>⇱ セッションの外へ出す</button>'+
+        '<button class="fe-btn" id="btnTidy" '+(ids.length<2?'disabled':'')+'>≋ その場で整理</button>'+
+        '<button class="fe-btn danger" id="btnDisband" '+(!soloSession?'disabled':'')+'>⌁ セッションを解体</button>'+
+        '<button class="fe-btn ghost" id="btnCancel">✕ キャンセル</button>'+
+      '</div>';
+    stageEl.appendChild(panelEl);
+
+    document.getElementById('btnCancel').onclick = clearSelection;
+    document.getElementById('btnStow').onclick = doStow;
+    document.getElementById('btnEject').onclick = doEject;
+    document.getElementById('btnTidy').onclick = doTidy;
+    document.getElementById('btnDisband').onclick = doDisband;
+    sfxPanel();
+  }
+
+  // ---------- 実行: 格納(履歴に残る) ----------
+  function doStow(){
+    var ids = Object.keys(state.selectedIds);
+    var selCards = ids.map(trayCard);
+    var bx = Math.min.apply(null, selCards.map(function(c){return c.x;}));
+    var by = Math.min.apply(null, selCards.map(function(c){return c.y;}));
+    var bx2 = Math.max.apply(null, selCards.map(function(c){return c.x+c.w;}));
+    var by2 = Math.max.apply(null, selCards.map(function(c){return c.y+c.h;}));
+    var cx = (bx+bx2)/2, cy=(by+by2)/2;
+
+    var originalSnapshot = selCards.map(function(c){ return {id:c.id, x:c.x, y:c.y}; });
+
+    var crossing = links.filter(function(l){
+      var aIn = !!state.selectedIds[l.a], bIn = !!state.selectedIds[l.b];
+      return aIn !== bIn;
+    });
+    var internalCount = links.filter(function(l){
+      return ids.indexOf(l.a)>=0 && ids.indexOf(l.b)>=0;
+    }).length;
+
+    crossing.forEach(function(l){ l.cutting = true; });
+    render();
+    sfxStow();
+    crossing.forEach(function(l, i){ setTimeout(sfxCut, 90*i); });
+
+    setTimeout(function(){
+      selCards.forEach(function(c){ var el = els[c.id]; if (el) el.classList.add('converging'); });
+    }, 60);
+
+    clearSelectRectVisual(); clearPanelOnly();
+
+    setTimeout(function(){
+      links = links.filter(function(l){ return crossing.indexOf(l)===-1; });
+
+      var newC = {
+        id: 'ns'+(newSessionSeq++), type:'session',
+        x: cx-75, y: cy-52, w:150, h:104,
+        label:'無題セッション'+(newSessionSeq-1), open:false, childCount: ids.length,
+      };
+      selCards.forEach(function(c){ c.inTray = true; c.parent = newC.id; });
+      cards.push(newC);
+      state.selectedIds = {};
+      render();
+      var el = els[newC.id];
+      if (el) el.classList.add('pop-in');
+
+      log(ids.length+'枚を <span>『'+newC.label+'』</span> に格納しました。ASTR接続を'+crossing.length+'本切断'+(internalCount?'、内部の接続'+internalCount+'本は保持':'')+'。');
+
+      pushHistory({
+        type: 'stow',
+        label: '『'+newC.label+'』に'+ids.length+'枚を格納',
+        undo: function(){
+          disbandSession(newC.id, originalSnapshot);
+          crossing.forEach(function(l){ l.cutting = false; });
+          links = links.concat(crossing);
+          render();
+        },
+        redo: function(){
+          selCards.forEach(function(c){ c.inTray = true; c.parent = newC.id; });
+          cards.push(newC);
+          links = links.filter(function(l){ return crossing.indexOf(l)===-1; });
+          render();
+          var el2 = els[newC.id]; if (el2) el2.classList.add('pop-in');
+        },
+      });
+    }, 430);
+  }
+
+  // ---------- 実行: 排出(履歴に残らない) ----------
+  function doEject(){
+    var ids = Object.keys(state.selectedIds);
+    var selCards = ids.map(trayCard);
+    var host = trayCard(selCards[0].parent);
+    if (!host) return;
+    var baseX = host.x + host.w + 24, baseY = host.y - 10;
+
+    sfxEject();
+    selCards.forEach(function(c, i){
+      c.inTray = false;
+      c.parent = null;
+      c.x = baseX + (i%2)*70;
+      c.y = baseY + Math.floor(i/2)*70 + i*8;
+      host.childCount = Math.max(0, host.childCount - 1);
+    });
+    state.selectedIds = {};
+    clearSelectRectVisual(); clearPanelOnly();
+    render();
+    selCards.forEach(function(c){ var el=els[c.id]; if (el) el.classList.add('burst-in'); });
+    log(ids.length+'枚を <span>『'+host.label+'』</span> の外へ排出しました。(履歴には残りません)');
+  }
+
+  // ---------- 実行: 整理(履歴に残らない) ----------
+  function doTidy(){
+    var ids = Object.keys(state.selectedIds);
+    var selCards = ids.map(trayCard);
+    var bx = Math.min.apply(null, selCards.map(function(c){return c.x;}));
+    var by = Math.min.apply(null, selCards.map(function(c){return c.y;}));
+    var cols = Math.ceil(Math.sqrt(selCards.length));
+    var gap = 14;
+    selCards.forEach(function(c, i){
+      var col = i % cols, row = Math.floor(i/cols);
+      c.x = bx + col*(c.w+gap);
+      c.y = by + row*(c.h+gap);
+    });
+    clearSelectRectVisual(); clearPanelOnly();
+    state.selectedIds = {};
+    render();
+    sfxTidy();
+    log(ids.length+'枚を整列しました。(履歴には残りません)');
+  }
+
+  // ---------- 実行: 解体(履歴に残る) ----------
+  function disbandSession(sessionId, snapshot){
+    var host = trayCard(sessionId);
+    if (!host) return null;
+    var kids = cards.filter(function(c){ return c.inTray && c.parent===sessionId; });
+    kids.forEach(function(k, i){
+      var pos = snapshot && snapshot.find(function(s){ return s.id===k.id; });
+      if (pos){ k.x = pos.x; k.y = pos.y; }
+      else { k.x = host.x + (i%2)*74; k.y = host.y + host.h + 18 + Math.floor(i/2)*66; }
+      k.inTray = false; k.parent = null;
+    });
+    var idx = cards.indexOf(host);
+    if (idx>=0) cards.splice(idx,1);
+    var elh = els[host.id]; if (elh){ elh.remove(); delete els[host.id]; }
+    var trayEl = els['tray_'+host.id]; if (trayEl){ trayEl.remove(); delete els['tray_'+host.id]; }
+    render();
+    kids.forEach(function(k){ var el = els[k.id]; if (el) el.classList.add('burst-in'); });
+    return { host: host, kids: kids };
+  }
+
+  function doDisband(){
+    var ids = Object.keys(state.selectedIds);
+    var host = trayCard(ids[0]);
+    if (!host || host.type!=='session') return;
+    clearSelectRectVisual(); clearPanelOnly();
+    state.selectedIds = {};
+    sfxEject();
+    var result = disbandSession(host.id, null);
+    if (!result) return;
+    var postSnapshot = result.kids.map(function(k){ return {id:k.id, x:k.x, y:k.y}; });
+
+    log(result.kids.length+'枚を <span>『'+host.label+'』</span> から解体しました。');
+
+    pushHistory({
+      type: 'disband',
+      label: '『'+host.label+'』を解体('+result.kids.length+'枚)',
+      undo: function(){
+        result.kids.forEach(function(k){ k.inTray = true; k.parent = host.id; });
+        cards.push(host);
+        render();
+        var el = els[host.id]; if (el) el.classList.add('pop-in');
+      },
+      redo: function(){
+        disbandSession(host.id, postSnapshot);
+      },
+    });
+  }
+
+  // ---------- 編集履歴(格納/解体のみ、最大10件) ----------
+  function pushHistory(entry){
+    entry.at = Date.now();
+    undoStack.push(entry);
+    if (undoStack.length > HISTORY_CAP) undoStack.shift();
+    redoStack = []; // 新しい操作をすると「やり直し」は破棄する(一般的なUndo/Redoの挙動)
+    renderHistoryPanel();
+  }
+  function doUndo(){
+    var entry = undoStack.pop();
+    if (!entry) return;
+    entry.undo();
+    redoStack.push(entry);
+    if (redoStack.length > HISTORY_CAP) redoStack.shift();
+    sfxUndo();
+    log('<span>元に戻す:</span> '+entry.label);
+    renderHistoryPanel();
+  }
+  function doRedo(){
+    var entry = redoStack.pop();
+    if (!entry) return;
+    entry.redo();
+    undoStack.push(entry);
+    sfxRedo();
+    log('<span>やり直す:</span> '+entry.label);
+    renderHistoryPanel();
+  }
+  function timeAgo(ts){
+    var s = Math.max(0, Math.round((Date.now()-ts)/1000));
+    if (s<60) return s+'秒前';
+    return Math.round(s/60)+'分前';
+  }
+  function renderHistoryPanel(){
+    document.getElementById('historyBadge').textContent = String(undoStack.length);
+    document.getElementById('histUndoBtn').disabled = undoStack.length===0;
+    document.getElementById('histRedoBtn').disabled = redoStack.length===0;
+
+    var list = document.getElementById('historyList');
+    if (!historyOpen) return;
+    if (undoStack.length===0 && redoStack.length===0){
+      list.innerHTML = '<div class="hist-empty">まだ操作履歴がありません。格納・解体のみここに記録されます(移動/整理/排出は対象外)。</div>';
+      return;
+    }
+    var rows = undoStack.slice().reverse().map(function(e,i){
+      return '<div class="hist-row'+(i===0?' latest':'')+'"><span class="hist-ico">'+(e.type==='stow'?'⇲':'⌁')+'</span><span class="hist-label">'+e.label+'</span><span class="hist-time">'+timeAgo(e.at)+'</span></div>';
+    }).join('');
+    var redoRows = '';
+    if (redoStack.length){
+      redoRows = '<div class="hist-sep">やり直せる操作</div>' + redoStack.slice().reverse().map(function(e){
+        return '<div class="hist-row redo-row"><span class="hist-ico">'+(e.type==='stow'?'⇲':'⌁')+'</span><span class="hist-label">'+e.label+'</span></div>';
+      }).join('');
+    }
+    list.innerHTML = rows + redoRows;
+  }
+
+  // ---------- Flight Engineer トグル ----------
+  var toggleEl = document.getElementById('feToggle');
+  var toggleLabel = document.getElementById('feToggleLabel');
+  toggleEl.addEventListener('click', function(){
+    state.fe = !state.fe;
+    toggleEl.classList.toggle('on', state.fe);
+    toggleLabel.textContent = 'Flight Engineer — ' + (state.fe ? 'ON' : 'OFF');
+    stageEl.classList.toggle('fe-active', state.fe);
+    updateShiftCursor();
+    clearSelection();
+    sfxToggle(state.fe);
+    log(state.fe ? '<span>Flight Engineer 起動。</span> 背景ドラッグが矩形選択になります。' : 'Flight Engineer 終了。通常のパン操作に戻ります。');
+  });
+
+  // ---------- PC限定: Shiftオーバーライド(通常パン/カード単体移動)とShift+ホイールズーム ----------
+  function updateShiftCursor(){
+    stageEl.classList.toggle('fe-shift', state.fe && state.shiftHeld);
+  }
+  document.addEventListener('keydown', function(ev){
+    if (ev.key === 'Shift' && !state.shiftHeld){ state.shiftHeld = true; updateShiftCursor(); }
+  });
+  document.addEventListener('keyup', function(ev){
+    if (ev.key === 'Shift'){ state.shiftHeld = false; updateShiftCursor(); }
+  });
+  window.addEventListener('blur', function(){ state.shiftHeld = false; updateShiftCursor(); });
+
+  function zoomAt(px, py, factor){
+    var newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, state.scale * factor));
+    var contentX = (px - state.pan.x) / state.scale;
+    var contentY = (py - state.pan.y) / state.scale;
+    state.scale = newScale;
+    state.pan.x = px - contentX * newScale;
+    state.pan.y = py - contentY * newScale;
+    render();
+  }
+  stageEl.addEventListener('wheel', function(ev){
+    if (!ev.shiftKey) return; // PC限定: Shiftを押している間だけホイールでズーム
+    ev.preventDefault();
+    var rect = stageEl.getBoundingClientRect();
+    var factor = ev.deltaY < 0 ? 1.08 : 1/1.08;
+    zoomAt(ev.clientX - rect.left, ev.clientY - rect.top, factor);
+  }, { passive:false });
+
+  document.getElementById('soundToggle').addEventListener('change', function(ev){
+    state.soundOn = ev.target.checked;
+    if (state.soundOn) ensureAudio();
+  });
+
+  document.getElementById('histUndoBtn').addEventListener('click', doUndo);
+  document.getElementById('histRedoBtn').addEventListener('click', doRedo);
+  document.getElementById('historyToggle').addEventListener('click', function(ev){
+    ev.stopPropagation();
+    historyOpen = !historyOpen;
+    document.getElementById('historyList').classList.toggle('open', historyOpen);
+    renderHistoryPanel();
+  });
+  document.addEventListener('pointerdown', function(ev){
+    var wrap = document.querySelector('.fe-hist-wrap');
+    if (historyOpen && wrap && !wrap.contains(ev.target)){
+      historyOpen = false;
+      document.getElementById('historyList').classList.remove('open');
+    }
+  });
+
+  render();
+  renderHistoryPanel();
+  log('モックアップ準備完了。まずは上のバーでFlight Engineerを起動してみてください。');
+})();
+</script>
+</body>
+</html>
