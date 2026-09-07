@@ -1269,6 +1269,9 @@ function summaryCardInnerHtml(card) {
     <p class="star-card-summary-label">要約の傾向(任意)</p>
     <textarea class="star-card-summary-input" placeholder="例: フェミニズム的視点で／ポストインターネット的視点で">${escapeHtml(card.summaryDirection || '')}</textarea>
     <p class="star-card-summary-hint">ASTRで写真を繋ぐと、その写真も見て要約します(動画・音声は対象外)</p>
+    <button class="star-card-summary-grounded-btn" title="上の「要約の傾向」欄をコピーしてgemini.google.comを新規タブで開く">🔍 Geminiで調べる(検索あり・新規タブ)</button>
+    <textarea class="star-card-summary-paste-input" placeholder="Geminiの回答をここに貼り付け"></textarea>
+    <button class="star-card-summary-paste-btn">この内容をテクストとして保存</button>
     ${EDIT_GUIDE_HANDLES_HTML}
     ${editGuideHexHtml('summary')}
   `;
@@ -1290,6 +1293,55 @@ function wireSummaryCard(card, el) {
       handleSummaryGenerate(card, el, btn.dataset.summaryMode);
     });
   });
+
+  // 「Geminiで調べる(検索あり・新規タブ)」(2026年9月追加、Mapping Storysの伝承欄と同じ思想)。
+  // APIキー経由の無料枠は検索グラウンディングが429になる制約があるが、ユーザー自身の
+  // Googleアカウントでログインするgemini.google.comの通常利用は検索グラウンディングが無料。
+  // ここではセッションの自分のメモ(非公開データ)は送らず、「要約の傾向」欄の文面だけを
+  // クリップボードへコピーする(ユーザー選択、2026年9月)。得た回答は下の貼り付け欄から
+  // 保存すると、Education/Academicと同じ経路(createTextCard+summarySourceId+ASTR接続)で
+  // 出力テクストカードになる。
+  const groundedBtn = el.querySelector('.star-card-summary-grounded-btn');
+  const pasteInput = el.querySelector('.star-card-summary-paste-input');
+  const pasteBtn = el.querySelector('.star-card-summary-paste-btn');
+  if (groundedBtn) {
+    groundedBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    groundedBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const q = (inputEl?.value || '').trim();
+      if (q && navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(q);
+          setStatus('「要約の傾向」欄をコピーしました。開いたタブに貼り付けて聞いてください。');
+        } catch (err) {
+          console.warn('サマリー: クリップボードへのコピーに失敗', err);
+        }
+      }
+      window.open('https://gemini.google.com/app', '_blank', 'noopener,noreferrer');
+    });
+  }
+  if (pasteInput) pasteInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+  if (pasteBtn) {
+    pasteBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    pasteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pasted = (pasteInput?.value || '').trim();
+      if (!pasted) return;
+      const newCard = createTextCard(pasted);
+      newCard.summarySourceId = card.id;
+      newCard.x = card.x + 260 + (Math.random() * 80 - 20);
+      newCard.y = card.y + (Math.random() * 240 - 120);
+      const newEl = cardElById(newCard.id);
+      if (newEl) {
+        newEl.dataset.x = String(newCard.x);
+        newEl.dataset.y = String(newCard.y);
+        applyCardTransform(newEl);
+      }
+      createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
+      pasteInput.value = '';
+      setStatus('Geminiの回答をテクストカードとして保存しました');
+    });
+  }
   // Crewsモジュールが描画したペルソナのヘックス(.star-card-summary-crew-btn、data-crew-id持ち)。
   // タップ(短押し)は通常のEducation/Academicボタンと同じhandleSummaryGenerate()を、モードの
   // 代わりにcrewIdで呼ぶ。長押しは生成せず、window.showCrewInfoPopup()で【人物情報】【その言葉】を
