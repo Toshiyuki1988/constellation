@@ -108,6 +108,10 @@
   let scanCamEls = null;
   let mode = 'indoor'; // 'indoor' | 'outdoor'
   let editingOpen = false; // この小窓が開いている間だけ地図を編集可能にする
+  // 複数の地図が重なっていると「どの地図への操作か」が分かりにくいという実機報告(2026年9月)
+  // を受けて導入した「アクティブ地図」。地図本体のハンドル(移動/リサイズ/回転)を操作した
+  // 地図が自動的にこれになり、その地図にだけ編集パネル(buildMapEditPanel())が表示される。
+  let activeLayerId = null;
   let panelCollapsed = false; // 地図の移動・リサイズ中、設定パネル本体を上部バーだけにたたむ
 
   let pendingIndoorCanvas = null; // 二値化・緑線化・透明化まで済ませた、展開待ちのcanvas
@@ -346,8 +350,9 @@
         color: rgba(255, 255, 255, 0.55); font-size: 10px; cursor: pointer; padding: 0;
       }
       .ms-maprow-remove:hover { border-color: #b3402b; color: #ff8a70; }
-      .ms-maprow .ms-embed-maptype-row, .ms-maprow .ms-embed-slider-row { margin: 0 0 6px; }
-      .ms-maprow .ms-embed-slider-row:last-child { margin-bottom: 0; }
+      .ms-maprow .ms-embed-maptype-row, .ms-maprow .ms-embed-slider-row,
+      .ms-inline-panel .ms-embed-maptype-row, .ms-inline-panel .ms-embed-slider-row { margin: 0 0 6px; }
+      .ms-maprow .ms-embed-slider-row:last-child, .ms-inline-panel .ms-embed-slider-row:last-child { margin-bottom: 0; }
 
       /* ---- 自前の簡易スキャンカメラ(js/camera.jsは既存モードが固定DOMなので流用せず、
               このモジュール専用に最小構成で実装する) ---- */
@@ -383,6 +388,8 @@
          あったため、2026年9月に「本体を掴んで移動」から「専用ハンドルでのみ移動」に変更した。
          移動・リサイズ・回転はすべて.ms-handle系の小さな個別要素だけがpointer-events:autoを持つ。 */
       .ms-maplayer.ms-editable { outline: 1px dashed rgba(63, 174, 99, 0.55); outline-offset: 6px; }
+      /* 編集パネルを表示中の地図は、他の地図が描画順で上に重なってパネルを隠さないよう最前面へ */
+      .ms-maplayer--active-panel { z-index: 200; }
       .ms-maplayer-img { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
       .ms-maplayer-error {
         display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px;
@@ -431,6 +438,23 @@
         background: rgba(179, 64, 43, 0.85); font-size: 10px;
       }
       .ms-handle-delete:hover { background: #b3402b; }
+
+      /* ---- 地図本体に直付けする編集パネル(2026年9月、「アクティブ地図」概念の導入) ----
+         地図の右側に固定の実ピクセル幅で配置する。left:100%はレイアウト段階で確定するため、
+         親(.ms-maplayer)にどんなscale/rotationのtransformがかかっても位置がずれない
+         (transformは描画のみに影響し、レイアウトには影響しないため)。JS側では見た目の
+         サイズ・向きを一定に保つためのscale/rotation打ち消しだけを行う(applyMapLayerTransform)。 */
+      .ms-inline-panel {
+        position: absolute; top: 0; left: 100%; margin-left: 14px;
+        width: 230px; transform-origin: top left; pointer-events: auto;
+        background: rgba(7, 13, 9, 0.95); border: 1px solid rgba(63, 174, 99, 0.45);
+        border-radius: 12px; padding: 11px 12px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+      }
+      .ms-inline-panel[hidden] { display: none; }
+      .ms-inline-panel-head {
+        margin: 0 0 8px; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px;
+        letter-spacing: 0.08em; text-transform: uppercase; color: #6fd48e;
+      }
 
       /* ---- 展開時の演出(スキャン反射のように左から右へ広がる) ---- */
       .ms-maplayer.ms-deploying { animation: ms-deploy-reveal ${DEPLOY_ANIM_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
@@ -631,9 +655,11 @@
 
   /**
    * 「配置済みの地図」欄を、現在のセッションのレイヤー配列から丸ごと作り直す。
-   * embed(Googleマップ)の地図種別・不透明度・グレースケールは地図ごとに独立した値を
-   * 持つため、行ごとにクロージャで対象レイヤーを直接束縛し、グローバルな「今どれを
-   * 編集中か」という状態を持たずに済ませている。
+   * **2026年9月に名前+削除だけの簡易一覧へ縮小した**(旧: 地図種別・ズーム・不透明度・
+   * 伝承などの詳細操作もここに並んでいた)。複数の地図が重なっていると「どの地図への
+   * 操作か」が分かりにくいという実機報告を受け、詳細操作は地図本体に直付けする編集
+   * パネル(buildMapEditPanel()、renderOneMapLayer()から呼ばれる)へ丸ごと移した。
+   * この一覧は「今セッションに何枚あるか」の把握と削除だけに徹する。
    */
   function renderCurrentMapsList(session) {
     if (!msEls || !msEls.currentList) return;
@@ -655,38 +681,60 @@
       removeBtn.addEventListener('click', () => removeMapLayer(layer.id));
       head.appendChild(removeBtn);
       row.appendChild(head);
-
-      if (layer.kind === 'embed') {
-        const maptypeRow = document.createElement('div');
-        maptypeRow.className = 'ms-embed-maptype-row';
-        [['m', '地図'], ['k', '航空写真']].forEach(([type, label]) => {
-          const btn = document.createElement('button');
-          btn.className = 'ms-embed-maptype-opt' + (layer.mapType === type ? ' sel' : '');
-          btn.textContent = label;
-          btn.addEventListener('click', () => {
-            layer.mapType = type;
-            scheduleAutoSave();
-            renderMappingStorysLayer();
-            renderCurrentMapsList(session);
-          });
-          maptypeRow.appendChild(btn);
-        });
-        row.appendChild(maptypeRow);
-        row.appendChild(buildZoomRow(layer));
-        row.appendChild(buildMapRowSlider('不透明度', layer.opacity, 10, layer.id, (v) => {
-          layer.opacity = v;
-          scheduleAutoSave();
-        }));
-        row.appendChild(buildMapRowSlider('グレースケール', layer.grayscale, 0, layer.id, (v) => {
-          layer.grayscale = v;
-          scheduleAutoSave();
-        }));
-      }
-      if (typeof layer.lat === 'number' && typeof layer.lng === 'number') {
-        row.appendChild(buildLoreBlock(layer));
-      }
       msEls.currentList.appendChild(row);
     });
+  }
+
+  /**
+   * 地図本体に直付けする編集パネル(2026年9月、「アクティブ地図」概念の導入に伴う再設計)。
+   * 内容は旧renderCurrentMapsList()の各行から移設しただけで、中身のロジック(buildZoomRow()・
+   * buildMapRowSlider()・buildLoreBlock())は変更していない。renderOneMapLayer()から、
+   * layer.id === activeLayerId の1枚にだけ呼ばれる。
+   */
+  function buildMapEditPanel(layer) {
+    const panel = document.createElement('div');
+    panel.className = 'ms-inline-panel';
+    // .ms-maplayer本体はpointer-events:noneのため、子要素であるこのパネルは自前で
+    // pointer-events:autoを持つ(CSS側)。ここでのpointerdown停止は、パネル内のどの
+    // 操作(ボタン/スライダー/テキスト欄)であっても、キャンバスのパン/ピンチジェスチャー
+    // (interact.jsがviewportへ付けている)へバブリングして誤動作しないための保険。
+    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+    const kindLabel = layer.kind === 'embed' ? 'Googleマップ' : layer.kind === 'raster' ? '屋内マップ' : '屋外ベクター';
+    const head = document.createElement('p');
+    head.className = 'ms-inline-panel-head';
+    head.textContent = kindLabel;
+    panel.appendChild(head);
+
+    if (layer.kind === 'embed') {
+      const maptypeRow = document.createElement('div');
+      maptypeRow.className = 'ms-embed-maptype-row';
+      [['m', '地図'], ['k', '航空写真']].forEach(([type, label]) => {
+        const btn = document.createElement('button');
+        btn.className = 'ms-embed-maptype-opt' + (layer.mapType === type ? ' sel' : '');
+        btn.textContent = label;
+        btn.addEventListener('click', () => {
+          layer.mapType = type;
+          scheduleAutoSave();
+          renderMappingStorysLayer();
+        });
+        maptypeRow.appendChild(btn);
+      });
+      panel.appendChild(maptypeRow);
+      panel.appendChild(buildZoomRow(layer));
+      panel.appendChild(buildMapRowSlider('不透明度', layer.opacity, 10, layer.id, (v) => {
+        layer.opacity = v;
+        scheduleAutoSave();
+      }));
+      panel.appendChild(buildMapRowSlider('グレースケール', layer.grayscale, 0, layer.id, (v) => {
+        layer.grayscale = v;
+        scheduleAutoSave();
+      }));
+    }
+    if (typeof layer.lat === 'number' && typeof layer.lng === 'number') {
+      panel.appendChild(buildLoreBlock(layer));
+    }
+    return panel;
   }
 
   /**
@@ -1308,6 +1356,7 @@
     layer.x = center.x - EMBED_DEFAULT_WIDTH / 2 + cascade;
     layer.y = center.y - EMBED_DEFAULT_HEIGHT / 2 + cascade;
     layers.push(layer);
+    activeLayerId = layer.id; // 呼び出した直後から編集パネルが見えるようにする(2026年9月)
     scheduleAutoSave();
     refreshCurrentMapBlock();
     renderMappingStorysLayer({ animate: true, animateLayerId: layer.id });
@@ -1527,6 +1576,7 @@
       newLayer.y = center.y - (h * newLayer.scale) / 2 + cascade;
 
       layers.push(newLayer);
+      activeLayerId = newLayer.id; // 呼び出した直後から編集パネルが見えるようにする(2026年9月)
       scheduleAutoSave();
 
       pendingIndoorCanvas = null;
@@ -1557,6 +1607,7 @@
     if (idx === -1) return;
     if (!window.confirm('この地図を削除しますか?')) return;
     const [layer] = layers.splice(idx, 1);
+    if (activeLayerId === layer.id) activeLayerId = null;
     scheduleAutoSave();
     if (layer.kind === 'raster' && layer.imageFileId) {
       deleteFile(layer.imageFileId).catch((err) => console.warn('Mapping Storys: 地図画像の削除に失敗', err));
@@ -1568,7 +1619,7 @@
 
   /* ==================== キャンバス背景としての描画(js/app.jsのrenderAllCards()から呼ばれる) ==================== */
 
-  function applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle) {
+  function applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl) {
     el.style.transform = `translate(${layer.x}px, ${layer.y}px) rotate(${layer.rotation}deg) scale(${layer.scale})`;
     // ハンドルは常に一定の見た目サイズ・向きに保つため、親のscale/rotationを打ち消す。
     // layer.scaleだけでなく、キャンバス全体のズーム(viewportState.scale、canvas-content配下に
@@ -1580,6 +1631,10 @@
     if (resizeHandle) resizeHandle.style.transform = `translate(50%, 50%) ${counter}`;
     if (rotateHandle) rotateHandle.style.transform = `translate(-50%, -160%) ${counter}`;
     if (deleteHandle) deleteHandle.style.transform = `translate(50%, -50%) ${counter}`;
+    // 編集パネル(アクティブな地図1枚だけに付く)は、CSSのleft:100%+margin-leftで地図の
+    // 右側に一定の実ピクセルの隙間を空けた位置に配置済み(layout段階で確定するためscaleの
+    // 影響を受けない)。ここではハンドルと同じくscale/rotationの打ち消しだけを行う。
+    if (panelEl) panelEl.style.transform = counter;
   }
 
   function renderMappingStorysLayer(opts) {
@@ -1721,10 +1776,27 @@
       deleteHandle.title = 'この地図を削除';
       deleteHandle.textContent = '✕';
       el.appendChild(deleteHandle);
-      wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
     }
 
-    applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
+    // 編集パネル(地図種別・ズーム・不透明度・伝承など)は「アクティブ地図」1枚にだけ付ける
+    // (2026年9月)。埋め込み専用の操作もSummon対象も無いraster(屋内スキャン)は、パネルの
+    // 中身が空になってしまうため、そもそも作らない(削除は既存の✕ハンドルで足りる)。
+    let panelEl = null;
+    if (editingOpen) {
+      const hasPanelContent = layer.kind === 'embed' || (typeof layer.lat === 'number' && typeof layer.lng === 'number');
+      if (hasPanelContent) {
+        panelEl = buildMapEditPanel(layer);
+        const isActive = layer.id === activeLayerId;
+        panelEl.hidden = !isActive;
+        // 他の地図が描画順(DOM順)で上に重なってパネルを隠してしまわないよう、パネルを
+        // 表示中の地図だけ最前面に引き上げる(2026年9月)。
+        if (isActive) el.classList.add('ms-maplayer--active-panel');
+        el.appendChild(panelEl);
+      }
+      wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl);
+    }
+
+    applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl);
     container.appendChild(el);
 
     if (animateThis) {
@@ -1744,7 +1816,18 @@
    * 地図の広い当たり判定がキャンバスのピンチズーム・ダブルタップ俯瞰を奪ってしまう不具合が
    * あったため、2026年9月にハンドル方式へ変更した。
    */
-  function wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle) {
+  function wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl) {
+    // ハンドルに触れた地図を「アクティブ地図」にする(2026年9月)。ドラッグ中のパネル切替は
+    // ポインタキャプチャ中にDOMを作り直すと事故る(mapType切替と同じ全レイヤー再構築のため、
+    // ドラッグ対象のハンドル自身が消えてしまう)ので、必ず操作の「終わり」(pointerup/cancel)
+    // で行う。既にアクティブな地図であれば再描画自体をスキップする(embedはiframeのsrcが
+    // 毎回再読み込みされるため、無変化の再描画は避けたい)。
+    const activateLayer = () => {
+      if (activeLayerId === layer.id) return;
+      activeLayerId = layer.id;
+      renderMappingStorysLayer();
+    };
+
     let dragging = false;
     let dragStart = { x: 0, y: 0 };
     let origPos = { x: 0, y: 0 };
@@ -1759,9 +1842,9 @@
       if (!dragging) return;
       layer.x = origPos.x + (e.clientX - dragStart.x) / viewportState.scale;
       layer.y = origPos.y + (e.clientY - dragStart.y) / viewportState.scale;
-      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl);
     });
-    const endDrag = () => { if (dragging) { dragging = false; scheduleAutoSave(); } };
+    const endDrag = () => { if (dragging) { dragging = false; scheduleAutoSave(); activateLayer(); } };
     moveHandle.addEventListener('pointerup', endDrag);
     moveHandle.addEventListener('pointercancel', endDrag);
 
@@ -1780,9 +1863,9 @@
       const dx = (e.clientX - resizeStartX) / viewportState.scale;
       const factor = 1 + dx / 200; // 200pxのドラッグでおよそ2倍、というざっくりした感度
       layer.scale = Math.max(0.05, Math.min(8, origScale * factor));
-      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl);
     });
-    const endResize = () => { if (resizing) { resizing = false; scheduleAutoSave(); } };
+    const endResize = () => { if (resizing) { resizing = false; scheduleAutoSave(); activateLayer(); } };
     resizeHandle.addEventListener('pointerup', endResize);
     resizeHandle.addEventListener('pointercancel', endResize);
 
@@ -1816,9 +1899,9 @@
       const cy = rect.top + rect.height / 2;
       const angle = (Math.atan2(e.clientY - cy, e.clientX - cx) * 180) / Math.PI;
       layer.rotation = origRotation + (angle - rotateStartAngle);
-      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle, panelEl);
     });
-    const endRotate = () => { if (rotating) { rotating = false; scheduleAutoSave(); } };
+    const endRotate = () => { if (rotating) { rotating = false; scheduleAutoSave(); activateLayer(); } };
     rotateHandle.addEventListener('pointerup', endRotate);
     rotateHandle.addEventListener('pointercancel', endRotate);
   }
