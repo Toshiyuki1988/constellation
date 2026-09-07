@@ -267,6 +267,19 @@
         color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif;
       }
       .ms-lore-hint-input::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .ms-lore-question-input {
+        width: 100%; box-sizing: border-box; margin: 6px 0; border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 6px; padding: 6px 8px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06);
+        color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif; resize: vertical; min-height: 34px;
+      }
+      .ms-lore-question-input::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .ms-lore-question-btn {
+        width: 100%; border: 1px solid rgba(255, 255, 255, 0.22); background: none;
+        color: rgba(255, 255, 255, 0.8); border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace;
+        font-size: 9.5px; cursor: pointer;
+      }
+      .ms-lore-question-btn:hover:not(:disabled) { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
+      .ms-lore-question-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .ms-lore-btn {
         width: 100%; border: 1px solid rgba(63, 174, 99, 0.4); background: rgba(63, 174, 99, 0.1);
         color: #8fe0ab; border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace;
@@ -683,6 +696,26 @@
     const btn = document.createElement('button');
     btn.className = 'ms-lore-btn';
     btn.textContent = layer.loreText ? '伝承を再取得' : 'この土地の伝承を調べる';
+
+    // 自由質問モード(2026年9月追加)。ユーザーが実機比較した結果、テンプレート化した
+    // プロンプトよりも、質問文をそのままGeminiへ送る一問一答の方が精度が高いと確認された
+    // (CLAUDE.md参照)。手がかり欄のテンプレート方式は残しつつ、こちらは一切の文言を
+    // 足さずユーザーの書いた文をそのまま`prompt`として送る(場所の緯度経度も付加しない)。
+    // 出力先(textEl/exportBtn)はテンプレート方式と共通にし、最後に実行した方が表示される。
+    const questionInput = document.createElement('textarea');
+    questionInput.className = 'ms-lore-question-input';
+    questionInput.rows = 2;
+    questionInput.placeholder = '質問文をそのまま送る(例: 深川公民館近くの廃小学校で最近開催された展覧会は?)';
+    questionInput.value = layer.loreQuestion || '';
+    questionInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+    questionInput.addEventListener('change', () => {
+      layer.loreQuestion = questionInput.value.trim();
+      scheduleAutoSave();
+    });
+    const questionBtn = document.createElement('button');
+    questionBtn.className = 'ms-lore-question-btn';
+    questionBtn.textContent = 'この質問をそのまま送る';
+
     const textEl = document.createElement('p');
     textEl.className = 'ms-lore-text';
     textEl.textContent = layer.loreText || '';
@@ -693,11 +726,44 @@
     exportBtn.hidden = !layer.loreText;
     exportBtn.addEventListener('click', () => exportLoreAsTextCard(layer));
     btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl, exportBtn));
+    questionBtn.addEventListener('click', () => askLayerQuestion(layer, questionInput, questionBtn, textEl, exportBtn));
     wrap.appendChild(hintInput);
     wrap.appendChild(btn);
+    wrap.appendChild(questionInput);
+    wrap.appendChild(questionBtn);
     wrap.appendChild(textEl);
     wrap.appendChild(exportBtn);
     return wrap;
+  }
+
+  /**
+   * 質問文をそのままGeminiへ送る一問一答(2026年9月)。describeLocalLore()のようなテンプレート
+   * プロンプトを一切経由しない、ユーザーの入力文=送信内容そのもの。既存のfetchLayerLore()と
+   * 同じ出力先(layer.loreText)を共有する。
+   */
+  async function askLayerQuestion(layer, inputEl, btnEl, textEl, exportBtnEl) {
+    const question = inputEl.value.trim();
+    if (!question) return;
+    layer.loreQuestion = question;
+    btnEl.disabled = true;
+    btnEl.textContent = '送信中…';
+    setStatus('Mapping Storys: Geminiに質問を送っています…', { busy: true });
+    try {
+      const text = (await askGemini({ prompt: question })).trim();
+      layer.loreText = text;
+      layer.loreFetchedAt = new Date().toISOString();
+      textEl.textContent = text;
+      textEl.hidden = false;
+      if (exportBtnEl) exportBtnEl.hidden = false;
+      scheduleAutoSave();
+      setStatus('回答を取得しました');
+    } catch (err) {
+      console.error(err);
+      setStatus('質問の送信に失敗しました: ' + err.message, { important: true });
+    } finally {
+      btnEl.disabled = false;
+      btnEl.textContent = 'この質問をそのまま送る';
+    }
   }
 
   /**
