@@ -251,6 +251,16 @@ html, body {
   -webkit-touch-callout: default;
 }
 
+/* 座談会の発言・質問はコピペしたいという要望(2026年9月)を受け、メモ欄と同じ理由で選択を
+   許可する。チャットカードは読み取り専用(発言そのものを書き換える用途は無い)なので、
+   メモ欄のようなEdit切り替えは設けず、常時選択可能にしている。 */
+.star-card-chat-text,
+.star-card-chat-question {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 @media (max-width: 480px) {
   .toolbar h1 { font-size: 14px; }
   .toolbar button { padding: 6px 8px; font-size: 10px; }
@@ -1207,9 +1217,12 @@ html, body {
 .star-card-chat-head .dot { width: 5px; height: 5px; border-radius: 50%; background: #2e7d32; flex: none; }
 
 .star-card-chat-log {
+  /* カードをリサイズハンドルで広げた時、会話ログがその分だけ大きく表示されて全体を俯瞰できる
+     ようにしたい(2026年9月要望)ため、固定のmax-heightは持たせず、カード本体の高さに応じて
+     flex:1で伸縮させる(ヘッダー・入力欄・ボタンなど他の要素は高さ固定のため、余った縦幅は
+     すべてログに回る)。overflow-yは、それでも会話が長くて収まりきらない時の保険として残す。 */
   flex: 1;
   min-height: 60px;
-  max-height: 220px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;

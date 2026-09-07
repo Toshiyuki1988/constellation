@@ -396,6 +396,9 @@ function attachCardGestures(el) {
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('.star-card-handle, .star-card-hex')) return; // ハンドル/編集ガイドのボタンは専用処理
     if (event.target.closest('button, textarea, input, a')) return; // 公式ページリンク(<a>)などはカードのドラッグ/長押し処理の対象外
+    // 座談会カードの発言・質問(コピペできるようuser-select:textにした部分、2026年9月)は、
+    // ここでも除外しないとテキストのドラッグ選択がカードの移動に奪われてしまう。
+    if (event.target.closest('.star-card-chat-text, .star-card-chat-question')) return;
     // Flight Engineerモジュール起動中(Shiftキーによる一時解除を除く)は、カード個別の
     // 長押し編集ガイド/移動を止め、矩形選択(js/modules/flight-engineer.js)に譲る。
     if (window.isFlightEngineerActive && window.isFlightEngineerActive() && !event.shiftKey) return;
