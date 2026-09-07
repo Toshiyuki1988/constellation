@@ -612,6 +612,7 @@ function redrawAsterismLines() {
       c.mediaType !== 'info' &&
       c.mediaType !== 'summary' &&
       c.mediaType !== 'streetview' &&
+      c.mediaType !== 'chat' &&
       !c.summarySourceId
   );
 
@@ -712,6 +713,11 @@ function editGuideHexHtml(mediaType) {
   if (mediaType === 'summary') {
     return astrHex + hex('delete', 'Delete');
   }
+  // チャットカード(座談会)は移動(ドラッグ)・新しい質問の入力・次の発言を進めるボタンが
+  // カード本体にあるため、Delete以外の編集ガイド操作は不要。
+  if (mediaType === 'chat') {
+    return hex('delete', 'Delete');
+  }
   // ストリートビューカードも場所のリマインダー的な性質(インフォと同様)なので、見た順の
   // ASTRは搭載しない。位置の変更は本体の「変更」ボタンから行うため、Captionも不要。
   if (mediaType === 'streetview') {
@@ -763,6 +769,7 @@ function renderCard(card) {
   const isInfoCard = mediaType === 'info';
   const isSummaryCard = mediaType === 'summary';
   const isStreetviewCard = mediaType === 'streetview';
+  const isChatCard = mediaType === 'chat';
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
@@ -773,6 +780,7 @@ function renderCard(card) {
     (isInfoCard ? ' star-card--info' : '') +
     (isSummaryCard ? ' star-card--summary' : '') +
     (isStreetviewCard ? ' star-card--streetview' : '') +
+    (isChatCard ? ' star-card--chat' : '') +
     (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
@@ -809,6 +817,8 @@ function renderCard(card) {
     el.innerHTML = summaryCardInnerHtml(card);
   } else if (isStreetviewCard) {
     el.innerHTML = streetviewCardInnerHtml(card);
+  } else if (isChatCard) {
+    el.innerHTML = chatCardInnerHtml(card);
   } else {
     const crewHeadHtml = card.crewPersonaId
       ? `<div class="star-card-crew-head">
@@ -920,6 +930,9 @@ function renderCard(card) {
   }
   if (isStreetviewCard) {
     wireStreetviewCard(card, el);
+  }
+  if (isChatCard) {
+    wireChatCard(card, el);
   }
 
   if (!isSessionCard && (card.imageFileId || card.thumbDataUrl)) {
@@ -1246,7 +1259,9 @@ function createStreetviewCard() {
 
 /* ---------------- サマリーカード(基本機能) ----------------
  * セッション全体(タイトル・入れ子の子セッションを含む全カードのテキスト)をGeminiに読ませ、
- * 「👦 Education(やさしく)」「🎓 Academic(学術的に)」の2つの視点で要約を作らせる。
+ * 「👦 Boy(やさしく、旧Education)」「🎓 Professor(学術的に、旧Academic)」の2つの視点で
+ * 要約を作らせる(2026年9月に表示名をBoy/Professorへ改名。内部のdata-summary-mode値・
+ * summarizeSession()のmode分岐('education'/'academic')は変更していない)。
  * 押すたびにGeminiを1回呼び、結果はテクストカードとして新規に生成し、ASTRの手動接続と同じ
  * 仕組み(createAstrConnection)でこのサマリーカードに繋げる(効果音・発光演出もそこに乗る)。
  * 既定では画像を送らずテキスト情報だけで要約する(セッション内の全写真を毎回送ると無料枠を
@@ -1262,14 +1277,15 @@ function summaryCardInnerHtml(card) {
   const crewHexHtml = window.crewsSummaryHexButtonsHtml ? window.crewsSummaryHexButtonsHtml() : '';
   return `
     <div class="star-card-summary-head">
-      <button class="star-card-summary-btn" data-summary-mode="education" title="小中学生にも分かるように要約"><span class="emoji">👦</span>Education</button>
-      <button class="star-card-summary-btn" data-summary-mode="academic" title="学術的な視点で要約"><span class="emoji">🎓</span>Academic</button>
+      <button class="star-card-summary-btn" data-summary-mode="education" title="小中学生にも分かるように要約"><span class="emoji">👦</span>Boy</button>
+      <button class="star-card-summary-btn" data-summary-mode="academic" title="学術的な視点で要約"><span class="emoji">🎓</span>Professor</button>
       ${crewHexHtml}
     </div>
     <p class="star-card-summary-session"><span class="dot"></span>SESSION: ${escapeHtml(session ? session.name : '(不明)')}</p>
     <p class="star-card-summary-label">要約の傾向(任意)</p>
     <textarea class="star-card-summary-input" placeholder="例: フェミニズム的視点で／ポストインターネット的視点で">${escapeHtml(card.summaryDirection || '')}</textarea>
     <p class="star-card-summary-hint">ASTRで写真を繋ぐと、その写真も見て要約します(動画・音声は対象外)</p>
+    <button class="star-card-summary-roundtable-btn" title="Boy・Professor・Gemini・ONのCrewsペルソナで座談会を始める(上の「要約の傾向」欄を最初の質問にする)">🗣 座談会をひらく</button>
     <button class="star-card-summary-question-btn" title="上の「要約の傾向」欄を質問文として、セッション文脈+接続画像を添えてテンプレート化せずそのまま送信">❓ この質問をそのまま送る</button>
     <p class="star-card-summary-question-hint">↑検索グラウンディング無し(API直送・無料枠を消費)。セッション文脈+ASTR接続画像を添えて、上の欄をテンプレート化せず質問として送ります</p>
     <div class="star-card-summary-divider"></div>
@@ -1297,6 +1313,21 @@ function wireSummaryCard(card, el) {
       handleSummaryGenerate(card, el, btn.dataset.summaryMode);
     });
   });
+
+  // 「🗣 座談会をひらく」(2026年9月追加)。Boy・Professor・Gemini(素の人格無し)・ONのCrews
+  // ペルソナ全員を参加者とする新規チャットカード(mediaType:'chat')をサマリーカードの隣へ
+  // ポップアップさせる。「要約の傾向」欄が最初の質問になる(空でもよい、その場合はチャット
+  // カード側で後から質問を投げる)。
+  const roundtableBtn = el.querySelector('.star-card-summary-roundtable-btn');
+  if (roundtableBtn) {
+    roundtableBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    roundtableBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const question = (inputEl?.value || '').trim();
+      createChatCard(card, question);
+      setStatus('座談会をひらきました');
+    });
+  }
 
   // 「この質問をそのまま送る」(2026年9月追加、Mapping Storysの伝承欄の自由質問モードと同じ思想)。
   // Education/Academicのようなテンプレート(JSON出力形式・文体指定など)を一切経由せず、
@@ -1486,7 +1517,7 @@ async function handleSummaryGenerate(card, el, modeOrCrewId) {
   const btns = el.querySelectorAll('.star-card-summary-btn, .star-card-summary-crew-btn, .star-card-summary-question-btn');
   btns.forEach((b) => { b.disabled = true; });
 
-  const speakerLabel = crew ? crew.name : (mode === 'education' ? 'Education' : 'Academic');
+  const speakerLabel = crew ? crew.name : (mode === 'education' ? 'Boy' : 'Professor');
   setStatus(`${speakerLabel}の要約を作成中…`, { busy: true });
   try {
     const sources = [];
@@ -1604,6 +1635,197 @@ async function handleSummaryDirectQuestion(card, el) {
   } finally {
     summaryInFlight.delete(card.id);
     btns.forEach((b) => { b.disabled = false; });
+  }
+}
+
+/* ---------------- チャットカード「座談会」(2026年9月追加) ----------------
+ * サマリーカードの「🗣 座談会をひらく」から、Boy・Professor・Gemini(素の人格無し)・ONの
+ * Crewsペルソナ全員を参加者とする新規カード(mediaType:'chat')を隣にポップアップさせる。
+ * 「要約の傾向」欄が最初の質問になる。ユーザーが「次の発言を進める」を押すたびに、参加者を
+ * 順番に1人ずつ(ラウンドロビン)呼び出し、そこまでの会話ログ全体を文脈として渡した上で
+ * 一言だけ発言させる。この「順番に呼んで、直前までの発言を見せる」だけの単純な仕組みで、
+ * 特別な相互作用エンジンを実装せずとも自然と相互に言及し合う会話になる。会話の途中でも
+ * いつでも新しい質問を投げ込める(次に呼ばれる参加者が、その質問を踏まえて答える)。
+ * 参加者はカード作成時点のBoy/Professor/Gemini+ONのCrewsペルソナのスナップショットで固定し、
+ * 後からCrewsのON/OFFを変えても既存の座談会カードの参加者は変わらない。
+ * 無料運用の範囲内(検索グラウンディング無し、APIキー経由のaskGemini()を直接呼ぶだけ)で、
+ * 1発言=1回のAPI呼び出し。会話が長くなるほど1日250回の共有プールを消費するため、ペースは
+ * ユーザーのクリック任せ(自動連鎖はしない)。
+ */
+
+function buildRoundtableParticipants() {
+  const list = [
+    { kind: 'boy', id: 'boy', name: 'Boy', avatar: '👦' },
+    { kind: 'professor', id: 'professor', name: 'Professor', avatar: '🎓' },
+    { kind: 'gemini', id: 'gemini', name: 'Gemini', avatar: '✨' },
+  ];
+  (state.crews || []).filter((c) => c.enabled).forEach((c) => {
+    list.push({ kind: 'crew', id: c.id, name: c.name, avatar: c.avatar, personInfo: c.personInfo, theirWords: c.theirWords });
+  });
+  return list;
+}
+
+function createChatCard(summaryCard, question) {
+  const card = {
+    id: crypto.randomUUID(),
+    x: summaryCard.x + 300 + (Math.random() * 80 - 20),
+    y: summaryCard.y + (Math.random() * 200 - 100),
+    width: 320,
+    height: 360,
+    mediaType: 'chat',
+    sessionId: summaryCard.sessionId,
+    summarySourceId: summaryCard.id, // 出力カードと同じ扱い(自動線・collectSessionTextContext()から除外)
+    chatParticipants: buildRoundtableParticipants(),
+    chatMessages: question ? [{ type: 'question', text: question, ts: Date.now() }] : [],
+    chatNextIndex: 0,
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  redrawAsterismLines();
+  scheduleAutoSave();
+  return card;
+}
+
+function chatCardInnerHtml(card) {
+  const session = getSessionById(card.sessionId);
+  const messages = card.chatMessages || [];
+  const logHtml = messages.length
+    ? messages.map((m) => {
+        if (m.type === 'question') {
+          return `<div class="star-card-chat-question">❓ ${escapeHtml(m.text)}</div>`;
+        }
+        return `
+          <div class="star-card-chat-line${m.kind === 'crew' ? ' crew' : ''}">
+            <div class="star-card-chat-avatar">${escapeHtml(m.avatar || '')}</div>
+            <div class="star-card-chat-bubble">
+              <div class="star-card-chat-name">${escapeHtml(m.name || '')}</div>
+              <div class="star-card-chat-text">${escapeHtml(m.text || '')}</div>
+            </div>
+          </div>
+        `;
+      }).join('')
+    : '<p class="star-card-chat-empty">まだ発言はありません。「次の発言を進める」を押してください。</p>';
+  return `
+    <p class="star-card-chat-head"><span class="dot"></span>座談会 — ${escapeHtml(session ? session.name : '(不明)')}</p>
+    <div class="star-card-chat-log">${logHtml}</div>
+    <div class="star-card-chat-newq-row">
+      <input type="text" class="star-card-chat-newq-input" placeholder="新しい質問を投げる(任意)">
+      <button class="star-card-chat-newq-btn">投げる</button>
+    </div>
+    <button class="star-card-chat-next-btn">▶ 次の発言を進める</button>
+    <p class="star-card-chat-status"></p>
+    ${EDIT_GUIDE_HANDLES_HTML}
+    ${editGuideHexHtml('chat')}
+  `;
+}
+
+function wireChatCard(card, el) {
+  const logEl = el.querySelector('.star-card-chat-log');
+  const newqInput = el.querySelector('.star-card-chat-newq-input');
+  const newqBtn = el.querySelector('.star-card-chat-newq-btn');
+
+  if (newqInput) newqInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+  if (newqBtn) {
+    newqBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    newqBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = (newqInput?.value || '').trim();
+      if (!text) return;
+      card.chatMessages = card.chatMessages || [];
+      card.chatMessages.push({ type: 'question', text, ts: Date.now() });
+      scheduleAutoSave();
+      rerenderCardInPlace(card, el);
+      setStatus('新しい質問を投げました');
+    });
+  }
+
+  const nextBtn = el.querySelector('.star-card-chat-next-btn');
+  if (nextBtn) {
+    nextBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    nextBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleChatAdvanceTurn(card, el);
+    });
+  }
+
+  // 写真付きカードのメモ欄と同じ理由(ホイールがカード自身/キャンバスのズームへ流れてしまう)で、
+  // ログの中にカーソルがある時だけホイールをログ自身のスクロールに割り当てる。
+  if (logEl) {
+    el.addEventListener('wheel', (event) => {
+      if (logEl.scrollHeight - logEl.clientHeight < 4) return;
+      const rect = logEl.getBoundingClientRect();
+      const inside =
+        event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+      if (!inside) return;
+      event.stopPropagation();
+      logEl.scrollTop += event.deltaY * 0.35;
+    });
+  }
+}
+
+const chatTurnInFlight = new Set();
+
+/** 座談会の参加者をラウンドロビンで1人呼び出し、そこまでの会話ログを文脈に一言だけ発言させる。 */
+async function handleChatAdvanceTurn(card, el) {
+  if (chatTurnInFlight.has(card.id)) return;
+  const participants = card.chatParticipants || [];
+  if (participants.length === 0) {
+    setStatus('参加者がいません', { important: true });
+    return;
+  }
+  const messages = card.chatMessages || [];
+  if (!messages.some((m) => m.type === 'question')) {
+    setStatus('先に質問を投げてください', { important: true });
+    return;
+  }
+
+  chatTurnInFlight.add(card.id);
+  const nextBtn = el.querySelector('.star-card-chat-next-btn');
+  const statusEl = el.querySelector('.star-card-chat-status');
+  if (nextBtn) nextBtn.disabled = true;
+  if (statusEl) statusEl.textContent = '発言を考え中…';
+
+  const speaker = participants[(card.chatNextIndex || 0) % participants.length];
+  try {
+    const sessionContext = collectSessionTextContext(card.sessionId, []);
+    const transcriptText = messages
+      .map((m) => (m.type === 'question' ? `[質問] ${m.text}` : `[${m.name}] ${m.text}`))
+      .join('\n');
+    const styleInstruction =
+      speaker.kind === 'boy'
+        ? '小学生・中学生にも分かるやさしい言葉で答えてください。'
+        : speaker.kind === 'professor'
+          ? '学術的な視点から答えてください。専門用語を使っても構いません。'
+          : speaker.kind === 'crew'
+            ? 'あなたは次の人物になりきって話してください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
+              `【人物情報】\n${speaker.personInfo}\n\n` +
+              '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
+              `${speaker.theirWords}`
+            : ''; // Gemini: 素の人格のまま、追加の文体指定なし
+    const prompt =
+      `以下はある美術展覧会・セッションの記録です:\n${sessionContext}\n\n` +
+      'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。ここまでの発言:\n' +
+      `${transcriptText || '(まだ発言はありません)'}\n\n` +
+      `あなたは次の話者「${speaker.name}」です。${styleInstruction}\n` +
+      '直前までの発言を踏まえて構いません(賛成・反論・補足など)。前置き・名乗りは書かず、1〜2文の短い一言だけを返してください。';
+    const raw = await askGemini({ prompt });
+
+    card.chatMessages = messages.concat([{
+      kind: speaker.kind, name: speaker.name, avatar: speaker.avatar, text: raw.trim(), ts: Date.now(),
+    }]);
+    card.chatNextIndex = ((card.chatNextIndex || 0) + 1) % participants.length;
+    scheduleAutoSave();
+    rerenderCardInPlace(card, el);
+    setStatus(`${speaker.name}が発言しました`);
+  } catch (err) {
+    console.error(err);
+    debugLog('座談会エラー: ' + err.message);
+    setStatus(`発言の取得に失敗しました: ${err.message}`, { important: true });
+    if (nextBtn) nextBtn.disabled = false;
+    if (statusEl) statusEl.textContent = '';
+  } finally {
+    chatTurnInFlight.delete(card.id);
   }
 }
 
