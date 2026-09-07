@@ -2307,6 +2307,49 @@ const blobUrlCache = new Map();
 // 解放する(URL.revokeObjectURL())ことで両立させる。
 const BLOB_CACHE_MAX = 120;
 
+// モデルにしているOneNoteをスマホ実機で観察したところ、ズーム時の白い一瞬の点滅・
+// 「0.5秒ほど操作が止まってからサムネイルが本画像に切り替わる」・パン時の画像のポップインは
+// いずれも許容されている(2026年9月)。つまり「切り替えに一切遅延を出さない」ことは目指さず、
+// 「有限時間で必ず本画像に切り替わる」ことを目標に据え直した。
+//
+// これまでは俯瞰(全体表示)でセッションに入った瞬間、画面内に見えている写真カードの数だけ
+// IntersectionObserverが同時に発火し、Driveから元サイズファイルを無制限に並列フェッチしていた。
+// モバイル回線・メモリの圧迫で一部のフェッチが遅延/失敗し、リトライ上限を使い切ると
+// サムネイルのまま永久に固定される(=OneNoteと違って「有限時間で必ず戻る」を満たせない)
+// 実機不具合につながっていたため、同時実行数を絞るキューを挟んだ。
+const MEDIA_FETCH_CONCURRENCY = 4;
+let activeMediaFetchCount = 0;
+const mediaFetchQueue = [];
+
+function drainMediaFetchQueue() {
+  while (activeMediaFetchCount < MEDIA_FETCH_CONCURRENCY && mediaFetchQueue.length > 0) {
+    const run = mediaFetchQueue.shift();
+    run();
+  }
+}
+
+/** fetchFileBlobUrl()の実行タイミングだけをキューで絞る(呼び出し側からはPromiseを返す通常の関数に見える)。 */
+function queueMediaFetch(fileId) {
+  return new Promise((resolve, reject) => {
+    mediaFetchQueue.push(() => {
+      activeMediaFetchCount++;
+      fetchFileBlobUrl(fileId).then(
+        (url) => {
+          activeMediaFetchCount--;
+          drainMediaFetchQueue();
+          resolve(url);
+        },
+        (err) => {
+          activeMediaFetchCount--;
+          drainMediaFetchQueue();
+          reject(err);
+        }
+      );
+    });
+    drainMediaFetchQueue();
+  });
+}
+
 function getFileBlobUrlCached(fileId) {
   if (blobUrlCache.has(fileId)) {
     // LRU: 触れたら最後尾(最近使った側)へ移動する(Mapは挿入順を保持するため、
@@ -2316,7 +2359,7 @@ function getFileBlobUrlCached(fileId) {
     blobUrlCache.set(fileId, existing);
     return existing;
   }
-  const promise = fetchFileBlobUrl(fileId).catch((err) => {
+  const promise = queueMediaFetch(fileId).catch((err) => {
     // 失敗したPromiseをキャッシュに残すと、原因(トークン失効直後の再取得タイミングなど、
     // 一時的なことが多い)が解消した後もこのfileIdだけ永久に再取得されなくなり、
     // ズームインしても低解像度のサムネイルのまま固定されてしまう(2026年9月、実機報告)。
