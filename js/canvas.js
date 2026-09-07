@@ -82,7 +82,12 @@ function initCanvas(viewportElArg, contentElArg) {
   interact(viewportEl)
     .draggable({
       listeners: { move: onViewportPan },
-      // カード上からの操作も既定ではキャンバスのパンとして扱う(長押しで編集ガイドが出るまで)
+      // カード上からの操作も既定ではキャンバスのパンとして扱う(長押しで編集ガイドが出るまで)。
+      // ただしテキスト欄(.star-card-memoなど)を編集中にドラッグで文字を選択しようとすると、
+      // このパンが同時に発火して競合する不具合があった(2026年9月、実機報告)。個々の入力欄に
+      // 都度pointerdown側でstopPropagation()を足す方式は漏れが出やすいため、ここでinteract.js
+      // 自体に「これらの要素上から始まったジェスチャーは無視する」と一元的に教える。
+      ignoreFrom: 'textarea, input, select',
     })
     .gesturable({
       listeners: { move: onViewportPinch },

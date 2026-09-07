@@ -2251,6 +2251,20 @@ document.addEventListener('keydown', (event) => {
     return;
   }
 
+  // 編集ガイド表示中のカードは、PCのEキーでも(ヘックスのEditボタンと同じ動作で)メモ欄を
+  // 編集できる(2026年9月追加)。メモ欄を持たないカード種別(セッションカード等)では無視する。
+  if (event.key.toLowerCase() === 'e' && guideEl) {
+    const memoEl = guideEl.querySelector('.star-card-memo');
+    if (memoEl) {
+      event.preventDefault();
+      memoEl.hidden = false;
+      memoEl.style.pointerEvents = 'auto';
+      memoEl.focus();
+      syncCardHeight(guideEl);
+      return;
+    }
+  }
+
   const isMod = event.ctrlKey || event.metaKey;
   if (!isMod) return;
   const key = event.key.toLowerCase();
