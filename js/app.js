@@ -2324,14 +2324,20 @@ function drainMediaFetchQueue() {
   }
 }
 
-/** fetchFileBlobUrl()の実行タイミングだけをキューで絞る(呼び出し側からはPromiseを返す通常の関数に見える)。 */
+/** fetchFileBlobUrl()の実行タイミングだけをキューで絞る(呼び出し側からはPromiseを返す通常の関数に見える)。
+ *  同時実行数の絞り込みが原因で特定の写真だけ表示に時間がかかっていないか実機で追えるよう、
+ *  待ち行列の深さ・待機時間を?debugログに残す(2026年9月、実機での「劣化したまま」報告の診断用)。 */
 function queueMediaFetch(fileId) {
+  const queuedAt = Date.now();
   return new Promise((resolve, reject) => {
     mediaFetchQueue.push(() => {
+      const waitedMs = Date.now() - queuedAt;
+      debugLog(`本画像フェッチ開始: ${fileId.slice(0, 8)}(待ち行列で${waitedMs}ms待機、同時実行${activeMediaFetchCount + 1}/${MEDIA_FETCH_CONCURRENCY}、残り待ち行列${mediaFetchQueue.length}件)`);
       activeMediaFetchCount++;
       fetchFileBlobUrl(fileId).then(
         (url) => {
           activeMediaFetchCount--;
+          debugLog(`本画像フェッチ成功: ${fileId.slice(0, 8)}(合計${Date.now() - queuedAt}ms)`);
           drainMediaFetchQueue();
           resolve(url);
         },
@@ -2342,6 +2348,7 @@ function queueMediaFetch(fileId) {
         }
       );
     });
+    debugLog(`本画像フェッチをキューに追加: ${fileId.slice(0, 8)}(待ち行列${mediaFetchQueue.length}件)`);
     drainMediaFetchQueue();
   });
 }
