@@ -249,6 +249,18 @@
       .ms-embed-slider-row span:first-child { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: rgba(255, 255, 255, 0.45); width: 62px; flex: none; }
       .ms-embed-slider-row input[type=range] { flex: 1; accent-color: #3fae63; }
       .ms-embed-slider-row span:last-child { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #fff; width: 32px; text-align: right; flex: none; }
+      .ms-lore { margin-top: 6px; }
+      .ms-lore-btn {
+        width: 100%; border: 1px solid rgba(63, 174, 99, 0.4); background: rgba(63, 174, 99, 0.1);
+        color: #8fe0ab; border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace;
+        font-size: 9.5px; cursor: pointer;
+      }
+      .ms-lore-btn:hover:not(:disabled) { background: rgba(63, 174, 99, 0.2); }
+      .ms-lore-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .ms-lore-text {
+        margin: 6px 0 0; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; line-height: 1.7;
+        color: rgba(255, 255, 255, 0.82); background: rgba(255, 255, 255, 0.03); border-radius: 6px; padding: 8px 9px;
+      }
       .ms-preview {
         width: 100%; height: 90px; border-radius: 8px; overflow: hidden; position: relative;
         background: repeating-conic-gradient(rgba(255, 255, 255, 0.05) 0% 25%, rgba(255, 255, 255, 0.02) 0% 50%) 0 0 / 12px 12px;
@@ -600,8 +612,57 @@
           scheduleAutoSave();
         }));
       }
+      if (typeof layer.lat === 'number' && typeof layer.lng === 'number') {
+        row.appendChild(buildLoreBlock(layer));
+      }
       msEls.currentList.appendChild(row);
     });
+  }
+
+  /**
+   * 地図(緯度経度を持つ屋外ベクター/Googleマップ埋め込み)1枚ぶんの「この土地の伝承を調べる」欄。
+   * 屋内スキャン(raster)は現実の座標を持たないため対象外。ユーザー方針(2026年9月): まず
+   * 詩情的な効果を狙う機能は「なんでもテクストを吐き出させる」ことを優先し、キャッシュの
+   * 是非やUI演出には凝らない。押すたびに上書きしてよく、何度でも再取得できる。
+   */
+  function buildLoreBlock(layer) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ms-lore';
+    const btn = document.createElement('button');
+    btn.className = 'ms-lore-btn';
+    btn.textContent = layer.loreText ? '伝承を再取得' : 'この土地の伝承を調べる';
+    const textEl = document.createElement('p');
+    textEl.className = 'ms-lore-text';
+    textEl.textContent = layer.loreText || '';
+    textEl.hidden = !layer.loreText;
+    btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl));
+    wrap.appendChild(btn);
+    wrap.appendChild(textEl);
+    return wrap;
+  }
+
+  async function fetchLayerLore(layer, btnEl, textEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = '調べています…';
+    setStatus('Mapping Storys: この土地の伝承を調べています…', { busy: true });
+    try {
+      const hint = layer.kind === 'vector' && Array.isArray(layer.shapes)
+        ? layer.shapes.filter((s) => s.type === 'building' && s.name).slice(0, 5).map((s) => s.name).join('、')
+        : '';
+      const text = await describeLocalLore(layer.lat, layer.lng, hint);
+      layer.loreText = text;
+      layer.loreFetchedAt = new Date().toISOString();
+      textEl.textContent = text;
+      textEl.hidden = false;
+      scheduleAutoSave();
+      setStatus('この土地の伝承を取得しました');
+    } catch (err) {
+      console.error(err);
+      setStatus('伝承の取得に失敗しました: ' + err.message, { important: true });
+    } finally {
+      btnEl.disabled = false;
+      btnEl.textContent = layer.loreText ? '伝承を再取得' : 'この土地の伝承を調べる';
+    }
   }
 
   /**
@@ -829,6 +890,8 @@
         setStatus('Mapping Storys: この範囲では地図データが見つかりませんでした', { important: true });
         return;
       }
+      built.lat0 = lat0;
+      built.lon0 = lon0;
       pendingOutdoor = built;
       pendingIndoorCanvas = null;
       renderPendingPreview();
@@ -1187,6 +1250,10 @@
           shapes: pendingOutdoor.shapes,
           bboxWidth: pendingOutdoor.bboxWidth,
           bboxHeight: pendingOutdoor.bboxHeight,
+          // 「この土地の伝承を調べる」機能(2026年9月)のために、取得時の現在地をそのまま
+          // 持たせておく(ベクター座標自体は0基点へ正規化済みで実際の緯度経度を持たないため)。
+          lat: pendingOutdoor.lat0,
+          lng: pendingOutdoor.lon0,
           scale: 1,
           rotation: 0,
           createdAt: new Date().toISOString(),
@@ -1482,4 +1549,7 @@
   }
 
   window.renderMappingStorysLayer = renderMappingStorysLayer;
+  // サマリーの文脈収集(js/app.jsのcollectSessionTextContext())が、地図の「伝承」テキストを
+  // 拾うために参照する。
+  window.getMapLayers = getMapLayers;
 })();

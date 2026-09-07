@@ -196,6 +196,31 @@ async function summarizeSession({ context, mode, persona, direction, images }) {
   return { answer: cleaned, mostRelevantSource: null };
 }
 
+/**
+ * Mapping Storysモジュール(js/modules/mapping-storys.js)の地図レイヤーが持つ緯度経度から、
+ * その土地の歴史的背景・地域性・民間伝承を一段落で語らせる。展覧会名などの前置きは持たず、
+ * 場所そのものだけを主題にする。検索グラウンディングは使わない(請求先アカウント非紐付けの
+ * 無料キーでは割り当てゼロで429になることが既知のため、js/gemini.jsの他の関数と同様プレーンな
+ * テキストプロンプトのみ)。よって内容はGemini自身の学習知識の範囲に限られ、無名な場所では
+ * 情報が乏しくなりうる。呼び出し側(js/modules/mapping-storys.js)がその場で結果を
+ * layer.loreTextへ上書き保存する想定で、このファイル側ではキャッシュ・重複排除を行わない
+ * (押すたびに何度でも再取得できる)。
+ * @param {number} lat
+ * @param {number} lng
+ * @param {string} [hint] 周辺の主要建物・施設名など(読点区切りの短い文字列、無ければ省略可)
+ * @returns {Promise<string>}
+ */
+async function describeLocalLore(lat, lng, hint) {
+  const prompt =
+    `緯度${lat.toFixed(5)}、経度${lng.toFixed(5)}の土地` +
+    (hint ? `(周辺の主要な建物・施設: ${hint})` : '') +
+    'について、知っている範囲で歴史的背景・地域性・言い伝え(民間伝承)を教えてください。' +
+    '具体的な情報が乏しい場合は無理に創作せず、分かる範囲(地名の由来や周辺地域の一般的な歴史など)で答えてください。' +
+    '前置き・見出し・箇条書きは使わず、150〜250字程度の自然な文章1段落にまとめてください。';
+  const raw = await askGemini({ prompt });
+  return raw.trim();
+}
+
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

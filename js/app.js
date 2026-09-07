@@ -1343,6 +1343,16 @@ function collectSessionTextContext(sessionId, sources, depth = 0) {
   if (!session) return '';
   const indent = '  '.repeat(depth);
   const lines = [`${indent}■ ${session.name}`];
+  // Mapping Storys(js/modules/mapping-storys.js)で調べた「この土地の伝承」があれば、
+  // 地図と展覧会セッションの「あいだ」を語らせる材料として、出典番号は振らず素直に混ぜ込む
+  // (ASTR手動接続・出典自動接続の仕組みには一切手を加えない、というユーザー方針)。
+  if (window.getMapLayers) {
+    window.getMapLayers(session).forEach((layer) => {
+      if (layer.loreText && layer.loreText.trim()) {
+        lines.push(`${indent}- [地図の伝承] ${layer.loreText.trim()}`);
+      }
+    });
+  }
   state.cards
     .filter((c) => c.sessionId === sessionId)
     .forEach((c) => {
