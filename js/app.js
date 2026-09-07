@@ -2504,7 +2504,12 @@ document.addEventListener('keydown', (event) => {
   if (!isMod) return;
   const key = event.key.toLowerCase();
 
-  if (key === 'c' && guideEl) {
+  // 座談会カードのEditモードで発言テキストを選択してCtrl+Cした時、下のカードコピー
+  // ショートカットがevent.preventDefault()でブラウザ標準のテキストコピーを奪ってしまい
+  // 「コピーできない」という実機報告(2026年9月)があった。テキスト選択中は素直にブラウザへ
+  // 譲る(選択が無い時だけ、従来通りカードそのものをコピーする)。
+  const hasTextSelection = !document.getSelection().isCollapsed;
+  if (key === 'c' && guideEl && !hasTextSelection) {
     const card = getCardById(guideEl.dataset.id);
     if (!card) return;
     event.preventDefault();
