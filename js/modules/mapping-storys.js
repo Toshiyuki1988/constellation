@@ -261,6 +261,12 @@
       .ms-zoom-btn:hover { border-color: rgba(63, 174, 99, 0.5); background: rgba(63, 174, 99, 0.15); }
       .ms-zoom-val { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.7); width: 68px; text-align: center; }
       .ms-lore { margin-top: 6px; }
+      .ms-lore-hint-input {
+        width: 100%; box-sizing: border-box; margin-bottom: 6px; border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 6px; padding: 6px 8px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06);
+        color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif;
+      }
+      .ms-lore-hint-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .ms-lore-btn {
         width: 100%; border: 1px solid rgba(63, 174, 99, 0.4); background: rgba(63, 174, 99, 0.1);
         color: #8fe0ab; border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace;
@@ -658,6 +664,22 @@
   function buildLoreBlock(layer) {
     const wrap = document.createElement('div');
     wrap.className = 'ms-lore';
+    // 緯度経度だけを渡すと、検索グラウンディング無しのGeminiは市区町村レベルの一般的な
+    // 話にしかならず「建物単位で具体的に知りたい」という要望(2026年9月)に応えられない
+    // という実機報告があった。ユーザー自身が知っている手がかり(建物名など)を入力できる
+    // 欄を設け、これをdescribeLocalLore()の調べる対象そのものとして渡すことで、Geminiの
+    // 側の知識で分かる範囲まで具体化させる(検索グラウンディングは無料枠と両立しないため
+    // 使わない、という既存方針は変えない)。
+    const hintInput = document.createElement('input');
+    hintInput.type = 'text';
+    hintInput.className = 'ms-lore-hint-input';
+    hintInput.placeholder = '手がかり(建物名など、任意。例: 深川公民館近くの廃小学校)';
+    hintInput.value = layer.loreHint || '';
+    hintInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+    hintInput.addEventListener('change', () => {
+      layer.loreHint = hintInput.value.trim();
+      scheduleAutoSave();
+    });
     const btn = document.createElement('button');
     btn.className = 'ms-lore-btn';
     btn.textContent = layer.loreText ? '伝承を再取得' : 'この土地の伝承を調べる';
@@ -671,6 +693,7 @@
     exportBtn.hidden = !layer.loreText;
     exportBtn.addEventListener('click', () => exportLoreAsTextCard(layer));
     btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl, exportBtn));
+    wrap.appendChild(hintInput);
     wrap.appendChild(btn);
     wrap.appendChild(textEl);
     wrap.appendChild(exportBtn);
@@ -703,9 +726,12 @@
     btnEl.textContent = '調べています…';
     setStatus('Mapping Storys: この土地の伝承を調べています…', { busy: true });
     try {
-      const hint = layer.kind === 'vector' && Array.isArray(layer.shapes)
+      const autoHint = layer.kind === 'vector' && Array.isArray(layer.shapes)
         ? layer.shapes.filter((s) => s.type === 'building' && s.name).slice(0, 5).map((s) => s.name).join('、')
         : '';
+      // 手入力の手がかりを優先の主題として扱いたいため先頭に置く(describeLocalLore側で
+      // 「最初の語句=調べる対象」として扱う)。
+      const hint = [(layer.loreHint || '').trim(), autoHint].filter(Boolean).join('、');
       const text = await describeLocalLore(layer.lat, layer.lng, hint);
       layer.loreText = text;
       layer.loreFetchedAt = new Date().toISOString();

@@ -207,14 +207,19 @@ async function summarizeSession({ context, mode, persona, direction, images }) {
  * (押すたびに何度でも再取得できる)。
  * @param {number} lat
  * @param {number} lng
- * @param {string} [hint] 周辺の主要建物・施設名など(読点区切りの短い文字列、無ければ省略可)
+ * @param {string} [hint] ユーザー手入力の手がかり(建物名など)と、周辺の主要建物・施設名を
+ *   読点区切りで連結した短い文字列。緯度経度だけでは市区町村レベルの一般的な話にしかならず
+ *   「建物単位で具体的に知りたい」という要望(2026年9月)に応えられないため、手がかりが
+ *   あればそれ自体を調べる対象として明示する。無ければ省略可。
  * @returns {Promise<string>}
  */
 async function describeLocalLore(lat, lng, hint) {
+  const trimmedHint = (hint || '').trim();
+  const subject = trimmedHint
+    ? `緯度${lat.toFixed(5)}、経度${lng.toFixed(5)}付近にある「${trimmedHint}」`
+    : `緯度${lat.toFixed(5)}、経度${lng.toFixed(5)}の土地`;
   const prompt =
-    `緯度${lat.toFixed(5)}、経度${lng.toFixed(5)}の土地` +
-    (hint ? `(周辺の主要な建物・施設: ${hint})` : '') +
-    'について、知っている範囲で歴史的背景・地域性・言い伝え(民間伝承)を教えてください。' +
+    `${subject}について、知っている範囲で歴史的背景・地域性・言い伝え(民間伝承)を教えてください。` +
     '具体的な情報が乏しい場合は無理に創作せず、分かる範囲(地名の由来や周辺地域の一般的な歴史など)で答えてください。' +
     '前置き・見出し・箇条書きは使わず、150〜250字程度の自然な文章1段落にまとめてください。';
   const raw = await askGemini({ prompt });
