@@ -87,7 +87,9 @@ function initCanvas(viewportElArg, contentElArg) {
       // このパンが同時に発火して競合する不具合があった(2026年9月、実機報告)。個々の入力欄に
       // 都度pointerdown側でstopPropagation()を足す方式は漏れが出やすいため、ここでinteract.js
       // 自体に「これらの要素上から始まったジェスチャーは無視する」と一元的に教える。
-      ignoreFrom: 'textarea, input, select',
+      // 座談会カードの発言・質問(既定はpointer-events:noneだが、Editモード中はauto)も
+      // 同じ理由で含める。pointer-events:noneの間はそもそもヒットしないため無害。
+      ignoreFrom: 'textarea, input, select, .star-card-chat-text, .star-card-chat-question',
     })
     .gesturable({
       listeners: { move: onViewportPinch },
@@ -318,6 +320,10 @@ function activateEditGuide(el) {
 
 function deactivateEditGuide(el) {
   el.classList.remove('star-card--edit-guide');
+  // 座談会カードの発言選択トグル(2026年9月、js/app.jsのEdit/Eキー処理)も、編集ガイドが
+  // 解除されるタイミングで一緒にリセットしておく(付けっぱなしのまま次に開いた時に
+  // 予期せず選択可能な状態から始まってしまうのを防ぐ)。
+  el.classList.remove('star-card-chat-editing');
   if (editGuideCard === el) editGuideCard = null;
 }
 

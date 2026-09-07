@@ -251,14 +251,21 @@ html, body {
   -webkit-touch-callout: default;
 }
 
-/* 座談会の発言・質問はコピペしたいという要望(2026年9月)を受け、メモ欄と同じ理由で選択を
-   許可する。チャットカードは読み取り専用(発言そのものを書き換える用途は無い)なので、
-   メモ欄のようなEdit切り替えは設けず、常時選択可能にしている。 */
+/* 座談会の発言・質問はコピペしたいという要望(2026年9月)を受け、メモ欄と全く同じ仕組みに
+   した: 既定はpointer-events:noneのまま(=キャンバスのパン/カードの移動を優先)、編集ガイドの
+   Editボタン(またはEキー)を押すと.star-card-chat-editingが付いてauto化し、ドラッグで
+   文字を選択できるようになる。テキスト自体は読み取り専用なので実際に書き換えることはできない
+   (トグルなので、もう一度Editを押すか他のカード/キャンバスを操作すると編集ガイドごと解除される)。 */
 .star-card-chat-text,
 .star-card-chat-question {
   -webkit-user-select: text;
   user-select: text;
   -webkit-touch-callout: default;
+  pointer-events: none;
+}
+.star-card-chat-editing .star-card-chat-text,
+.star-card-chat-editing .star-card-chat-question {
+  pointer-events: auto;
 }
 
 @media (max-width: 480px) {

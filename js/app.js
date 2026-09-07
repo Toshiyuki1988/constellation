@@ -714,9 +714,12 @@ function editGuideHexHtml(mediaType) {
     return astrHex + hex('delete', 'Delete');
   }
   // チャットカード(座談会)は移動(ドラッグ)・新しい質問の入力・次の発言を進めるボタンが
-  // カード本体にあるため、Delete以外の編集ガイド操作は不要。
+  // カード本体にあるため、大半の編集ガイド操作は不要。ただし発言テキストは既定で
+  // pointer-events:none(ドラッグ選択がカード移動/キャンバスパンと競合しないようにするため)
+  // にしているので、コピペしたい時だけEditで選択可能に切り替えられるようにしてある
+  // (2026年9月追加。テキスト自体は読み取り専用で、実際に書き換えることはできない)。
   if (mediaType === 'chat') {
-    return hex('delete', 'Delete');
+    return hex('edit', 'Edit') + hex('delete', 'Delete');
   }
   // ストリートビューカードも場所のリマインダー的な性質(インフォと同様)なので、見た順の
   // ASTRは搭載しない。位置の変更は本体の「変更」ボタンから行うため、Captionも不要。
@@ -851,6 +854,10 @@ function renderCard(card) {
           memoEl.style.pointerEvents = 'auto';
           memoEl.focus();
           syncCardHeight(el);
+        } else if (card.mediaType === 'chat') {
+          // 座談会カードには編集可能なメモ欄が無いため、代わりに発言テキストの
+          // 選択(コピペ)可否をトグルする(2026年9月追加、実際に書き換えることはできない)。
+          el.classList.toggle('star-card-chat-editing');
         }
       } else if (action === 'title') {
         startSessionTitleEdit(card, el);
@@ -2483,6 +2490,12 @@ document.addEventListener('keydown', (event) => {
       memoEl.style.pointerEvents = 'auto';
       memoEl.focus();
       syncCardHeight(guideEl);
+      return;
+    }
+    const guideCard = getCardById(guideEl.dataset.id);
+    if (guideCard && guideCard.mediaType === 'chat') {
+      event.preventDefault();
+      guideEl.classList.toggle('star-card-chat-editing');
       return;
     }
   }
