@@ -1113,21 +1113,6 @@ html, body {
   margin: 7px 0 0;
 }
 
-.star-card-summary-grounded-btn {
-  width: 100%;
-  margin-top: 8px;
-  padding: 7px 8px;
-  border: 1px dashed var(--line);
-  border-radius: 4px;
-  background: none;
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 10.5px;
-  cursor: pointer;
-  pointer-events: auto;
-}
-.star-card-summary-grounded-btn:hover { border-color: #2e7d32; }
-
 .star-card-summary-paste-input {
   width: 100%;
   min-height: 46px;
