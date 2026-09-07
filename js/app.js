@@ -1269,6 +1269,9 @@ function summaryCardInnerHtml(card) {
     <p class="star-card-summary-label">要約の傾向(任意)</p>
     <textarea class="star-card-summary-input" placeholder="例: フェミニズム的視点で／ポストインターネット的視点で">${escapeHtml(card.summaryDirection || '')}</textarea>
     <p class="star-card-summary-hint">ASTRで写真を繋ぐと、その写真も見て要約します(動画・音声は対象外)</p>
+    <button class="star-card-summary-question-btn" title="上の「要約の傾向」欄を質問文として、セッション文脈+接続画像を添えてテンプレート化せずそのまま送信">❓ この質問をそのまま送る</button>
+    <p class="star-card-summary-question-hint">↑検索グラウンディング無し(API直送・無料枠を消費)。セッション文脈+ASTR接続画像を添えて、上の欄をテンプレート化せず質問として送ります</p>
+    <div class="star-card-summary-divider"></div>
     <p class="star-card-summary-label">gemini.google.comの回答を貼り付け(検索グラウンディングあり、任意)</p>
     <textarea class="star-card-summary-paste-input" placeholder="自分で開いたgemini.google.comでの回答をここに貼り付けて保存"></textarea>
     <button class="star-card-summary-paste-btn">この内容をテクストとして保存</button>
@@ -1293,6 +1296,20 @@ function wireSummaryCard(card, el) {
       handleSummaryGenerate(card, el, btn.dataset.summaryMode);
     });
   });
+
+  // 「この質問をそのまま送る」(2026年9月追加、Mapping Storysの伝承欄の自由質問モードと同じ思想)。
+  // Education/Academicのようなテンプレート(JSON出力形式・文体指定など)を一切経由せず、
+  // 「要約の傾向」欄の文面を質問としてそのままGeminiへ送る。ユーザー要望により、ASTRで
+  // 接続した写真・セッション全体の文脈は毎回添えて一括送信する(手動でGeminiチャットへ
+  // コピペする場合もどのみち同じ情報を送ることになるため、という判断)。
+  const questionBtn = el.querySelector('.star-card-summary-question-btn');
+  if (questionBtn) {
+    questionBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    questionBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleSummaryDirectQuestion(card, el);
+    });
+  }
 
   // 「Geminiの回答を貼り付け」(2026年9月追加、Mapping Storysの伝承欄と同じ思想)。当初は
   // 「要約の傾向」欄をコピーしてgemini.google.comを新規タブで開くボタンも用意したが、
@@ -1465,7 +1482,7 @@ async function handleSummaryGenerate(card, el, modeOrCrewId) {
   if (!crew && mode !== 'education' && mode !== 'academic') return;
   if (summaryInFlight.has(card.id)) return;
   summaryInFlight.add(card.id);
-  const btns = el.querySelectorAll('.star-card-summary-btn, .star-card-summary-crew-btn');
+  const btns = el.querySelectorAll('.star-card-summary-btn, .star-card-summary-crew-btn, .star-card-summary-question-btn');
   btns.forEach((b) => { b.disabled = true; });
 
   const speakerLabel = crew ? crew.name : (mode === 'education' ? 'Education' : 'Academic');
@@ -1513,6 +1530,54 @@ async function handleSummaryGenerate(card, el, modeOrCrewId) {
     console.error(err);
     debugLog('サマリー生成エラー: ' + err.message);
     setStatus(`要約に失敗しました: ${err.message}`, { important: true });
+  } finally {
+    summaryInFlight.delete(card.id);
+    btns.forEach((b) => { b.disabled = false; });
+  }
+}
+
+/**
+ * 「この質問をそのまま送る」(2026年9月追加)。Education/Academicのようなテンプレート
+ * (JSON出力形式・文体指定・「前置きなしで書いて」等の指示文)を一切経由せず、「要約の傾向」欄の
+ * 文面を質問としてそのままGeminiへ送る。手動でGeminiチャットへ同じ内容をコピペする場合も
+ * どのみちセッションの文脈・接続画像を送ることになる、というユーザー判断により、ASTR接続画像
+ * ・セッション全体の文脈は毎回まとめて添えて一括送信する(Mapping Storysの伝承欄の自由質問
+ * モードと同じ「テンプレート化しない方が精度が高い」という知見の延長)。
+ */
+async function handleSummaryDirectQuestion(card, el) {
+  const question = (el.querySelector('.star-card-summary-input')?.value || '').trim();
+  if (!question) {
+    setStatus('「要約の傾向」欄に質問を入力してください', { important: true });
+    return;
+  }
+  if (summaryInFlight.has(card.id)) return;
+  summaryInFlight.add(card.id);
+  const btns = el.querySelectorAll('.star-card-summary-btn, .star-card-summary-crew-btn, .star-card-summary-question-btn');
+  btns.forEach((b) => { b.disabled = true; });
+  card.summaryDirection = question;
+  setStatus('Geminiに質問を送信中…', { busy: true });
+  try {
+    const context = collectSessionTextContext(card.sessionId, []);
+    const images = collectConnectedImageParts(card.id);
+    const prompt = context ? `${context}\n\n${question}` : question;
+    const raw = await askGemini({ prompt, images });
+
+    const newCard = createTextCard(raw.trim());
+    newCard.summarySourceId = card.id;
+    newCard.x = card.x + 260 + (Math.random() * 80 - 20);
+    newCard.y = card.y + (Math.random() * 240 - 120);
+    const newEl = cardElById(newCard.id);
+    if (newEl) {
+      newEl.dataset.x = String(newCard.x);
+      newEl.dataset.y = String(newCard.y);
+      applyCardTransform(newEl);
+    }
+    createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
+    setStatus('回答をテクストカードとして保存しました');
+  } catch (err) {
+    console.error(err);
+    debugLog('サマリー直接質問エラー: ' + err.message);
+    setStatus(`質問の送信に失敗しました: ${err.message}`, { important: true });
   } finally {
     summaryInFlight.delete(card.id);
     btns.forEach((b) => { b.disabled = false; });
