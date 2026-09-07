@@ -1543,6 +1543,11 @@ async function handleSummaryGenerate(card, el, modeOrCrewId) {
  * どのみちセッションの文脈・接続画像を送ることになる、というユーザー判断により、ASTR接続画像
  * ・セッション全体の文脈は毎回まとめて添えて一括送信する(Mapping Storysの伝承欄の自由質問
  * モードと同じ「テンプレート化しない方が精度が高い」という知見の延長)。
+ * **アステリズムフォーカス(2026年9月追加)**: サマリーカードから特定のカードへASTR接続が
+ * あれば、それを「前置き不要・この接続先を中心に」という短い指示だけ足して伝える(質問文自体は
+ * 加工しない)。接続先がテキスト系カードなら、collectSessionTextContext()が既に本文へ
+ * 埋め込んでいる[出典N]番号で名指しする(内容を二重に埋め込まない)。写真カードなら
+ * collectConnectedImageParts()の添付画像を指す一文を足す。接続が無ければ何も足さない。
  */
 async function handleSummaryDirectQuestion(card, el) {
   const question = (el.querySelector('.star-card-summary-input')?.value || '').trim();
@@ -1557,9 +1562,26 @@ async function handleSummaryDirectQuestion(card, el) {
   card.summaryDirection = question;
   setStatus('Geminiに質問を送信中…', { busy: true });
   try {
-    const context = collectSessionTextContext(card.sessionId, []);
+    const sources = [];
+    const context = collectSessionTextContext(card.sessionId, sources);
     const images = collectConnectedImageParts(card.id);
-    const prompt = context ? `${context}\n\n${question}` : question;
+    const connectedIds = state.connections
+      .filter((c) => c.cardIdA === card.id || c.cardIdB === card.id)
+      .map((c) => (c.cardIdA === card.id ? c.cardIdB : c.cardIdA));
+    const focusSourceNums = connectedIds
+      .map((id) => sources.indexOf(id))
+      .filter((idx) => idx !== -1)
+      .map((idx) => idx + 1);
+    let focusInstruction = '';
+    if (focusSourceNums.length > 0 || images.length > 0) {
+      const targets = [];
+      if (focusSourceNums.length > 0) targets.push(focusSourceNums.map((n) => `[出典${n}]`).join(''));
+      if (images.length > 0) targets.push('添付した写真に写っている作品');
+      focusInstruction =
+        `${targets.join('と')}を中心に取り上げて答えてください。前置き・見出しを書かず、` +
+        '最初の一文から本題そのものについて書き始めてください。\n\n';
+    }
+    const prompt = `${context ? context + '\n\n' : ''}${focusInstruction}${question}`;
     const raw = await askGemini({ prompt, images });
 
     const newCard = createTextCard(raw.trim());
