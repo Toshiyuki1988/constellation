@@ -265,12 +265,6 @@
       .ms-zoom-btn:hover { border-color: rgba(63, 174, 99, 0.5); background: rgba(63, 174, 99, 0.15); }
       .ms-zoom-val { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.7); width: 68px; text-align: center; }
       .ms-lore { margin-top: 6px; }
-      .ms-lore-hint-input {
-        width: 100%; box-sizing: border-box; margin-bottom: 6px; border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 6px; padding: 6px 8px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06);
-        color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif;
-      }
-      .ms-lore-hint-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .ms-lore-question-input {
         width: 100%; box-sizing: border-box; margin: 6px 0; border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 6px; padding: 6px 8px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06);
@@ -284,12 +278,6 @@
       }
       .ms-lore-question-btn:hover:not(:disabled) { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
       .ms-lore-question-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .ms-lore-grounded-btn {
-        width: 100%; margin-top: 6px; border: 1px dashed rgba(255, 255, 255, 0.28); background: none;
-        color: rgba(255, 255, 255, 0.85); border-radius: 6px; padding: 7px 8px; font-family: 'Zen Kaku Gothic New', sans-serif;
-        font-size: 10.5px; cursor: pointer;
-      }
-      .ms-lore-grounded-btn:hover { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
       .ms-lore-paste-label {
         margin: 8px 0 4px; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px;
         letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.4);
@@ -305,13 +293,6 @@
         padding: 7px 8px; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 10.5px; cursor: pointer;
       }
       .ms-lore-paste-btn:hover { background: #59c67c; }
-      .ms-lore-btn {
-        width: 100%; border: 1px solid rgba(63, 174, 99, 0.4); background: rgba(63, 174, 99, 0.1);
-        color: #8fe0ab; border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace;
-        font-size: 9.5px; cursor: pointer;
-      }
-      .ms-lore-btn:hover:not(:disabled) { background: rgba(63, 174, 99, 0.2); }
-      .ms-lore-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .ms-lore-text {
         margin: 6px 0 0; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; line-height: 1.7;
         color: rgba(255, 255, 255, 0.82); background: rgba(255, 255, 255, 0.03); border-radius: 6px; padding: 8px 9px;
@@ -742,35 +723,22 @@
    * 屋内スキャン(raster)は現実の座標を持たないため対象外。ユーザー方針(2026年9月): まず
    * 詩情的な効果を狙う機能は「なんでもテクストを吐き出させる」ことを優先し、キャッシュの
    * 是非やUI演出には凝らない。押すたびに上書きしてよく、何度でも再取得できる。
+   *
+   * **2026年9月に手がかりテンプレート方式(describeLocalLore())と、gemini.google.comを
+   * 開く自動コピー付きボタンを廃止した。** 前者は自由質問モードで完全に代替でき(送信内容を
+   * 自分で自由に書けるテンプレートより柔軟)、後者は「タスクバー等から自分でGeminiを開くのと
+   * やることが変わらない」とユーザー自身が指摘した通りボタンとしての付加価値が薄いため。
+   * 自分で開いたgemini.google.comの回答を保存する「貼り付け」欄自体は、この機能でしか
+   * できないこと(layer.loreTextへの保存)なので残している。
    */
   function buildLoreBlock(layer) {
     const wrap = document.createElement('div');
     wrap.className = 'ms-lore';
-    // 緯度経度だけを渡すと、検索グラウンディング無しのGeminiは市区町村レベルの一般的な
-    // 話にしかならず「建物単位で具体的に知りたい」という要望(2026年9月)に応えられない
-    // という実機報告があった。ユーザー自身が知っている手がかり(建物名など)を入力できる
-    // 欄を設け、これをdescribeLocalLore()の調べる対象そのものとして渡すことで、Geminiの
-    // 側の知識で分かる範囲まで具体化させる(検索グラウンディングは無料枠と両立しないため
-    // 使わない、という既存方針は変えない)。
-    const hintInput = document.createElement('input');
-    hintInput.type = 'text';
-    hintInput.className = 'ms-lore-hint-input';
-    hintInput.placeholder = '手がかり(建物名など、任意。例: 深川公民館近くの廃小学校)';
-    hintInput.value = layer.loreHint || '';
-    hintInput.addEventListener('pointerdown', (e) => e.stopPropagation());
-    hintInput.addEventListener('change', () => {
-      layer.loreHint = hintInput.value.trim();
-      scheduleAutoSave();
-    });
-    const btn = document.createElement('button');
-    btn.className = 'ms-lore-btn';
-    btn.textContent = layer.loreText ? '伝承を再取得' : 'この土地の伝承を調べる';
 
     // 自由質問モード(2026年9月追加)。ユーザーが実機比較した結果、テンプレート化した
     // プロンプトよりも、質問文をそのままGeminiへ送る一問一答の方が精度が高いと確認された
-    // (CLAUDE.md参照)。手がかり欄のテンプレート方式は残しつつ、こちらは一切の文言を
-    // 足さずユーザーの書いた文をそのまま`prompt`として送る(場所の緯度経度も付加しない)。
-    // 出力先(textEl/exportBtn)はテンプレート方式と共通にし、最後に実行した方が表示される。
+    // (CLAUDE.md参照)。一切の文言を足さずユーザーの書いた文をそのまま`prompt`として送る
+    // (場所の緯度経度も付加しない)。
     const questionInput = document.createElement('textarea');
     questionInput.className = 'ms-lore-question-input';
     questionInput.rows = 2;
@@ -785,36 +753,13 @@
     questionBtn.className = 'ms-lore-question-btn';
     questionBtn.textContent = 'この質問をそのまま送る';
 
-    // Geminiで調べる(Web版、検索グラウンディングあり、2026年9月追加)。APIキー経由の
-    // 無料枠(検索グラウンディングが429になる制約、CLAUDE.md参照)とは別に、ユーザー自身の
-    // Googleアカウントでログインするgemini.google.comの通常利用は検索グラウンディングが
-    // 無料で使える。この既存の別チャネルを、Googleマップの呼び出しボタンと同じ「外部タブ
-    // で調べて結果をコピペで持ち帰る」パターンで橋渡しする(PrizmoGoのOCRコピペ運用と同じ
-    // 思想)。質問文をクリップボードへコピーしてから新規タブを開き、貼り付けやすくする。
-    const groundedBtn = document.createElement('button');
-    groundedBtn.className = 'ms-lore-grounded-btn';
-    groundedBtn.textContent = '🔍 Geminiで調べる(検索あり・新規タブ)';
-    groundedBtn.title = 'gemini.google.comを新規タブで開く(質問文があればクリップボードへコピー)';
-    groundedBtn.addEventListener('click', async () => {
-      const q = (questionInput.value || hintInput.value || '').trim();
-      if (q && navigator.clipboard && navigator.clipboard.writeText) {
-        try {
-          await navigator.clipboard.writeText(q);
-          setStatus('質問をコピーしました。開いたタブに貼り付けて聞いてください。');
-        } catch (err) {
-          console.warn('Mapping Storys: クリップボードへのコピーに失敗', err);
-        }
-      }
-      window.open('https://gemini.google.com/app', '_blank', 'noopener,noreferrer');
-    });
-
     const pasteLabel = document.createElement('p');
     pasteLabel.className = 'ms-lore-paste-label';
-    pasteLabel.textContent = 'Geminiの回答を貼り付け:';
+    pasteLabel.textContent = 'gemini.google.comの回答を貼り付け(検索グラウンディングあり、任意):';
     const pasteInput = document.createElement('textarea');
     pasteInput.className = 'ms-lore-paste-input';
     pasteInput.rows = 3;
-    pasteInput.placeholder = 'gemini.google.comでの回答をここに貼り付けて保存';
+    pasteInput.placeholder = '自分で開いたgemini.google.comでの回答をここに貼り付けて保存';
     pasteInput.addEventListener('pointerdown', (e) => e.stopPropagation());
     const pasteBtn = document.createElement('button');
     pasteBtn.className = 'ms-lore-paste-btn';
@@ -829,7 +774,6 @@
     exportBtn.textContent = 'テクストとして出力';
     exportBtn.hidden = !layer.loreText;
     exportBtn.addEventListener('click', () => exportLoreAsTextCard(layer));
-    btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl, exportBtn));
     questionBtn.addEventListener('click', () => askLayerQuestion(layer, questionInput, questionBtn, textEl, exportBtn));
     pasteBtn.addEventListener('click', () => {
       const pasted = pasteInput.value.trim();
@@ -843,11 +787,8 @@
       scheduleAutoSave();
       setStatus('伝承として保存しました');
     });
-    wrap.appendChild(hintInput);
-    wrap.appendChild(btn);
     wrap.appendChild(questionInput);
     wrap.appendChild(questionBtn);
-    wrap.appendChild(groundedBtn);
     wrap.appendChild(pasteLabel);
     wrap.appendChild(pasteInput);
     wrap.appendChild(pasteBtn);
@@ -905,34 +846,6 @@
       applyCardTransform(newEl);
     }
     setStatus('伝承をテクストカードとして出力しました');
-  }
-
-  async function fetchLayerLore(layer, btnEl, textEl, exportBtnEl) {
-    btnEl.disabled = true;
-    btnEl.textContent = '調べています…';
-    setStatus('Mapping Storys: この土地の伝承を調べています…', { busy: true });
-    try {
-      const autoHint = layer.kind === 'vector' && Array.isArray(layer.shapes)
-        ? layer.shapes.filter((s) => s.type === 'building' && s.name).slice(0, 5).map((s) => s.name).join('、')
-        : '';
-      // 手入力の手がかりを優先の主題として扱いたいため先頭に置く(describeLocalLore側で
-      // 「最初の語句=調べる対象」として扱う)。
-      const hint = [(layer.loreHint || '').trim(), autoHint].filter(Boolean).join('、');
-      const text = await describeLocalLore(layer.lat, layer.lng, hint);
-      layer.loreText = text;
-      layer.loreFetchedAt = new Date().toISOString();
-      textEl.textContent = text;
-      textEl.hidden = false;
-      if (exportBtnEl) exportBtnEl.hidden = false;
-      scheduleAutoSave();
-      setStatus('この土地の伝承を取得しました');
-    } catch (err) {
-      console.error(err);
-      setStatus('伝承の取得に失敗しました: ' + err.message, { important: true });
-    } finally {
-      btnEl.disabled = false;
-      btnEl.textContent = layer.loreText ? '伝承を再取得' : 'この土地の伝承を調べる';
-    }
   }
 
   /**
