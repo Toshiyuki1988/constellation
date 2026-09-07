@@ -280,6 +280,27 @@
       }
       .ms-lore-question-btn:hover:not(:disabled) { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
       .ms-lore-question-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .ms-lore-grounded-btn {
+        width: 100%; margin-top: 6px; border: 1px dashed rgba(255, 255, 255, 0.28); background: none;
+        color: rgba(255, 255, 255, 0.85); border-radius: 6px; padding: 7px 8px; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10.5px; cursor: pointer;
+      }
+      .ms-lore-grounded-btn:hover { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
+      .ms-lore-paste-label {
+        margin: 8px 0 4px; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px;
+        letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.4);
+      }
+      .ms-lore-paste-input {
+        width: 100%; box-sizing: border-box; margin-bottom: 6px; border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 6px; padding: 6px 8px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06);
+        color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif; resize: vertical; min-height: 46px;
+      }
+      .ms-lore-paste-input::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .ms-lore-paste-btn {
+        width: 100%; border: none; background: #3fae63; color: #06180d; border-radius: 6px;
+        padding: 7px 8px; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 10.5px; cursor: pointer;
+      }
+      .ms-lore-paste-btn:hover { background: #59c67c; }
       .ms-lore-btn {
         width: 100%; border: 1px solid rgba(63, 174, 99, 0.4); background: rgba(63, 174, 99, 0.1);
         color: #8fe0ab; border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace;
@@ -716,6 +737,41 @@
     questionBtn.className = 'ms-lore-question-btn';
     questionBtn.textContent = 'この質問をそのまま送る';
 
+    // Geminiで調べる(Web版、検索グラウンディングあり、2026年9月追加)。APIキー経由の
+    // 無料枠(検索グラウンディングが429になる制約、CLAUDE.md参照)とは別に、ユーザー自身の
+    // Googleアカウントでログインするgemini.google.comの通常利用は検索グラウンディングが
+    // 無料で使える。この既存の別チャネルを、Googleマップの呼び出しボタンと同じ「外部タブ
+    // で調べて結果をコピペで持ち帰る」パターンで橋渡しする(PrizmoGoのOCRコピペ運用と同じ
+    // 思想)。質問文をクリップボードへコピーしてから新規タブを開き、貼り付けやすくする。
+    const groundedBtn = document.createElement('button');
+    groundedBtn.className = 'ms-lore-grounded-btn';
+    groundedBtn.textContent = '🔍 Geminiで調べる(検索あり・新規タブ)';
+    groundedBtn.title = 'gemini.google.comを新規タブで開く(質問文があればクリップボードへコピー)';
+    groundedBtn.addEventListener('click', async () => {
+      const q = (questionInput.value || hintInput.value || '').trim();
+      if (q && navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(q);
+          setStatus('質問をコピーしました。開いたタブに貼り付けて聞いてください。');
+        } catch (err) {
+          console.warn('Mapping Storys: クリップボードへのコピーに失敗', err);
+        }
+      }
+      window.open('https://gemini.google.com/app', '_blank', 'noopener,noreferrer');
+    });
+
+    const pasteLabel = document.createElement('p');
+    pasteLabel.className = 'ms-lore-paste-label';
+    pasteLabel.textContent = 'Geminiの回答を貼り付け:';
+    const pasteInput = document.createElement('textarea');
+    pasteInput.className = 'ms-lore-paste-input';
+    pasteInput.rows = 3;
+    pasteInput.placeholder = 'gemini.google.comでの回答をここに貼り付けて保存';
+    pasteInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const pasteBtn = document.createElement('button');
+    pasteBtn.className = 'ms-lore-paste-btn';
+    pasteBtn.textContent = 'この内容を伝承として保存';
+
     const textEl = document.createElement('p');
     textEl.className = 'ms-lore-text';
     textEl.textContent = layer.loreText || '';
@@ -727,10 +783,26 @@
     exportBtn.addEventListener('click', () => exportLoreAsTextCard(layer));
     btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl, exportBtn));
     questionBtn.addEventListener('click', () => askLayerQuestion(layer, questionInput, questionBtn, textEl, exportBtn));
+    pasteBtn.addEventListener('click', () => {
+      const pasted = pasteInput.value.trim();
+      if (!pasted) return;
+      layer.loreText = pasted;
+      layer.loreFetchedAt = new Date().toISOString();
+      textEl.textContent = pasted;
+      textEl.hidden = false;
+      exportBtn.hidden = false;
+      pasteInput.value = '';
+      scheduleAutoSave();
+      setStatus('伝承として保存しました');
+    });
     wrap.appendChild(hintInput);
     wrap.appendChild(btn);
     wrap.appendChild(questionInput);
     wrap.appendChild(questionBtn);
+    wrap.appendChild(groundedBtn);
+    wrap.appendChild(pasteLabel);
+    wrap.appendChild(pasteInput);
+    wrap.appendChild(pasteBtn);
     wrap.appendChild(textEl);
     wrap.appendChild(exportBtn);
     return wrap;
