@@ -146,6 +146,8 @@
       .ms-window {
         position: fixed; top: 18px; right: 18px; z-index: 115;
         width: min(84vw, 260px);
+        max-height: calc(100vh - 36px);
+        overflow-y: auto;
         background: rgba(7, 13, 9, 0.95);
         border: 1px solid rgba(47, 107, 70, 0.35);
         border-radius: 14px;
