@@ -349,10 +349,26 @@ async function onSignedIn() {
     state.cards.forEach((card) => {
       if (!card.sessionId) card.sessionId = migrationTargetId;
     });
-    state.breadcrumb = [migrationTargetId];
+    // 前回作業していた場所を復元する(2026年9月追加、ユーザー要望)。保存されたbreadcrumbの
+    // 各IDが現在のsessionsに実在するかを先頭から検証し、削除されたセッションを指していた
+    // 箇所で打ち切る(Flight Engineerのensure BreadcrumbValid()と同じ考え方)。復元できる
+    // 分が無ければ、従来通り現在の年セッションへ戻す。
+    let restoredBreadcrumb = null;
+    if (Array.isArray(data.breadcrumb) && data.breadcrumb.length > 0) {
+      const valid = [];
+      for (const id of data.breadcrumb) {
+        if (!getSessionById(id)) break;
+        valid.push(id);
+      }
+      if (valid.length > 0) restoredBreadcrumb = valid;
+    }
+    state.breadcrumb = restoredBreadcrumb || [migrationTargetId];
     renderYearTabs();
     renderBreadcrumb();
     renderAllCards();
+    // 復元先はカードの生座標(scale 1, 原点0,0)のままだと画面外に散らばって見えるため、
+    // 既存の「全カードが収まるまでズームアウト」機能で毎回きれいにフィットさせる。
+    if (restoredBreadcrumb) fitAllCardsToScreen();
     refreshInfoTicker();
     // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
     // (API通信は発生しない、ローカルの日付比較のみ)。
@@ -435,6 +451,7 @@ function renderBreadcrumb() {
       renderYearTabs();
       renderBreadcrumb();
       renderAllCards();
+      scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
     });
     els.breadcrumb.appendChild(btn);
   });
@@ -451,6 +468,7 @@ function enterSession(id, isYear) {
   renderBreadcrumb();
   renderAllCards();
   if (isYear) refreshInfoTicker(); // ティッカーは年タブ単位なので、年を切り替えた時だけ再集計する
+  scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
 }
 
 async function handleCreateSession() {
@@ -1821,6 +1839,7 @@ function jumpToInfoCard(card) {
   renderYearTabs();
   renderBreadcrumb();
   renderAllCards();
+  scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
   requestAnimationFrame(() => {
     const el = cardElById(card.id);
     if (!el) return;
@@ -2572,6 +2591,7 @@ async function handleSave() {
       crews: state.crews,
       feHistory: state.feHistory,
       feHistoryIndex: state.feHistoryIndex,
+      breadcrumb: state.breadcrumb,
     });
     setStatus('自動保存しました');
   } catch (err) {
