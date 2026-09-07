@@ -109,6 +109,9 @@ function initCanvas(viewportElArg, contentElArg) {
   // ことがあるため、長押し検知(上記)と同様に自前でpointerup同士の間隔/距離を見て判定する。
   viewportEl.addEventListener('pointerup', (event) => {
     if (editGuideCard) return;
+    // Flight Engineer起動中は背景ドラッグが矩形選択に置き換わっているため、
+    // 空振りの矩形選択(=タップ)を俯瞰ズームのダブルタップとして誤検知しないようにする。
+    if (window.isFlightEngineerActive && window.isFlightEngineerActive()) return;
     if (event.target !== viewportEl) return;
     if (!viewportPressStart) return;
     const moved = Math.hypot(event.clientX - viewportPressStart.x, event.clientY - viewportPressStart.y);
@@ -384,6 +387,9 @@ function attachCardGestures(el) {
   el.addEventListener('pointerdown', (event) => {
     if (event.target.closest('.star-card-handle, .star-card-hex')) return; // ハンドル/編集ガイドのボタンは専用処理
     if (event.target.closest('button, textarea, input, a')) return; // 公式ページリンク(<a>)などはカードのドラッグ/長押し処理の対象外
+    // Flight Engineerモジュール起動中(Shiftキーによる一時解除を除く)は、カード個別の
+    // 長押し編集ガイド/移動を止め、矩形選択(js/modules/flight-engineer.js)に譲る。
+    if (window.isFlightEngineerActive && window.isFlightEngineerActive() && !event.shiftKey) return;
     if (pointerId !== null) return; // 既に1点を追跡中なら追加のポインタは無視
 
     // iOSなどはAudioContextの生成/再開がユーザー操作に直接紐づく同期呼び出しでないと

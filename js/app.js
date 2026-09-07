@@ -23,6 +23,11 @@ const state = {
   // 使い回すデータなので、カード単位ではなくここに持つ。
   // { id, personInfo, theirWords, name, avatar, enabled, createdAt }
   crews: [],
+  // Flight Engineerモジュール(js/modules/flight-engineer.js)の編集履歴(格納/解体のみ、最大10件)。
+  // アプリ/PCのシャットダウンを挟んでも「元に戻す」が使えるよう、他のデータと同じく
+  // constellation-data.jsonへ永続化する(クロージャではなくプレーンなデータとして保持する)。
+  feUndoStack: [],
+  feRedoStack: [],
 };
 
 const FIRST_YEAR = 2025;
@@ -323,6 +328,8 @@ async function onSignedIn() {
     state.hiddenAutoLinks = data.hiddenAutoLinks || [];
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
+    state.feUndoStack = data.feUndoStack || [];
+    state.feRedoStack = data.feRedoStack || [];
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -710,6 +717,9 @@ function attachTapToOpen(el, onOpen) {
       delete card.dataset.justLifted;
       return;
     }
+    // Flight Engineer起動中(Shiftによる一時解除を除く)は、タップでセッションへ入らず
+    // 選択(js/modules/flight-engineer.js の解体メニュー等)に譲る。
+    if (window.isFlightEngineerActive && window.isFlightEngineerActive() && !event.shiftKey) return;
     if (moved < 6) onOpen();
   });
 }
@@ -2537,6 +2547,8 @@ async function handleSave() {
       hiddenAutoLinks: state.hiddenAutoLinks,
       exhibitionCalendarId: state.exhibitionCalendarId,
       crews: state.crews,
+      feUndoStack: state.feUndoStack,
+      feRedoStack: state.feRedoStack,
     });
     setStatus('自動保存しました');
   } catch (err) {

@@ -14,6 +14,14 @@
 //   playWormGateRingTickSound()WormGateのリング回転中の「ピルルル」(呼ぶ間隔は呼び出し側が決める)
 //   playWormGateSelectSound()  WormGateで写真を選んでジャンプする時の「キュッ」
 //   playMappingStorysDeploySound() Mapping Storysで地図をキャンバスへ展開する時の「シュワァーン…」
+//   playFlightEngineerToggleSound(on) Flight EngineerのON/OFF切り替え時の「ピッ↑」「ポッ↓」
+//   playFlightEngineerSelectSound()   矩形選択の開始/タップ選択時の軽い「チッ」
+//   playFlightEngineerStowSound()     格納が完了した時の「シュン…」(吸い込まれる質感)
+//   playFlightEngineerCutSound()      格納でASTR接続が切断される時の「パチッ」
+//   playFlightEngineerDisbandSound()  解体で中身が展開される時の「パッ」(格納の逆再生的な質感)
+//   playFlightEngineerTidySound()     整理(グリッド整列)完了時の3音の軽いチャイム
+//   playFlightEngineerUndoSound()     元に戻す時の下降音
+//   playFlightEngineerRedoSound()     やり直す時の上昇音
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -342,4 +350,176 @@ function playMappingStorysDeploySound() {
   shimmerOsc.connect(shimmerGain);
   shimmerOsc.start(now + 0.18);
   shimmerOsc.stop(now + 1.35);
+}
+
+/** Flight EngineerのON/OFF切り替え:「ピッ↑」(ON)/「ポッ↓」(OFF)。短い単発のスイープ。 */
+function playFlightEngineerToggleSound(on) {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(on ? 620 : 520, now);
+  osc.frequency.linearRampToValueAtTime(on ? 900 : 300, now + 0.1);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 400;
+  osc.connect(gain).connect(highpass).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.16);
+}
+
+/** 矩形選択の開始/タップ選択:軽い「チッ」。連打されても耳障りにならないよう極短・低音量。 */
+function playFlightEngineerSelectSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 1500;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.09, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.045);
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 900;
+  osc.connect(gain).connect(highpass).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.05);
+}
+
+/** 格納完了:「シュン…」。周波数が急上昇しながら音量が減衰し、吸い込まれる質感を出す。 */
+function playFlightEngineerStowSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(300, now);
+  osc.frequency.exponentialRampToValueAtTime(1100, now + 0.34);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.14, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 300;
+  const dryGain = c.createGain();
+  dryGain.gain.value = 0.85;
+  const wetGain = c.createGain();
+  wetGain.gain.value = 0.3;
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  osc.connect(gain).connect(highpass);
+  highpass.connect(dryGain).connect(c.destination);
+  highpass.connect(wetGain).connect(convolver).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.42);
+}
+
+/** 格納でASTR接続が切れる:「パチッ」。短く鋭い下降チャープ。 */
+function playFlightEngineerCutSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(700, now);
+  osc.frequency.exponentialRampToValueAtTime(130, now + 0.12);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.13, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 500;
+  osc.connect(gain).connect(highpass).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.14);
+}
+
+/** 解体で中身が展開される:「パッ」。格納音の逆再生的な、短く開放的な質感。 */
+function playFlightEngineerDisbandSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(1100, now);
+  osc.frequency.exponentialRampToValueAtTime(360, now + 0.28);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.15, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 300;
+  const dryGain = c.createGain();
+  dryGain.gain.value = 0.85;
+  const wetGain = c.createGain();
+  wetGain.gain.value = 0.28;
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  osc.connect(gain).connect(highpass);
+  highpass.connect(dryGain).connect(c.destination);
+  highpass.connect(wetGain).connect(convolver).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.34);
+}
+
+/** 整理(グリッド整列)完了: 3音の軽いチャイムが駆け上がる。 */
+function playFlightEngineerTidySound() {
+  const c = soundAudioCtx();
+  [0, 80, 160].forEach((delayMs, i) => {
+    setTimeout(() => {
+      const now = c.currentTime;
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = 520 + i * 140;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.11, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+      osc.connect(gain).connect(c.destination);
+      osc.start(now);
+      osc.stop(now + 0.11);
+    }, delayMs);
+  });
+}
+
+/** 元に戻す: 下降スイープ。 */
+function playFlightEngineerUndoSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(720, now);
+  osc.frequency.exponentialRampToValueAtTime(340, now + 0.16);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.15, now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+  osc.connect(gain).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.2);
+}
+
+/** やり直す: 上昇スイープ(元に戻すの逆)。 */
+function playFlightEngineerRedoSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(340, now);
+  osc.frequency.exponentialRampToValueAtTime(720, now + 0.16);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.15, now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+  osc.connect(gain).connect(c.destination);
+  osc.start(now);
+  osc.stop(now + 0.2);
 }
