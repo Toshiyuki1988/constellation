@@ -472,6 +472,19 @@ function enterSession(id, isYear) {
   scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
 }
 
+/**
+ * 現在ビューポート中心が指しているキャンバス座標(canvas-content の生px、js/canvas.jsの
+ * clientToContent()を利用)。ボトムツールバー/CONSTELLATION PIEから新規カードを作ると、
+ * 常に固定座標(40,40)に生成され、パン/ズームした先から見て遠く離れた場所に出てしまう
+ * という実機報告(2026年9月)を受けて、各種カード作成関数の既定位置として使う。
+ * 連続で作った時に完全に重ならないよう、軽くランダムなずらしを加えて返す。
+ */
+function newCardSpawnPos() {
+  const rect = els.viewport.getBoundingClientRect();
+  const center = clientToContent(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  return { x: center.x + (Math.random() * 80 - 40), y: center.y + (Math.random() * 80 - 40) };
+}
+
 async function handleCreateSession() {
   const choice = await showChoiceDialog({
     title: 'セッション名の入力方法',
@@ -500,10 +513,11 @@ async function handleCreateSession() {
   };
   state.sessions.push(session);
 
+  const spawnPos = newCardSpawnPos();
   const card = {
     id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
+    x: spawnPos.x,
+    y: spawnPos.y,
     width: 190,
     height: 150,
     memo: '',
@@ -765,6 +779,21 @@ function attachTapToOpen(el, onOpen) {
   });
 }
 
+/**
+ * メモ欄のマークアップ(2026年9月、ハイパーリンク対応で二重構造に変更)。
+ * `.star-card-memo-view`(読み取り専用、URLをクリックできる<a>として描画、既定で表示)と
+ * `.star-card-memo`(実データを持つtextarea、Edit中だけ表示)のペアを返す。textareaは
+ * plainテキストしか描画できずリンクをクリックさせられないため、既定表示はview側が担い、
+ * textareaはEditボタン/Eキーで開く入力専用の役割に変わった(以前はtextarea自身が
+ * 表示も編集も兼ねていた)。
+ */
+function memoFieldHtml(card, hasMemo) {
+  return (
+    `<div class="star-card-memo-view" ${hasMemo ? '' : 'hidden'}>${linkifyMemoHtml(card.memo || '')}</div>` +
+    `<textarea class="star-card-memo" placeholder="メモ" hidden>${escapeHtml(card.memo || '')}</textarea>`
+  );
+}
+
 function renderCard(card) {
   const mediaType = card.mediaType || 'image';
   const isTextCard = mediaType === 'text';
@@ -810,7 +839,7 @@ function renderCard(card) {
           <span class="star-card-session-count">${childCount}件</span>
         </div>
       </div>
-      <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
+      ${memoFieldHtml(card, hasMemo)}
       ${EDIT_GUIDE_HANDLES_HTML}
       ${editGuideHexHtml(mediaType)}
     `;
@@ -832,7 +861,7 @@ function renderCard(card) {
     el.innerHTML = `
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
       ${crewHeadHtml}
-      <textarea class="star-card-memo" placeholder="メモ" ${hasMemo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
+      ${memoFieldHtml(card, hasMemo)}
       ${EDIT_GUIDE_HANDLES_HTML}
       ${editGuideHexHtml(mediaType)}
     `;
@@ -850,6 +879,8 @@ function renderCard(card) {
       else if (action === 'edit') {
         const memoEl = el.querySelector('.star-card-memo');
         if (memoEl) {
+          const memoViewEl = el.querySelector('.star-card-memo-view');
+          if (memoViewEl) memoViewEl.hidden = true;
           memoEl.hidden = false;
           memoEl.style.pointerEvents = 'auto';
           memoEl.focus();
@@ -891,7 +922,11 @@ function renderCard(card) {
   // インフォメーションカードは.star-card-memoを使わず専用のフィールドを持つため、
   // ここから先の共通メモ配線は対象外にする(wireInfoCard()で個別に配線する)。
   const memoEl = el.querySelector('.star-card-memo');
+  const memoViewEl = el.querySelector('.star-card-memo-view');
   if (memoEl) {
+    // 表示中のリンクをクリックした時、既定でpointer-events:noneなカード本体を巻き添えに
+    // せずブラウザ標準の遷移だけを行わせる(attachCardGestures()側も<a>を既に除外済み)。
+    if (memoViewEl) memoViewEl.addEventListener('pointerdown', (e) => { if (e.target.closest('a')) e.stopPropagation(); });
     memoEl.addEventListener('input', () => {
       card.memo = memoEl.value;
       syncCardHeight(el);
@@ -899,33 +934,41 @@ function renderCard(card) {
     });
     // 既定ではメモへのポインタ操作を無効化し、カードの移動を優先する。
     // 編集ガイドのEditアクションを押した時だけ編集を受け付け、フォーカスが外れたら移動優先に戻す。
+    // 2026年9月、URLをクリックできるリンクとして表示したい要望に対応するため、既定の表示は
+    // textarea(平文しか描画できない)ではなく.star-card-memo-view(<a>タグ入りHTML)が担う
+    // ようになった。textareaはEdit中だけ表示する入力専用の役割になり、blur時に内容を
+    // ビューへ反映して隠れる。
     memoEl.addEventListener('blur', () => {
       memoEl.style.pointerEvents = 'none';
-      // OCR取り込みも手入力もなく空のまま編集を終えた場合は、テキスト欄を再び隠す
-      if (!isTextCard && !memoEl.value.trim()) {
-        memoEl.hidden = true;
-        syncCardHeight(el);
+      memoEl.hidden = true;
+      if (memoViewEl) {
+        memoViewEl.innerHTML = linkifyMemoHtml(memoEl.value);
+        // OCR取り込みも手入力もなく空のまま編集を終えた場合は、ビューも隠したままにする
+        memoViewEl.hidden = !(isTextCard || memoEl.value.trim());
       }
+      syncCardHeight(el);
     });
-    // メモ欄は既定でpointer-events:noneなので(カード移動を優先するため)、通常はホイールも
-    // メモ欄まで届かずカード自身(ひいてはキャンバスのズーム)に流れてしまう。写真付きカードの
-    // メモ欄だけ最大高さ+内部スクロールにしてあるので、カーソルがメモ欄の範囲内にある時だけ
-    // ホイールでメモ欄自体をスクロールできるようにする(キャンバスのズームには渡さない)。
-    // hasMediaのチェックが無いと、テキストカードなどmax-heightの掛かっていないメモ欄でも
-    // わずかなサブピクセルの誤差でscrollHeightがclientHeightよりわずかに大きく判定されることが
-    // あり、そのたびにホイールズームを奪ってしまうバグがあった(リサイズでsyncCardHeight()が
-    // 再計算されるとこの誤差が解消されるため「リサイズすると直る」という症状になっていた)。
+    // メモ欄(ビュー/textareaいずれか表示中の方)は既定でpointer-events:none相当なので
+    // (カード移動を優先するため)、通常はホイールもカード自身(ひいてはキャンバスのズーム)に
+    // 流れてしまう。写真付きカードのメモ欄だけ最大高さ+内部スクロールにしてあるので、
+    // カーソルがメモ欄の範囲内にある時だけホイールでメモ欄自体をスクロールできるようにする
+    // (キャンバスのズームには渡さない)。hasMediaのチェックが無いと、テキストカードなど
+    // max-heightの掛かっていないメモ欄でもわずかなサブピクセルの誤差でscrollHeightが
+    // clientHeightよりわずかに大きく判定されることがあり、そのたびにホイールズームを
+    // 奪ってしまうバグがあった(リサイズでsyncCardHeight()が再計算されるとこの誤差が
+    // 解消されるため「リサイズすると直る」という症状になっていた)。
     const hasMedia = Boolean(el.querySelector('.star-card-media'));
     el.addEventListener('wheel', (event) => {
-      if (!hasMedia || memoEl.hidden || memoEl.scrollHeight - memoEl.clientHeight < 4) return;
-      const rect = memoEl.getBoundingClientRect();
+      const target = memoEl.hidden ? memoViewEl : memoEl;
+      if (!hasMedia || !target || target.hidden || target.scrollHeight - target.clientHeight < 4) return;
+      const rect = target.getBoundingClientRect();
       const inside =
         event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
       if (!inside) return;
       event.stopPropagation();
       // deltaYをそのまま使うとマウスの1ノッチで一気に飛んでしまい読んでいた位置を見失うため、
       // 感度を落として細かく動かせるようにする。
-      memoEl.scrollTop += event.deltaY * 0.35;
+      target.scrollTop += event.deltaY * 0.35;
     });
   }
 
@@ -1113,10 +1156,11 @@ function wireInfoCard(card, el) {
 }
 
 function createInfoCard() {
+  const spawnPos = newCardSpawnPos();
   const card = {
     id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
+    x: spawnPos.x,
+    y: spawnPos.y,
     width: 240,
     height: 150,
     memo: '',
@@ -1193,7 +1237,7 @@ function streetviewCardInnerHtml(card) {
       ${hasLocation ? '<button class="star-card-streetview-change-btn">変更</button>' : ''}
     </div>
     <div class="star-card-media star-card-media-streetview">${bodyHtml}</div>
-    <textarea class="star-card-memo" placeholder="メモ" ${card.memo ? '' : 'hidden'}>${escapeHtml(card.memo || '')}</textarea>
+    ${memoFieldHtml(card, Boolean(card.memo))}
     ${EDIT_GUIDE_HANDLES_HTML}
     ${editGuideHexHtml('streetview')}
   `;
@@ -1240,10 +1284,11 @@ function wireStreetviewCard(card, el) {
 }
 
 function createStreetviewCard() {
+  const spawnPos = newCardSpawnPos();
   const card = {
     id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
+    x: spawnPos.x,
+    y: spawnPos.y,
     width: 280,
     height: 240,
     memo: '',
@@ -1408,10 +1453,11 @@ function wireSummaryCard(card, el) {
 }
 
 function createSummaryCard(x, y) {
+  const spawnPos = (x === undefined || y === undefined) ? newCardSpawnPos() : null;
   const card = {
     id: crypto.randomUUID(),
-    x: x ?? 40,
-    y: y ?? 40,
+    x: x ?? spawnPos.x,
+    y: y ?? spawnPos.y,
     width: 260,
     height: 200,
     mediaType: 'summary',
@@ -2486,6 +2532,8 @@ document.addEventListener('keydown', (event) => {
     const memoEl = guideEl.querySelector('.star-card-memo');
     if (memoEl) {
       event.preventDefault();
+      const memoViewEl = guideEl.querySelector('.star-card-memo-view');
+      if (memoViewEl) memoViewEl.hidden = true;
       memoEl.hidden = false;
       memoEl.style.pointerEvents = 'auto';
       memoEl.focus();
@@ -2615,7 +2663,11 @@ async function handleCardCaption(card, el) {
   card.memo = card.memo ? `${card.memo}\n\n${result.text}` : result.text;
   const memoEl = el.querySelector('.star-card-memo');
   memoEl.value = card.memo;
-  memoEl.hidden = false;
+  const memoViewEl = el.querySelector('.star-card-memo-view');
+  if (memoViewEl) {
+    memoViewEl.innerHTML = linkifyMemoHtml(card.memo);
+    memoViewEl.hidden = false;
+  }
   syncCardHeight(el);
   setStatus('キャプションを反映しました');
   scheduleAutoSave();
@@ -3015,16 +3067,23 @@ async function handleOpenTextTool() {
     const card = createTextCard('');
     const el = cardElById(card.id);
     const memoEl = el?.querySelector('.star-card-memo');
-    if (memoEl) memoEl.focus();
+    if (memoEl) {
+      const memoViewEl = el.querySelector('.star-card-memo-view');
+      if (memoViewEl) memoViewEl.hidden = true;
+      memoEl.hidden = false;
+      memoEl.style.pointerEvents = 'auto';
+      memoEl.focus();
+    }
   }
 }
 
 /** テクストモードの読み取り結果からカードを作る(画像を伴わないため Drive アップロードは不要) */
 function createTextCard(text) {
+  const spawnPos = newCardSpawnPos();
   const card = {
     id: crypto.randomUUID(),
-    x: 40,
-    y: 40,
+    x: spawnPos.x,
+    y: spawnPos.y,
     width: 240,
     height: 120,
     memo: text,
@@ -3079,11 +3138,12 @@ function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
  */
 async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) {
   const thumbDataUrl = mediaType === 'image' ? await generateThumbnail(blob) : null;
+  const spawnPos = (x === undefined || y === undefined) ? newCardSpawnPos() : null;
 
   const card = {
     id: crypto.randomUUID(),
-    x: x ?? 40,
-    y: y ?? 40,
+    x: x ?? spawnPos.x,
+    y: y ?? spawnPos.y,
     width: 220,
     height: 260,
     memo: memo || '',
@@ -3157,4 +3217,30 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+/**
+ * メモ本文中のURLをクリックできるリンクとして描画するためのHTML化(2026年9月追加)。
+ * URL以外の部分はescapeHtml()でエスケープしてからURL部分だけ<a>タグに差し替える(XSS対策、
+ * href自体も念のためエスケープする)。文末の句読点・閉じ括弧をURLの一部として誤って
+ * 拾わないよう末尾から除く。改行はCSS側のwhite-space:pre-wrapに任せ、ここでは変換しない。
+ */
+function linkifyMemoHtml(text) {
+  const urlPattern = /https?:\/\/[^\s<>"']+/g;
+  let result = '';
+  let lastIndex = 0;
+  let match;
+  while ((match = urlPattern.exec(text)) !== null) {
+    result += escapeHtml(text.slice(lastIndex, match.index));
+    const trimTrailing = match[0].match(/^(.*?)([.,;:!?)\]]*)$/s);
+    const url = trimTrailing ? trimTrailing[1] : match[0];
+    const trailing = trimTrailing ? trimTrailing[2] : '';
+    if (url) {
+      result += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+    }
+    result += escapeHtml(trailing);
+    lastIndex = match.index + match[0].length;
+  }
+  result += escapeHtml(text.slice(lastIndex));
+  return result;
 }

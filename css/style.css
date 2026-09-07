@@ -622,11 +622,34 @@ html, body {
   padding: 6px 7px;
 }
 
+/*
+ * メモの読み取り専用表示(2026年9月、ハイパーリンク対応で追加)。既定はこちらが見えており、
+ * textarea(平文しか描画できずURLをクリックさせられない)はEdit中だけ表示する。見た目は
+ * .star-card-memoに合わせつつ、URL部分だけ<a>としてクリックできるようpointer-eventsを
+ * 個別に有効化する(周囲の文字は既定通りpointer-events:noneのままカード移動を優先する)。
+ */
+.star-card-memo-view {
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--serif);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 6px 7px;
+}
+.star-card-memo-view a { pointer-events: auto; color: #2e7d32; text-decoration: underline; }
+
 /* 写真・動画・音声カードのメモ欄は、抽出テキストなどで長くなっても無制限には伸ばさない。
    flex:1の写真エリアはflex-basisが0%のため、メモが際限なく伸びると写真側の再計算の余地が
    なくなり、リサイズのたびに写真が潰れて戻らなくなる不具合があったため上限+内部スクロールにした。
    テキストカード(.star-card--textの直下)には写真が無く競合しないので対象外。 */
-.star-card-media ~ .star-card-memo {
+.star-card-media ~ .star-card-memo,
+.star-card-media ~ .star-card-memo-view {
   max-height: 220px;
   overflow-y: auto;
 }
@@ -734,7 +757,8 @@ html, body {
 
 .star-card-title-ocr-btn:hover { background: #fff; border-color: var(--text); }
 
-.star-card--session .star-card-memo {
+.star-card--session .star-card-memo,
+.star-card--session .star-card-memo-view {
   margin: 0 8px 8px;
 }
 
