@@ -23,11 +23,13 @@ const state = {
   // 使い回すデータなので、カード単位ではなくここに持つ。
   // { id, personInfo, theirWords, name, avatar, enabled, createdAt }
   crews: [],
-  // Flight Engineerモジュール(js/modules/flight-engineer.js)の編集履歴(格納/解体のみ、最大10件)。
-  // アプリ/PCのシャットダウンを挟んでも「元に戻す」が使えるよう、他のデータと同じく
-  // constellation-data.jsonへ永続化する(クロージャではなくプレーンなデータとして保持する)。
-  feUndoStack: [],
-  feRedoStack: [],
+  // Flight Engineerモジュール(js/modules/flight-engineer.js)の編集履歴(格納/解体のみ、最大10件、
+  // 時系列の1本の配列+現在位置)。アプリ/PCのシャットダウンを挟んでも履歴から任意の時点へ
+  // 戻れるよう、他のデータと同じくconstellation-data.jsonへ永続化する(クロージャではなく
+  // プレーンなデータとして保持する)。feHistoryIndex件ぶんが「現在適用済み」、それ以降は
+  // 履歴タップで「やり直し」できる未来の分岐として残る。
+  feHistory: [],
+  feHistoryIndex: 0,
 };
 
 const FIRST_YEAR = 2025;
@@ -328,8 +330,19 @@ async function onSignedIn() {
     state.hiddenAutoLinks = data.hiddenAutoLinks || [];
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
-    state.feUndoStack = data.feUndoStack || [];
-    state.feRedoStack = data.feRedoStack || [];
+    if (data.feHistory) {
+      state.feHistory = data.feHistory;
+      state.feHistoryIndex = typeof data.feHistoryIndex === 'number' ? data.feHistoryIndex : state.feHistory.length;
+    } else if (data.feUndoStack || data.feRedoStack) {
+      // 旧データ形式(Undo/Redoの2本のスタック)からの一度きりの移行
+      const undoStack = data.feUndoStack || [];
+      const redoStack = data.feRedoStack || [];
+      state.feHistory = [...undoStack, ...redoStack.slice().reverse()];
+      state.feHistoryIndex = undoStack.length;
+    } else {
+      state.feHistory = [];
+      state.feHistoryIndex = 0;
+    }
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -2547,8 +2560,8 @@ async function handleSave() {
       hiddenAutoLinks: state.hiddenAutoLinks,
       exhibitionCalendarId: state.exhibitionCalendarId,
       crews: state.crews,
-      feUndoStack: state.feUndoStack,
-      feRedoStack: state.feRedoStack,
+      feHistory: state.feHistory,
+      feHistoryIndex: state.feHistoryIndex,
     });
     setStatus('自動保存しました');
   } catch (err) {

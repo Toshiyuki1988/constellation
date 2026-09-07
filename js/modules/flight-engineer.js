@@ -32,10 +32,12 @@
 //   中身を見るには「解体」(元に戻せる)で十分に用が足りるため。
 // - 一括移動は、確定後に残る選択枠そのものを掴んでドラッグする(カード個別のドラッグとは
 //   別動作として分離)。
-// - Undo/Redoを持つのは「格納」「解体」のみ(整理・単発の移動は対象外)。エントリは
-//   クロージャではなくプレーンなデータ(カードID・座標・接続の断片)として state.feUndoStack /
-//   state.feRedoStack に持ち、既存のcards/sessions/connectionsと同じ constellation-data.json
-//   へオートセーブされる。これにより、アプリやPCのシャットダウンを挟んでも「元に戻す」が
+// - 履歴を持つのは「格納」「解体」のみ(整理・単発の移動は対象外)。Undo/Redoの2本の
+//   ボタンではなく、時系列の1本の配列(state.feHistory)+現在位置(state.feHistoryIndex)で
+//   管理し、バーの「履歴」パネルの行を直接タップして任意の時点へジャンプする(ユーザー指示、
+//   2026年9月)。エントリはクロージャではなくプレーンなデータ(カードID・座標・接続の断片)
+//   として持つため、既存のcards/sessions/connectionsと同じ constellation-data.json へ
+//   そのままオートセーブでき、アプリやPCのシャットダウンを挟んでも履歴からの復帰が
 //   有効なまま残る(直近10件、超えた分は古い方から破棄)。
 // - セッションカードをダブルクリックすると、パンくずを移動せずに中身を軽くプレビューできる
 //   (読み取り専用のポップアップ、Crewsの人物情報ポップアップと同じ位置づけ)。
@@ -116,13 +118,13 @@
         border-radius: 10px; box-shadow: 0 14px 30px rgba(11, 35, 84, 0.2); padding: 8px;
       }
       .fe-history-panel.open { display: block; }
-      .fe-hist-row { display: flex; align-items: center; gap: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; padding: 6px; border-radius: 6px; }
-      .fe-hist-row.latest { background: rgba(28, 95, 214, 0.12); }
-      .fe-hist-row.redo { opacity: 0.5; text-decoration: line-through; }
+      .fe-hist-row { display: flex; align-items: center; gap: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; padding: 6px; border-radius: 6px; cursor: pointer; }
+      .fe-hist-row:hover { background: rgba(28, 95, 214, 0.1); }
+      .fe-hist-row.current { background: rgba(28, 95, 214, 0.16); }
+      .fe-hist-row.future { opacity: 0.5; }
       .fe-hist-ico { flex: none; color: #0b2354; }
       .fe-hist-label { flex: 1; color: #000; word-break: break-word; }
       .fe-hist-time { color: #737373; font-size: 8.5px; flex: none; }
-      .fe-hist-sep { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: #737373; margin: 8px 2px 2px; letter-spacing: 0.08em; }
       .fe-hist-empty { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #737373; padding: 10px 4px; line-height: 1.7; }
 
       .fe-rect {
@@ -220,8 +222,6 @@
       <div class="fe-bar-row">
         <div class="fe-toggle"><span class="fe-toggle-dot"></span><span class="fe-toggle-label">Flight Engineer</span></div>
         <div class="fe-bar-group">
-          <button class="fe-bar-btn fe-undo-btn" title="元に戻す(格納・解体のみ)">↺</button>
-          <button class="fe-bar-btn fe-redo-btn" title="やり直す">↻</button>
           <div class="fe-hist-wrap">
             <button class="fe-bar-btn fe-history-btn">履歴 <span class="fe-badge">0</span></button>
             <div class="fe-history-panel"></div>
@@ -235,8 +235,6 @@
       bar,
       toggle: bar.querySelector('.fe-toggle'),
       closeBtn: bar.querySelector('.fe-close-btn'),
-      undoBtn: bar.querySelector('.fe-undo-btn'),
-      redoBtn: bar.querySelector('.fe-redo-btn'),
       historyBtn: bar.querySelector('.fe-history-btn'),
       historyList: bar.querySelector('.fe-history-panel'),
       badge: bar.querySelector('.fe-badge'),
@@ -246,8 +244,6 @@
 
     feEls.toggle.addEventListener('click', () => toggleFeActive());
     feEls.closeBtn.addEventListener('click', closeFlightEngineer);
-    feEls.undoBtn.addEventListener('click', doUndo);
-    feEls.redoBtn.addEventListener('click', doRedo);
     feEls.historyBtn.addEventListener('click', () => {
       feEls.historyList.classList.toggle('open');
       renderHistoryUI();
@@ -540,6 +536,14 @@
     panelEl.querySelector('[data-fe-action="disband"]').addEventListener('click', doDisband);
     panelEl.querySelector('[data-fe-action="cancel"]').addEventListener('click', clearSelectionAndPanel);
     els.viewport.appendChild(panelEl);
+
+    // 画面下端で見切れないよう、実際の高さを測ってから必要な分だけ上に押し上げる
+    // (選択位置の下に置くのが既定だが、下端に収まらない場合は選択位置の上に出す)。
+    const panelHeight = panelEl.offsetHeight;
+    const maxTop = Math.max(8, vpRect.height - panelHeight - 8);
+    if (parseFloat(panelEl.style.top) > maxTop) {
+      panelEl.style.top = `${maxTop}px`;
+    }
   }
 
   /* ---------------- 実行: 新規セッションに格納(履歴に残る) ---------------- */
@@ -790,41 +794,68 @@
 
   /* ---------------- 編集履歴(格納/解体のみ、最大10件、constellation-data.jsonへ永続化) ---------------- */
 
-  function pushFeHistory(entry) {
-    state.feUndoStack.push(entry);
-    if (state.feUndoStack.length > HISTORY_CAP) state.feUndoStack.shift();
-    state.feRedoStack = [];
-    renderHistoryUI();
-    scheduleAutoSave();
-  }
-
-  function doUndo() {
-    const entry = state.feUndoStack.pop();
-    if (!entry) return;
-    if (entry.type === 'stow') applyStowReverse(entry);
-    else if (entry.type === 'disband') applyDisbandReverse(entry);
-    state.feRedoStack.push(entry);
-    if (state.feRedoStack.length > HISTORY_CAP) state.feRedoStack.shift();
-    clearSelectionAndPanel();
-    renderAllCards();
-    renderHistoryUI();
-    playFlightEngineerUndoSound();
-    setStatus(`元に戻しました: ${entry.label}`);
-    scheduleAutoSave();
-  }
-
-  function doRedo() {
-    const entry = state.feRedoStack.pop();
-    if (!entry) return;
+  /**
+   * 履歴は時系列の1本の配列(state.feHistory)+現在位置(state.feHistoryIndex、
+   * 「先頭からこの件数ぶんが適用済み」)で管理する。Undo/Redoの2本のボタンではなく、
+   * 履歴の行を直接タップして任意の時点へジャンプする(ユーザー指示、2026年9月)。
+   */
+  function applyEntryForward(entry) {
     if (entry.type === 'stow') applyStowForward(entry);
     else if (entry.type === 'disband') applyDisbandForward(entry);
-    state.feUndoStack.push(entry);
-    if (state.feUndoStack.length > HISTORY_CAP) state.feUndoStack.shift();
+  }
+
+  function applyEntryReverse(entry) {
+    if (entry.type === 'stow') applyStowReverse(entry);
+    else if (entry.type === 'disband') applyDisbandReverse(entry);
+  }
+
+  function pushFeHistory(entry) {
+    if (state.feHistoryIndex < state.feHistory.length) {
+      state.feHistory = state.feHistory.slice(0, state.feHistoryIndex); // 未来の分岐(やり直せた分)は破棄する
+    }
+    state.feHistory.push(entry);
+    state.feHistoryIndex++;
+    if (state.feHistory.length > HISTORY_CAP) {
+      state.feHistory.shift();
+      state.feHistoryIndex--;
+    }
+    renderHistoryUI();
+    scheduleAutoSave();
+  }
+
+  /** カード/セッションのIDが解決できないセッションを指したまま(操作でその場が消えた等)に
+   *  ならないよう、パンくずの無効な末尾を切り詰める。 */
+  function ensureBreadcrumbValid() {
+    let cutAt = -1;
+    for (let i = 0; i < state.breadcrumb.length; i++) {
+      if (!getSessionById(state.breadcrumb[i])) { cutAt = i; break; }
+    }
+    if (cutAt === -1) return;
+    state.breadcrumb = state.breadcrumb.slice(0, cutAt);
+    if (state.breadcrumb.length === 0) state.breadcrumb = [getCurrentYearSessionId()];
+    renderYearTabs();
+    renderBreadcrumb();
+  }
+
+  /** 履歴上の任意の位置(targetIndex件ぶんが適用済みの状態)へジャンプする。 */
+  function jumpToHistoryIndex(targetIndex) {
+    targetIndex = Math.max(0, Math.min(state.feHistory.length, targetIndex));
+    const from = state.feHistoryIndex;
+    if (targetIndex === from) return;
+    if (targetIndex < from) {
+      for (let i = from - 1; i >= targetIndex; i--) applyEntryReverse(state.feHistory[i]);
+    } else {
+      for (let i = from; i < targetIndex; i++) applyEntryForward(state.feHistory[i]);
+    }
+    state.feHistoryIndex = targetIndex;
+    ensureBreadcrumbValid();
     clearSelectionAndPanel();
     renderAllCards();
     renderHistoryUI();
-    playFlightEngineerRedoSound();
-    setStatus(`やり直しました: ${entry.label}`);
+    if (targetIndex < from) playFlightEngineerUndoSound();
+    else playFlightEngineerRedoSound();
+    const entry = targetIndex > 0 ? state.feHistory[targetIndex - 1] : null;
+    setStatus(entry ? `履歴を移動しました: ${entry.label}` : '履歴を操作前の状態に戻しました');
     scheduleAutoSave();
   }
 
@@ -838,30 +869,30 @@
     return `${Math.round(h / 24)}日前`;
   }
 
-  function historyRowHtml(entry, latest, isRedo) {
-    const icon = entry.type === 'stow' ? '⇲' : '⌁';
-    return `<div class="fe-hist-row${latest ? ' latest' : ''}${isRedo ? ' redo' : ''}">` +
-      `<span class="fe-hist-ico">${icon}</span><span class="fe-hist-label">${escapeHtml(entry.label)}</span>` +
-      `<span class="fe-hist-time">${feTimeAgo(entry.at)}</span></div>`;
+  function historyRowHtml(label, icon, at, jumpIndex, isCurrent, isFuture) {
+    const timeHtml = at ? `<span class="fe-hist-time">${feTimeAgo(at)}</span>` : '';
+    return `<div class="fe-hist-row${isCurrent ? ' current' : ''}${isFuture ? ' future' : ''}" data-fe-jump="${jumpIndex}">` +
+      `<span class="fe-hist-ico">${icon}</span><span class="fe-hist-label">${escapeHtml(label)}</span>${timeHtml}</div>`;
   }
 
   function renderHistoryUI() {
     if (!feEls) return;
-    const undoStack = state.feUndoStack || [];
-    const redoStack = state.feRedoStack || [];
-    feEls.badge.textContent = String(undoStack.length);
-    feEls.undoBtn.disabled = undoStack.length === 0;
-    feEls.redoBtn.disabled = redoStack.length === 0;
+    const history = state.feHistory || [];
+    feEls.badge.textContent = String(state.feHistoryIndex);
     if (!feEls.historyList.classList.contains('open')) return;
-    if (undoStack.length === 0 && redoStack.length === 0) {
-      feEls.historyList.innerHTML = '<div class="fe-hist-empty">まだ操作履歴がありません。格納・解体のみここに記録されます(整理・単発の移動は対象外)。</div>';
+    if (history.length === 0) {
+      feEls.historyList.innerHTML = '<div class="fe-hist-empty">まだ操作履歴がありません。格納・解体のみここに記録されます(整理・単発の移動は対象外)。タップでその時点へ戻れます。</div>';
       return;
     }
-    const rows = undoStack.slice().reverse().map((e, i) => historyRowHtml(e, i === 0, false)).join('');
-    const redoRows = redoStack.length
-      ? `<div class="fe-hist-sep">やり直せる操作</div>${redoStack.slice().reverse().map((e) => historyRowHtml(e, false, true)).join('')}`
-      : '';
-    feEls.historyList.innerHTML = rows + redoRows;
+    const rows = [historyRowHtml('(操作前の状態)', '⟲', null, 0, state.feHistoryIndex === 0, false)];
+    history.forEach((entry, i) => {
+      const icon = entry.type === 'stow' ? '⇲' : '⌁';
+      rows.push(historyRowHtml(entry.label, icon, entry.at, i + 1, i + 1 === state.feHistoryIndex, i >= state.feHistoryIndex));
+    });
+    feEls.historyList.innerHTML = rows.join('');
+    feEls.historyList.querySelectorAll('[data-fe-jump]').forEach((row) => {
+      row.addEventListener('click', () => jumpToHistoryIndex(parseInt(row.dataset.feJump, 10)));
+    });
   }
 
   /* ---------------- セッションのプレビュー(ダブルクリック、読み取り専用) ---------------- */
