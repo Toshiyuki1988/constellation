@@ -2296,12 +2296,41 @@ function renderInfoTicker() {
  * 取得済みのfileIdはキャッシュし、セッションの行き来などで再描画されても再取得しない。 */
 
 const blobUrlCache = new Map();
+// 一日を通して複数のセッションを行き来していると、開いた写真・動画の実データ(Blob)が
+// ブラウザメモリに際限なく溜まり続け、俯瞰でカードが多い時にカクつくという実機報告(2026年9月)
+// があった。「セッションの行き来で再描画されても再取得しない」という既存のキャッシュの狙いは
+// 保ちつつ、上限を超えたら現在のセッション以外で最近使っていないものから実際のBlobを
+// 解放する(URL.revokeObjectURL())ことで両立させる。
+const BLOB_CACHE_MAX = 120;
 
 function getFileBlobUrlCached(fileId) {
-  if (!blobUrlCache.has(fileId)) {
-    blobUrlCache.set(fileId, fetchFileBlobUrl(fileId));
+  if (blobUrlCache.has(fileId)) {
+    // LRU: 触れたら最後尾(最近使った側)へ移動する(Mapは挿入順を保持するため、
+    // 削除して入れ直すだけで並び替えられる)
+    const existing = blobUrlCache.get(fileId);
+    blobUrlCache.delete(fileId);
+    blobUrlCache.set(fileId, existing);
+    return existing;
   }
-  return blobUrlCache.get(fileId);
+  const promise = fetchFileBlobUrl(fileId);
+  blobUrlCache.set(fileId, promise);
+  evictOldBlobUrls();
+  return promise;
+}
+
+/** 現在のセッションのファイルは対象外(表示中のものを誤って解放しないため)にしつつ、
+ *  上限を超えたぶんだけ最も長く使われていないものから解放する。 */
+function evictOldBlobUrls() {
+  if (blobUrlCache.size <= BLOB_CACHE_MAX) return;
+  const keepFileIds = new Set(
+    state.cards.filter((c) => c.sessionId === activeSessionId() && c.imageFileId).map((c) => c.imageFileId)
+  );
+  for (const [fileId, promise] of blobUrlCache) {
+    if (blobUrlCache.size <= BLOB_CACHE_MAX) break;
+    if (keepFileIds.has(fileId)) continue;
+    blobUrlCache.delete(fileId);
+    promise.then((url) => URL.revokeObjectURL(url)).catch(() => {});
+  }
 }
 
 let mediaVisibilityObserver = null;
