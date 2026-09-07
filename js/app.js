@@ -2316,7 +2316,14 @@ function getFileBlobUrlCached(fileId) {
     blobUrlCache.set(fileId, existing);
     return existing;
   }
-  const promise = fetchFileBlobUrl(fileId);
+  const promise = fetchFileBlobUrl(fileId).catch((err) => {
+    // 失敗したPromiseをキャッシュに残すと、原因(トークン失効直後の再取得タイミングなど、
+    // 一時的なことが多い)が解消した後もこのfileIdだけ永久に再取得されなくなり、
+    // ズームインしても低解像度のサムネイルのまま固定されてしまう(2026年9月、実機報告)。
+    // 失敗時はキャッシュから消し、次に呼ばれた時に改めて取得を試みられるようにする。
+    blobUrlCache.delete(fileId);
+    throw err;
+  });
   blobUrlCache.set(fileId, promise);
   evictOldBlobUrls();
   return promise;
@@ -2354,19 +2361,40 @@ function observeMediaForLazyLoad(el, card) {
   mediaVisibilityObserver.observe(el);
 }
 
+// 本画像の取得に失敗した回数(カード要素ごと)。無限リトライで叩き続けないよう上限を設ける。
+const mediaLoadFailCount = new WeakMap();
+
+/**
+ * 本画像(フル解像度)の取得に失敗しても、以前は静かに諦めてサムネイルのまま固定されて
+ * しまっていた(.then()にcatchが無く、失敗の痕跡も残らなかった。2026年9月、実機報告:
+ * 一日使っていると写真がいつまでもぼやけたサムネイルのまま)。原因の多くはOAuthトークンの
+ * 失効タイミングなど一時的なものと考えられるため、失敗時は少し待ってから再度Observerへ
+ * 登録し直し、画面内に入り直したタイミングで自然にリトライさせる(最大3回まで)。
+ */
 function loadFullMedia(el, card) {
   const mediaEl = el.querySelector('.star-card-media');
   if (!mediaEl || !card.imageFileId) return;
   const mediaType = card.mediaType || 'image';
-  getFileBlobUrlCached(card.imageFileId).then((url) => {
-    if (mediaType === 'video') {
-      mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
-    } else if (mediaType === 'audio') {
-      mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
-    } else {
-      mediaEl.style.backgroundImage = `url(${url})`;
-    }
-  });
+  getFileBlobUrlCached(card.imageFileId)
+    .then((url) => {
+      mediaLoadFailCount.delete(el);
+      if (mediaType === 'video') {
+        mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
+      } else if (mediaType === 'audio') {
+        mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
+      } else {
+        mediaEl.style.backgroundImage = `url(${url})`;
+      }
+    })
+    .catch((err) => {
+      const failCount = (mediaLoadFailCount.get(el) || 0) + 1;
+      mediaLoadFailCount.set(el, failCount);
+      console.warn(`本画像の取得に失敗(${failCount}回目、サムネイルのまま表示を続けます)`, err);
+      debugLog(`本画像の取得に失敗(${failCount}回目): ${err.message}`); // スマホでもデバッグパネル(🐞)から追える
+      if (failCount <= 3) {
+        setTimeout(() => observeMediaForLazyLoad(el, card), 3000);
+      }
+    });
 }
 
 /**
