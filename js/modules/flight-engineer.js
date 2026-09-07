@@ -197,6 +197,11 @@
       shiftHeld = true;
       syncPanningEnabled();
     }
+    // 非常口(2026年9月追加)。バーが何らかの理由で見えなくなった/操作できなくなった状態で
+    // 矩形選択モードだけがONのまま残り、パンもできず抜け出せない、という実機報告があった
+    // (原因はバーのDOM detachなど未特定だが、再発時に確実に復帰できる手段を優先して用意する)。
+    // バーの状態に関係なく、feActive中はEscapeキーで必ず終了できるようにする。
+    if (event.key === 'Escape' && feActive) closeFlightEngineer();
   });
   document.addEventListener('keyup', (event) => {
     if (event.key === 'Shift') {
@@ -326,6 +331,10 @@
       stylesInjected = true;
     }
     ensureBarDom();
+    // 稀にバーの要素がDOMから外れた状態でfeEls参照だけ残ってしまうケースへの保険
+    // (2026年9月、実機で「バーが出てこない」報告があったが根本原因は未特定のまま)。
+    // 外れていたら同じ要素を作り直さず、そのまま挿し直すだけで復旧できる。
+    if (!els.viewport.contains(feEls.bar)) els.viewport.appendChild(feEls.bar);
     feEls.bar.classList.add('open');
     if (!feActive) toggleFeActive(true);
     renderHistoryUI();
