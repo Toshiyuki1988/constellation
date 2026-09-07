@@ -235,12 +235,13 @@
         background: rgba(179, 64, 43, 0.12); border: 1px solid rgba(179, 64, 43, 0.35); border-radius: 6px;
         padding: 6px 8px; margin: 0 0 8px;
       }
-      .ms-embed-geo-btn {
+      .ms-embed-geo-btn, .ms-embed-open-maps-btn {
         width: 100%; padding: 8px; border-radius: 7px; border: 1px dashed rgba(255, 255, 255, 0.22);
         background: none; color: rgba(255, 255, 255, 0.8); font-family: 'Zen Kaku Gothic New', sans-serif;
         font-size: 11px; cursor: pointer; margin-bottom: 10px;
       }
-      .ms-embed-geo-btn:hover { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
+      .ms-embed-geo-btn:hover, .ms-embed-open-maps-btn:hover { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
+      .ms-embed-open-maps-btn { margin-bottom: 8px; }
       .ms-embed-maptype-row { display: flex; gap: 5px; background: rgba(255, 255, 255, 0.04); border-radius: 999px; padding: 3px; margin-bottom: 10px; }
       .ms-embed-maptype-opt {
         flex: 1; border: none; background: transparent; border-radius: 999px; padding: 6px 0;
@@ -385,6 +386,11 @@
       .ms-handle-rotate { left: 50%; top: 0; cursor: grab; }
       .ms-handle-move { left: 50%; top: 50%; cursor: grab; }
       .ms-handle-move:active { cursor: grabbing; }
+      .ms-handle-delete {
+        right: 0; top: 0; cursor: pointer;
+        background: rgba(179, 64, 43, 0.85); font-size: 10px;
+      }
+      .ms-handle-delete:hover { background: #b3402b; }
 
       /* ---- 展開時の演出(スキャン反射のように左から右へ広がる) ---- */
       .ms-maplayer.ms-deploying { animation: ms-deploy-reveal ${DEPLOY_ANIM_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
@@ -446,6 +452,7 @@
       </div>
       <div class="ms-block ms-block-embed" hidden>
         <p class="ms-block-label">場所を呼び出す(押すたびに1枚追加)</p>
+        <button class="ms-embed-open-maps-btn">🗺️ Googleマップを新規タブで開く</button>
         <div class="ms-embed-search-row">
           <input type="text" class="ms-embed-input" placeholder="GoogleマップのURL、または「緯度,経度」">
           <button class="ms-embed-search-btn">呼出</button>
@@ -453,10 +460,12 @@
         <p class="ms-embed-warn" hidden></p>
         <button class="ms-embed-geo-btn">📍 現在地から呼び出す</button>
         <p class="ms-hint">
-          施設名の自由文検索は非対応(ジオコーディングAPIが必要になるため)。Googleマップで探した
-          場所のURLをコピーして貼るか、「緯度,経度」の形式で入力。広い範囲は1枚だと粗くなるため、
-          ズームの効いたURLを何度も呼び出して並べて敷き詰める使い方を想定している。地図種別・
-          不透明度・グレースケールは下の「配置済みの地図」欄から地図ごとに調整できる。
+          施設名の自由文検索はこのアプリ単体では非対応(ジオコーディングAPIが必要になるため)。
+          上のボタンでGoogleマップを別タブで開いて施設名を検索し、アドレスバーのURLをコピーして
+          この欄に貼ると、その場所を呼び出せる(「緯度,経度」の直接入力にも対応)。広い範囲は
+          1枚だと粗くなるため、ズームの効いたURLを何度も呼び出して並べて敷き詰める使い方を
+          想定している。地図種別・不透明度・グレースケールは下の「配置済みの地図」欄から地図
+          ごとに調整できる。
         </p>
       </div>
       <div class="ms-block ms-block-preview">
@@ -491,6 +500,7 @@
       currentBlock: win.querySelector('.ms-block-current'),
       currentList: win.querySelector('.ms-maprow-list'),
       embedBlock: win.querySelector('.ms-block-embed'),
+      embedOpenMapsBtn: win.querySelector('.ms-embed-open-maps-btn'),
       embedInput: win.querySelector('.ms-embed-input'),
       embedSearchBtn: win.querySelector('.ms-embed-search-btn'),
       embedWarn: win.querySelector('.ms-embed-warn'),
@@ -513,6 +523,9 @@
     msEls.fetchBtn.addEventListener('click', fetchOutdoorMap);
     msEls.deployBtn.addEventListener('click', deployToCanvas);
 
+    msEls.embedOpenMapsBtn.addEventListener('click', () => {
+      window.open('https://www.google.com/maps/', '_blank', 'noopener,noreferrer');
+    });
     msEls.embedSearchBtn.addEventListener('click', doEmbedSearch);
     msEls.embedInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doEmbedSearch(); });
     msEls.embedGeoBtn.addEventListener('click', doEmbedGeo);
@@ -1391,7 +1404,7 @@
 
   /* ==================== キャンバス背景としての描画(js/app.jsのrenderAllCards()から呼ばれる) ==================== */
 
-  function applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle) {
+  function applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle) {
     el.style.transform = `translate(${layer.x}px, ${layer.y}px) rotate(${layer.rotation}deg) scale(${layer.scale})`;
     // ハンドルは常に一定の見た目サイズ・向きに保つため、親のscale/rotationを打ち消す。
     // layer.scaleだけでなく、キャンバス全体のズーム(viewportState.scale、canvas-content配下に
@@ -1402,6 +1415,7 @@
     if (moveHandle) moveHandle.style.transform = `translate(-50%, -50%) ${counter}`;
     if (resizeHandle) resizeHandle.style.transform = `translate(50%, 50%) ${counter}`;
     if (rotateHandle) rotateHandle.style.transform = `translate(-50%, -160%) ${counter}`;
+    if (deleteHandle) deleteHandle.style.transform = `translate(50%, -50%) ${counter}`;
   }
 
   function renderMappingStorysLayer(opts) {
@@ -1514,6 +1528,7 @@
     let moveHandle = null;
     let resizeHandle = null;
     let rotateHandle = null;
+    let deleteHandle = null;
     if (editingOpen) {
       moveHandle = document.createElement('div');
       moveHandle.className = 'ms-handle ms-handle-move';
@@ -1534,10 +1549,18 @@
         rotateHandle.title = 'ドラッグで回転';
         el.appendChild(rotateHandle);
       }
-      wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle);
+      // 削除は「配置済みの地図」欄のリストからも可能だが、複数枚重なっていると目当ての
+      // 行を探しにくいという声を受け、地図本体にも直接✕ハンドルを置いた(2026年9月)。
+      // 挙動・確認ダイアログはリスト側のremoveMapLayer()と完全に共通化する。
+      deleteHandle = document.createElement('div');
+      deleteHandle.className = 'ms-handle ms-handle-delete';
+      deleteHandle.title = 'この地図を削除';
+      deleteHandle.textContent = '✕';
+      el.appendChild(deleteHandle);
+      wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
     }
 
-    applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
+    applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
     container.appendChild(el);
 
     if (animateThis) {
@@ -1557,7 +1580,7 @@
    * 地図の広い当たり判定がキャンバスのピンチズーム・ダブルタップ俯瞰を奪ってしまう不具合が
    * あったため、2026年9月にハンドル方式へ変更した。
    */
-  function wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle) {
+  function wireEditHandlers(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle) {
     let dragging = false;
     let dragStart = { x: 0, y: 0 };
     let origPos = { x: 0, y: 0 };
@@ -1572,7 +1595,7 @@
       if (!dragging) return;
       layer.x = origPos.x + (e.clientX - dragStart.x) / viewportState.scale;
       layer.y = origPos.y + (e.clientY - dragStart.y) / viewportState.scale;
-      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
     });
     const endDrag = () => { if (dragging) { dragging = false; scheduleAutoSave(); } };
     moveHandle.addEventListener('pointerup', endDrag);
@@ -1593,11 +1616,19 @@
       const dx = (e.clientX - resizeStartX) / viewportState.scale;
       const factor = 1 + dx / 200; // 200pxのドラッグでおよそ2倍、というざっくりした感度
       layer.scale = Math.max(0.05, Math.min(8, origScale * factor));
-      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
     });
     const endResize = () => { if (resizing) { resizing = false; scheduleAutoSave(); } };
     resizeHandle.addEventListener('pointerup', endResize);
     resizeHandle.addEventListener('pointercancel', endResize);
+
+    if (deleteHandle) {
+      deleteHandle.addEventListener('pointerdown', (e) => e.stopPropagation());
+      deleteHandle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeMapLayer(layer.id);
+      });
+    }
 
     if (!rotateHandle) return; // embed(Googleマップ)は回転ハンドルを持たないため、以降の配線をスキップする
 
@@ -1621,7 +1652,7 @@
       const cy = rect.top + rect.height / 2;
       const angle = (Math.atan2(e.clientY - cy, e.clientX - cx) * 180) / Math.PI;
       layer.rotation = origRotation + (angle - rotateStartAngle);
-      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle);
+      applyMapLayerTransform(el, layer, moveHandle, resizeHandle, rotateHandle, deleteHandle);
     });
     const endRotate = () => { if (rotating) { rotating = false; scheduleAutoSave(); } };
     rotateHandle.addEventListener('pointerup', endRotate);
