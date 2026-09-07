@@ -643,6 +643,7 @@ html, body {
   padding: 6px 7px;
 }
 .star-card-memo-view a { pointer-events: auto; color: #2e7d32; text-decoration: underline; }
+.star-card-memo-favicon { width: 14px; height: 14px; vertical-align: -2px; margin-right: 3px; border-radius: 2px; }
 
 /* 写真・動画・音声カードのメモ欄は、抽出テキストなどで長くなっても無制限には伸ばさない。
    flex:1の写真エリアはflex-basisが0%のため、メモが際限なく伸びると写真側の再計算の余地が

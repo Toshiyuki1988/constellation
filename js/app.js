@@ -3236,7 +3236,18 @@ function linkifyMemoHtml(text) {
     const url = trimTrailing ? trimTrailing[1] : match[0];
     const trailing = trimTrailing ? trimTrailing[2] : '';
     if (url) {
-      result += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+      // リンク先のファビコンを添える(2026年9月追加)。任意URLのOGP画像はCORS制約で
+      // ブラウザから直接取得できず、Geminiの検索系ツールは無料キーで429になるため、
+      // APIキー不要でAPI無料枠も消費しないGoogleの公開ファビコンサービスを使う。
+      // ドメインとして解釈できないURL(相対パスの誤検出など)ではファビコンを省く。
+      let faviconHtml = '';
+      try {
+        const domain = new URL(url).hostname;
+        faviconHtml = `<img class="star-card-memo-favicon" src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32" alt="" width="14" height="14">`;
+      } catch (err) {
+        // URLとして解釈できなければファビコンは付けない(リンク自体は表示する)
+      }
+      result += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${faviconHtml}${escapeHtml(url)}</a>`;
     }
     result += escapeHtml(trailing);
     lastIndex = match.index + match[0].length;

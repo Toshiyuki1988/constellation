@@ -270,7 +270,7 @@ Calendar APIの`calendar.app.created`スコープは、Google Cloud Consoleの�
 - **`linkifyMemoHtml(text)`**: `https?://`で始まる文字列を検出し、それ以外の部分は`escapeHtml()`でエスケープしてから`<a>`タグへ差し替える(XSS対策、hrefも同様にエスケープ)。文末の句読点・閉じ括弧はURLの一部として誤って拾わないよう切り離す
 - **リンクは既定でもクリックできる**: `.star-card-memo-view`自体は他のメモ欄と同じくpointer-events:noneのまま(カードの移動を優先)だが、`<a>`要素にだけ`pointer-events:auto`を個別に付けている。`js/canvas.js`の`attachCardGestures()`が元々`<a>`をカードのドラッグ/長押し判定から除外済み(公式ページリンク等のため)だったので、Editモードのような追加のゲート無しに、既定表示のままリンクだけ安全にクリックできる(単純なクリックはドラッグ距離が無いため、interact.jsのパンとも競合しない)
 - メモ本文自体のコピペ(テキスト選択)は、従来通りEditモードで表示されるtextarea経由で行う(この変更による退行は無い)
-- 「検索先のサムネも取得」については、任意のURLのOGP画像を取得するにはCORSの制約で外部サイトのHTMLをブラウザから直接scrapeできず、Geminiの`url_context`/`google_search`系ツールは無料キーで429になることが既に判明している(本ファイル上部の既存の注記を参照)ため、確実に無料で実現できる方式が定まるまで保留にしている
+- **リンク先のファビコン(2026年9月追加)**: 「検索先のサムネも取得」という要望への対応。任意のURLのOGP画像を取得するにはCORSの制約で外部サイトのHTMLをブラウザから直接scrapeできず、Geminiの`url_context`/`google_search`系ツールは無料キーで429になることが既に判明している(本ファイル上部の既存の注記を参照)ため、記事内容が伝わる本格的なサムネイルではなく、**APIキー不要・無料枠を消費しないGoogleの公開ファビコンサービス(`https://www.google.com/s2/favicons?domain=...`)**で妥協した。`linkifyMemoHtml()`が検出した各URLの`hostname`をこのURLへ渡し、`<a>`タグの中に小さい`<img>`として埋め込む(クリックはリンク全体で受け付けるため、アイコン単体にpointer-eventsの追加設定は不要)。`new URL(url)`でホスト名を取り出せない(=正規のURLとして解釈できない)場合は、ファビコンを省いてリンクだけ表示する
 
 ## まだ実装できていない機能(新構成側)
 
