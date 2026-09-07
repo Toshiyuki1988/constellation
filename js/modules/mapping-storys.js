@@ -251,6 +251,14 @@
       .ms-embed-slider-row span:first-child { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; color: rgba(255, 255, 255, 0.45); width: 62px; flex: none; }
       .ms-embed-slider-row input[type=range] { flex: 1; accent-color: #3fae63; }
       .ms-embed-slider-row span:last-child { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #fff; width: 32px; text-align: right; flex: none; }
+      .ms-zoom-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 8px; }
+      .ms-zoom-btn {
+        width: 24px; height: 24px; border-radius: 50%; flex: none; padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.04);
+        color: rgba(255, 255, 255, 0.85); font-size: 13px; line-height: 1; cursor: pointer;
+      }
+      .ms-zoom-btn:hover { border-color: rgba(63, 174, 99, 0.5); background: rgba(63, 174, 99, 0.15); }
+      .ms-zoom-val { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.7); width: 68px; text-align: center; }
       .ms-lore { margin-top: 6px; }
       .ms-lore-btn {
         width: 100%; border: 1px solid rgba(63, 174, 99, 0.4); background: rgba(63, 174, 99, 0.1);
@@ -263,6 +271,12 @@
         margin: 6px 0 0; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; line-height: 1.7;
         color: rgba(255, 255, 255, 0.82); background: rgba(255, 255, 255, 0.03); border-radius: 6px; padding: 8px 9px;
       }
+      .ms-lore-export-btn {
+        width: 100%; margin-top: 6px; border: 1px solid rgba(255, 255, 255, 0.18); background: none;
+        color: rgba(255, 255, 255, 0.75); border-radius: 6px; padding: 6px 8px; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10.5px; cursor: pointer;
+      }
+      .ms-lore-export-btn:hover { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
       .ms-preview {
         width: 100%; height: 90px; border-radius: 8px; overflow: hidden; position: relative;
         background: repeating-conic-gradient(rgba(255, 255, 255, 0.05) 0% 25%, rgba(255, 255, 255, 0.02) 0% 50%) 0 0 / 12px 12px;
@@ -605,6 +619,7 @@
           maptypeRow.appendChild(btn);
         });
         row.appendChild(maptypeRow);
+        row.appendChild(buildZoomRow(layer));
         row.appendChild(buildMapRowSlider('不透明度', layer.opacity, 10, layer.id, (v) => {
           layer.opacity = v;
           scheduleAutoSave();
@@ -637,13 +652,40 @@
     textEl.className = 'ms-lore-text';
     textEl.textContent = layer.loreText || '';
     textEl.hidden = !layer.loreText;
-    btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl));
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'ms-lore-export-btn';
+    exportBtn.textContent = 'テクストとして出力';
+    exportBtn.hidden = !layer.loreText;
+    exportBtn.addEventListener('click', () => exportLoreAsTextCard(layer));
+    btn.addEventListener('click', () => fetchLayerLore(layer, btn, textEl, exportBtn));
     wrap.appendChild(btn);
     wrap.appendChild(textEl);
+    wrap.appendChild(exportBtn);
     return wrap;
   }
 
-  async function fetchLayerLore(layer, btnEl, textEl) {
+  /**
+   * 伝承テキストをキャンバス上の新規テクストカードとして書き出す(ユーザー要望、2026年9月)。
+   * 地図はカードではないためASTR接続はできない(サマリーの出典接続とは異なる)。押すたびに
+   * 新しいカードが増える(キャッシュ・重複排除はしない、テクスト出力を優先する既存方針を踏襲)。
+   */
+  function exportLoreAsTextCard(layer) {
+    if (!layer.loreText) return;
+    const newCard = createTextCard(layer.loreText);
+    const anchorX = typeof layer.x === 'number' ? layer.x : 0;
+    const anchorY = typeof layer.y === 'number' ? layer.y : 0;
+    newCard.x = anchorX + (Math.random() * 80 - 40);
+    newCard.y = anchorY + (Math.random() * 80 - 40);
+    const newEl = cardElById(newCard.id);
+    if (newEl) {
+      newEl.dataset.x = String(newCard.x);
+      newEl.dataset.y = String(newCard.y);
+      applyCardTransform(newEl);
+    }
+    setStatus('伝承をテクストカードとして出力しました');
+  }
+
+  async function fetchLayerLore(layer, btnEl, textEl, exportBtnEl) {
     btnEl.disabled = true;
     btnEl.textContent = '調べています…';
     setStatus('Mapping Storys: この土地の伝承を調べています…', { busy: true });
@@ -656,6 +698,7 @@
       layer.loreFetchedAt = new Date().toISOString();
       textEl.textContent = text;
       textEl.hidden = false;
+      if (exportBtnEl) exportBtnEl.hidden = false;
       scheduleAutoSave();
       setStatus('この土地の伝承を取得しました');
     } catch (err) {
@@ -697,6 +740,41 @@
     wrap.appendChild(labelSpan);
     wrap.appendChild(input);
     wrap.appendChild(valSpan);
+    return wrap;
+  }
+
+  /**
+   * embed地図1枚ぶんのズーム＋/－ボタン。ユーザー要望(2026年9月): 配置後に地図種別・
+   * 不透明度と同じ小窓UIから直接ズーム調整できるようにし、「ズーム→移動→伝承を再取得」を
+   * ページを離れずアプリ内だけで完結させる。パンと違い、ズーム変更はGoogleマップ側の縮尺
+   * 自体を変えるため、パン確定時(wireEmbedPan)と同じくiframeのsrcを再構築して反映する
+   * (座標そのものは変わらないため、layer.lat/lngはそのまま使い回す)。
+   */
+  function buildZoomRow(layer) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ms-zoom-row';
+    const minusBtn = document.createElement('button');
+    minusBtn.className = 'ms-zoom-btn';
+    minusBtn.type = 'button';
+    minusBtn.textContent = '－';
+    const label = document.createElement('span');
+    label.className = 'ms-zoom-val';
+    label.textContent = `ズーム ${layer.zoom}`;
+    const plusBtn = document.createElement('button');
+    plusBtn.className = 'ms-zoom-btn';
+    plusBtn.type = 'button';
+    plusBtn.textContent = '＋';
+    const applyZoom = (delta) => {
+      layer.zoom = Math.min(21, Math.max(3, layer.zoom + delta));
+      label.textContent = `ズーム ${layer.zoom}`;
+      scheduleAutoSave();
+      renderMappingStorysLayer();
+    };
+    minusBtn.addEventListener('click', () => applyZoom(-1));
+    plusBtn.addEventListener('click', () => applyZoom(1));
+    wrap.appendChild(minusBtn);
+    wrap.appendChild(label);
+    wrap.appendChild(plusBtn);
     return wrap;
   }
 
