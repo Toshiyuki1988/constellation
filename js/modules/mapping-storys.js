@@ -278,9 +278,14 @@
       }
       .ms-lore-question-btn:hover:not(:disabled) { border-color: rgba(63, 174, 99, 0.5); color: #fff; }
       .ms-lore-question-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .ms-lore-question-hint {
+        margin: 4px 0 0; font-family: 'IBM Plex Mono', monospace; font-size: 8px;
+        color: rgba(255, 255, 255, 0.32);
+      }
+      .ms-lore-divider { margin: 10px 0; border-top: 1px dashed rgba(255, 255, 255, 0.14); }
       .ms-lore-paste-label {
-        margin: 8px 0 4px; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px;
-        letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.4);
+        margin: 0 0 4px; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px;
+        letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.4); line-height: 1.5;
       }
       .ms-lore-paste-input {
         width: 100%; box-sizing: border-box; margin-bottom: 6px; border: 1px solid rgba(255, 255, 255, 0.16);
@@ -752,10 +757,18 @@
     const questionBtn = document.createElement('button');
     questionBtn.className = 'ms-lore-question-btn';
     questionBtn.textContent = 'この質問をそのまま送る';
+    // 直下の「貼り付け」欄(検索グラウンディングあり)と縦に並ぶと、このボタン自体にも
+    // グラウンディングが掛かっているかのように誤解されるという実機報告(2026年9月)があった
+    // ため、ここは検索なしのAPI直送であることを明記するキャプションを添える。
+    const questionHint = document.createElement('p');
+    questionHint.className = 'ms-lore-question-hint';
+    questionHint.textContent = '↑検索グラウンディング無し(API直送・無料枠を消費)';
 
+    const pasteDivider = document.createElement('div');
+    pasteDivider.className = 'ms-lore-divider';
     const pasteLabel = document.createElement('p');
     pasteLabel.className = 'ms-lore-paste-label';
-    pasteLabel.textContent = 'gemini.google.comの回答を貼り付け(検索グラウンディングあり、任意):';
+    pasteLabel.textContent = '↓ここは別: 自分でgemini.google.comを開いて得た回答を貼り付け(検索グラウンディングあり、任意)';
     const pasteInput = document.createElement('textarea');
     pasteInput.className = 'ms-lore-paste-input';
     pasteInput.rows = 3;
@@ -789,6 +802,8 @@
     });
     wrap.appendChild(questionInput);
     wrap.appendChild(questionBtn);
+    wrap.appendChild(questionHint);
+    wrap.appendChild(pasteDivider);
     wrap.appendChild(pasteLabel);
     wrap.appendChild(pasteInput);
     wrap.appendChild(pasteBtn);
