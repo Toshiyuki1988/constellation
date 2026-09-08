@@ -1,5 +1,14 @@
 // Google Drive API v3 をブラウザから直接叩くラッパー。
 // drive.file スコープのため、このアプリが作成したファイル/フォルダにのみアクセス可能。
+//
+// **アプリ側からDrive上の元画像・元ファイルを削除する関数は意図的に持たない(2026年9月)**。
+// 以前は写真カードのExtract機能に「元画像を削除してテクストカードに変換」という選択肢があり、
+// ゴミ箱を経由しない完全削除(files.delete)を呼んでいたが、確認ダイアログのOK/キャンセルの
+// 意味が分かりにくかったせいで実機でユーザーが誤操作し、二度と戻せない写真を失う事故が
+// あった。ユーザーから「アプリ側からDriveの元画像はいじらないで。バックアップなので」という
+// 明確な方針が示されたため、削除用の関数(旧deleteFile())ごと撤去した。今後も同種の機能
+// (元ファイルを消して何かに置き換える等)を作らないこと。ファイルを「使わなくする」場合は、
+// カード側の参照(imageFileIdなど)を外すだけに留め、Drive上の実体には触れない。
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -152,11 +161,6 @@ async function moveFile(fileId, newParentId) {
   const params = new URLSearchParams({ addParents: newParentId });
   if (parents && parents.length > 0) params.set('removeParents', parents.join(','));
   await driveFetch(`/files/${fileId}?${params}`, { method: 'PATCH' });
-}
-
-/** ファイルをゴミ箱を経由せず完全に削除する(容量をその場で解放したい場合に使う) */
-async function deleteFile(fileId) {
-  await driveFetch(`/files/${fileId}`, { method: 'DELETE' });
 }
 
 /**

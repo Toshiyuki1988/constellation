@@ -167,10 +167,15 @@ function closeSettings() {
  * ラベル付きの対等なボタンとして並べ、背景クリックだけを「何も選ばない」という本当の意味での
  * キャンセルとして扱う(その場合はnullを返す)。settings-modalと同じ.modal-overlay/.modalの
  * 見た目を流用しつつ、内容は呼び出しごとに動的に組み立てる。
- * @param {{title: string, options: {label: string, value: string, secondary?: boolean}[]}} params
+ * @param {{title: string, message?: string, options: {label: string, value: string, secondary?: boolean, danger?: boolean}[]}} params
+ *   message: タイトル下に添える補足文(OCR結果のプレビューなど)。改行はそのまま保持して表示する。
+ *   danger: 元に戻せない破壊的な選択肢であることを示す赤系の強調ボタンにする(2026年9月追加。
+ *   Extractで「OK/キャンセル」の分かりにくさが原因でユーザーが誤って写真を完全に失う実機報告が
+ *   あったため、選択肢自体を対等なラベル付きボタンにするだけでなく、破壊的な方だけ見た目でも
+ *   区別できるようにした)。
  * @returns {Promise<string|null>}
  */
-function showChoiceDialog({ title, options }) {
+function showChoiceDialog({ title, message, options }) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay visible';
@@ -178,9 +183,16 @@ function showChoiceDialog({ title, options }) {
     modal.className = 'modal';
     const heading = document.createElement('h2');
     heading.textContent = title;
+    modal.appendChild(heading);
+    if (message) {
+      const desc = document.createElement('p');
+      desc.className = 'modal-desc';
+      desc.style.whiteSpace = 'pre-wrap';
+      desc.textContent = message;
+      modal.appendChild(desc);
+    }
     const actions = document.createElement('div');
     actions.className = 'modal-actions';
-    modal.appendChild(heading);
     modal.appendChild(actions);
     overlay.appendChild(modal);
 
@@ -192,6 +204,7 @@ function showChoiceDialog({ title, options }) {
       const btn = document.createElement('button');
       btn.textContent = opt.label;
       if (opt.secondary) btn.className = 'secondary';
+      if (opt.danger) btn.classList.add('danger');
       btn.addEventListener('click', () => finish(opt.value));
       actions.appendChild(btn);
     });
@@ -2851,12 +2864,21 @@ async function handleCardCaption(card, el) {
  * 読み取りたい部分を自由形状(なぞって囲む、四角形限定ではない)で選べるようにした。何も囲まずに
  * 「画像全体を読み取る」を押せば、これまで通り画像全体が対象になる。キャンバス上の小さいカード
  * 表示のまま範囲を選ばせると精度が出ないため、専用のフルスクリーンオーバーレイで元画像の
- * 表示サイズいっぱいに描かせる。抽出は1回だけ行い、その後どう使うかを2択で確認する。
- * - OK(破棄): mediaTypeをimageからtextへ完全に作り替え、Drive上の元画像も削除する(元に戻せない)
- * - キャンセル(残す): 元の写真カードには一切触れず、抽出した文字だけを新しいテクストカードとして
- *   作る(サマリーカードの出力と同じ経路: createAstrConnection()で星座線を繋ぎ、効果音・発光
- *   演出も乗る)。以前は写真カード自身のメモ欄に追記していたが、長文だとメモ欄がスクロール
+ * 表示サイズいっぱいに描かせる。抽出は1回だけ行い、その後どう使うかをshowChoiceDialog()の2択
+ * (ラベル付きの対等なボタン)で確認する。**window.confirm()のOK/キャンセルは使わない**
+ * (以前はOK/キャンセルで実装しており、どちらが写真を破棄する方か分かりにくく、実機でユーザーが
+ * 誤って写真とDrive上の元ファイルを完全に失う事故があった。2026年9月、致命的なバグとして修正)。
+ * **Drive上の元画像は、アプリ側からは一切削除・変更しない**(2026年9月、ユーザー方針: Driveは
+ * バックアップなので、アプリ側から元画像をいじらないこと)。以前は「破棄」を選ぶと
+ * deleteFile()でDrive上のファイルまで完全削除していたが、この呼び出し自体を撤去した。
+ * - 「テクストのみ表示に切り替える」: このカードのmediaTypeをimageからtextへ切り替え、
+ *   card.imageFileId(このカードからの参照)だけを外す。Drive上のファイル本体には触れない
+ *   ため、セッションのmediaフォルダに残り続け、Drive UI側からは引き続き見つけられる
+ * - 「写真はそのまま残す」: 元の写真カードには一切触れず、抽出した文字だけを新しいテクストカード
+ *   として作る(サマリーカードの出力と同じ経路: createAstrConnection()で星座線を繋ぎ、効果音・
+ *   発光演出も乗る)。以前は写真カード自身のメモ欄に追記していたが、長文だとメモ欄がスクロール
  *   形式になり読みにくくなるため、別カードに分ける形に変更した。
+ * - ダイアログの背景クリック(どちらも選ばない、本当の意味でのキャンセル): 何も変更せず終了する
  */
 async function handleCardExtract(card, el) {
   if (card.mediaType !== 'image') return;
@@ -2898,13 +2920,29 @@ async function handleCardExtract(card, el) {
   }
 
   const preview = text.length > 200 ? `${text.slice(0, 200)}…` : text;
-  const discard = window.confirm(
-    `文字を検出しました:\n\n${preview}\n\n` +
-    '「OK」: 写真を破棄し、この文字だけのテクストカードに完全変換します(元に戻せません)\n' +
-    '「キャンセル」: 元の写真カードはそのまま残し、抽出した文字を新しいテクストカードとして作ります'
-  );
+  // 以前はwindow.confirm()の「OK」「キャンセル」で2択を出していたが、どちらが写真を破棄する方か
+  // 分かりにくく、実機でユーザーが誤って写真とDrive上の元ファイルを完全に失う事故があった
+  // (2026年9月)。ラベル付きの対等なボタン(showChoiceDialog())に置き換えた。さらに、
+  // 「アプリ側からDriveの元画像は(バックアップなので)一切いじらない」というユーザー方針
+  // (2026年9月)を受けて、Drive上のファイルを削除するdeleteFile()の呼び出し自体を撤去した。
+  // 「テクストのみ表示」を選んでも、変更されるのはこのカードの表示形態(mediaType)だけで、
+  // Drive上の元ファイルはそのまま(セッションのmediaフォルダに)残り続ける。カード側の参照を
+  // 外すだけなので、アプリの表示からは見えなくなるが、Drive UI側からは引き続き見つけられる。
+  // 背景クリックで閉じた場合(null)はどちらも実行せず、何も変更しないまま終了する。
+  const choice = await showChoiceDialog({
+    title: '抽出した文字をどうしますか?',
+    message: `文字を検出しました:\n\n${preview}`,
+    options: [
+      { label: '写真はそのまま残す(文字を新しいカードに追加)', value: 'keep' },
+      { label: 'テクストのみ表示に切り替える(Driveの元画像は削除せず残します)', value: 'discard', secondary: true },
+    ],
+  });
+  if (!choice) {
+    setStatus('抽出結果の保存をキャンセルしました');
+    return;
+  }
 
-  if (discard) {
+  if (choice === 'discard') {
     const oldFileId = card.imageFileId;
     card.mediaType = 'text';
     card.memo = text;
@@ -2914,13 +2952,8 @@ async function handleCardExtract(card, el) {
     delete card.uploadFailed;
     blobUrlCache.delete(oldFileId);
     rerenderCardInPlace(card, el);
-    setStatus('テクストカードに変換しました');
+    setStatus('テクストカードに変換しました(Drive上の元画像は残しています)');
     scheduleAutoSave();
-
-    deleteFile(oldFileId).catch((err) => {
-      console.error('元画像の削除に失敗', err);
-      debugLog('Extract: 元画像のDrive削除に失敗: ' + err.message);
-    });
   } else {
     // 元の写真カードには触れず、抽出した文字だけを新しいテクストカードとして出す
     // (サマリーカードの出力と同じ配置・接続の仕方)

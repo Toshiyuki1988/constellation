@@ -1483,6 +1483,14 @@ html, body {
   color: var(--muted);
 }
 
+/* 元に戻せない破壊的な選択肢(写真の完全削除など)であることを視覚的にも区別するための強調色。
+   showChoiceDialog()のdangerオプション用(2026年9月追加、Extractの誤操作による写真消失を防ぐため)。 */
+.modal button.danger {
+  background: var(--rust);
+  border: 1px solid var(--rust);
+  color: #fff;
+}
+
 /* ---------- Extract範囲選択オーバーレイ(自由形状でなぞって範囲を選ぶ、2026年9月追加) ----------
    常時黒背景のカメラオーバーレイと同じ、アプリ本体のテーマとは独立した見た目にする
    (フルスクリーンで写真そのものに集中させたいため)。 */

@@ -1527,22 +1527,23 @@
     }
   }
 
+  // 「アプリ側からDriveの元画像は(バックアップなので)一切いじらない」というユーザー方針
+  // (2026年9月)を受けて、屋内スキャンのDrive上のファイルを削除するdeleteFile()の呼び出しを
+  // 撤去した。地図をキャンバスから外しても、アップロード済みの画像ファイル自体はセッションの
+  // mediaフォルダに残り続ける(参照が外れるだけ)。
   function removeMapLayer(layerId) {
     const session = getSessionById(activeSessionId());
     if (!session) return;
     const layers = getMapLayers(session);
     const idx = layers.findIndex((l) => l.id === layerId);
     if (idx === -1) return;
-    if (!window.confirm('この地図を削除しますか?')) return;
+    if (!window.confirm('この地図をキャンバスから外しますか?(Drive上の画像は削除しません)')) return;
     const [layer] = layers.splice(idx, 1);
     if (activeLayerId === layer.id) activeLayerId = null;
     scheduleAutoSave();
-    if (layer.kind === 'raster' && layer.imageFileId) {
-      deleteFile(layer.imageFileId).catch((err) => console.warn('Mapping Storys: 地図画像の削除に失敗', err));
-    }
     refreshCurrentMapBlock();
     renderMappingStorysLayer();
-    setStatus('地図を削除しました');
+    setStatus('地図をキャンバスから外しました');
   }
 
   /* ==================== キャンバス背景としての描画(js/app.jsのrenderAllCards()から呼ばれる) ==================== */
