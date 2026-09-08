@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260909b">
-<link rel="stylesheet" href="css/camera.css?v=20260905f">
+<link rel="stylesheet" href="css/style.css?v=20260910a">
+<link rel="stylesheet" href="css/camera.css?v=20260910a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -60,6 +60,11 @@
       <span class="info-ticker-progress" id="infoTickerProgress"></span>
     </div>
     <div class="toolbar-actions">
+      <!-- モバイル通信中はDriveへのアップロードを保留し、Wi-Fi接続時にまとめて行う(2026年9月、
+           通信量節約のためのユーザー要望)。navigator.connectionが使える端末では自動で表示が
+           切り替わるが、iOS Safari等では使えないため、タップで手動切り替えできるようにしてある
+           (js/upload-queue.js参照)。 -->
+      <button id="upload-network-btn" title="モバイル通信中はDriveへのアップロードを保留します。タップでWi-Fi/モバイルを切り替え">📵 モバイル(保留)</button>
       <button id="settings-btn" title="設定(クライアントID・APIキー)">⚙ 設定</button>
       <button id="sign-in-btn" disabled>Googleでサインイン</button>
       <button id="sign-out-btn" hidden>サインアウト</button>
@@ -147,8 +152,6 @@
       </div>
       <div class="cam-align-pulse" id="align-pulse-caption">◆ 正対しています</div>
       <div class="cam-focus-layer" id="focus-layer-caption"></div>
-      <div class="cam-hold-chip" id="hold-chip"><span class="cam-pin">📌</span><span id="hold-chip-text"></span></div>
-      <div class="cam-ocr-progress" id="ocr-progress" hidden><div class="cam-ocr-progress-bar"></div></div>
       <button class="cam-cap-btn" id="camera-cap-btn">タップして読み取る</button>
       <!-- 撮影直後の静止フレーム(選択モード中だけ表示、実体のcanvasはJSから注入する) -->
       <div class="cam-freeze-wrap" id="caption-freeze-wrap"></div>
@@ -180,6 +183,15 @@
     </div>
 
     <div id="camera-error" hidden></div>
+  </div>
+
+  <!-- OCR(テクスト読み取り)のピクチャ・イン・ピクチャ表示。2026年9月追加。
+       「読み取る」を押すとカメラは即座に閉じ、OCR自体はここでバックグラウンドに回すことで、
+       Geminiの応答を待たずにすぐ次の写真を撮れるようにする(js/camera.jsのrunOcrInBackground()参照)。
+       進行中の件数だけを示す控えめな表示で、タップ等の操作は要求しない。 -->
+  <div id="ocr-pip" hidden>
+    <span class="ocr-pip-spinner"></span>
+    <span id="ocr-pip-text">読み取り中…</span>
   </div>
 
   <!-- Extract(写真からの文字抽出)の範囲選択オーバーレイ。自由形状(なぞって囲む)で
@@ -231,13 +243,14 @@
   <script src="js/config.js?v=20260905f"></script>
   <script src="js/auth.js?v=20260905f"></script>
   <script src="js/drive.js?v=20260909c"></script>
+  <script src="js/upload-queue.js?v=20260910a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260907c"></script>
-  <script src="js/camera.js?v=20260905f"></script>
+  <script src="js/camera.js?v=20260910a"></script>
   <script src="js/sound.js?v=20260907a"></script>
   <script src="js/canvas.js?v=20260909a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260909c"></script>
+  <script src="js/app.js?v=20260910a"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260905f"></script>

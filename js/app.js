@@ -37,6 +37,7 @@ const FIRST_YEAR = 2025;
 const els = {};
 
 document.addEventListener('DOMContentLoaded', () => {
+  els.uploadNetworkBtn = document.getElementById('upload-network-btn');
   els.settingsBtn = document.getElementById('settings-btn');
   els.settingsModal = document.getElementById('settings-modal');
   els.settingsClientId = document.getElementById('settings-client-id');
@@ -73,6 +74,10 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsBtn.addEventListener('click', () => openSettings());
   els.settingsSaveBtn.addEventListener('click', handleSettingsSave);
   els.settingsCancelBtn.addEventListener('click', closeSettings);
+
+  els.uploadNetworkBtn.addEventListener('click', toggleUploadsAllowed); // js/upload-queue.js
+  initUploadNetworkDetection(); // js/upload-queue.js(対応端末では以後自動でボタン表示が追従する)
+  updateUploadNetworkButton();
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
@@ -319,6 +324,23 @@ function updateStatusProgress(opts) {
   }
 }
 
+/**
+ * ヘッダーのWi-Fi/モバイル切り替えボタン(js/upload-queue.js)の表示を今の状態に合わせる。
+ * isUploadAllowedNow()の呼び出し元切り替え時・待機列の増減時にその都度呼ばれる。
+ */
+function updateUploadNetworkButton() {
+  if (!els.uploadNetworkBtn) return;
+  const allowed = isUploadAllowedNow();
+  els.uploadNetworkBtn.classList.toggle('upload-network-btn--allowed', allowed);
+  uploadQueueCount().then((count) => {
+    if (allowed) {
+      els.uploadNetworkBtn.textContent = count > 0 ? `📶 Wi-Fi(残り${count}件送信中)` : '📶 Wi-Fi';
+    } else {
+      els.uploadNetworkBtn.textContent = count > 0 ? `📵 モバイル(保留${count}件)` : '📵 モバイル(保留)';
+    }
+  });
+}
+
 /* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ---------------- */
 
 const AUTO_SAVE_DELAY_MS = 1200; // 連続した変更(タイピング等)をまとめて1回の保存にする
@@ -387,6 +409,9 @@ async function onSignedIn() {
     // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
     // (API通信は発生しない、ローカルの日付比較のみ)。
     setInterval(refreshInfoTicker, 30 * 60 * 1000);
+    // 前回終了時にモバイル通信でアップロード待ちのまま残っていたファイルを拾い直す
+    // (js/upload-queue.js)。Wi-Fi中ならそのまま送信を再開する。
+    await restoreUploadQueueOnLoad();
     setStatus(`読み込み完了(${state.cards.length}件)`);
   } catch (err) {
     console.error(err);
@@ -1014,6 +1039,7 @@ function renderCard(card) {
   }
   if (card.uploadPending) el.classList.add('star-card--upload-pending');
   if (card.uploadFailed) el.classList.add('star-card--upload-failed');
+  if (card.uploadQueued) el.classList.add('star-card--upload-queued');
 
   // セッションカードはメモが空のままなら、以前どおりユーザーが手動で決めた高さを保つ
   // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。
@@ -2626,9 +2652,16 @@ function startSessionTitleEdit(card, el) {
   ocrBtn.onclick = async (event) => {
     event.stopPropagation();
     const result = await openCamera('caption');
-    if (result && result.kind === 'text' && result.text.trim()) {
-      input.value = result.text.trim();
+    if (!result || result.kind !== 'text' || !result.text.trim()) return;
+    // js/camera.jsのOCRはバックグラウンド実行のため、結果が届く頃には既にタイトル編集を
+    // 終えてこのinputがDOMから外れている可能性がある(2026年9月)。その場合は入力欄へは
+    // 書き込めないため、読み取った文字を失わないよう新規テクストカードとして残す。
+    if (!input.isConnected) {
+      createTextCard(result.text.trim());
+      setStatus('セッション名の編集は終了していたため、読み取った文字は新しいテクストカードに残しました');
+      return;
     }
+    input.value = result.text.trim();
     input.focus();
   };
 }
@@ -2841,19 +2874,39 @@ function deleteCard(card, el) {
   setStatus('削除しました(Drive上のファイル本体は残ります)');
 }
 
-/** 写真・動画カードの📌ボタン: OCRだけ起動し、結果をそのカードのメモに追記する */
+/**
+ * 写真・動画カードの📌ボタン: OCRだけ起動し、結果をそのカードのメモに追記する。
+ * **2026年9月**: js/camera.jsのOCRがバックグラウンド実行に変わり、結果が届くまでの間に
+ * ユーザーが別のセッションへ移動したり、このカード自体を削除したりできるようになった
+ * (以前はカメラのオーバーレイがOCR完了まで画面を占有していたため起こり得なかった)。
+ * 呼び出し時に捕まえた`el`(カード要素)が結果到着時には既に破棄・差し替わっている
+ * 可能性があるため、`cardElById()`で最新の要素を取り直し、カード自体が消えていたら
+ * (state.cardsに存在しなければ)テキストを失わないよう新規テクストカードとして残す。
+ */
 async function handleCardCaption(card, el) {
+  void el; // 呼び出し時点の要素は使わない(下記の理由でOCR完了時に取り直す)
+  const cardId = card.id;
   const result = await openCamera('caption');
   if (!result || result.kind !== 'text') return;
-  card.memo = card.memo ? `${card.memo}\n\n${result.text}` : result.text;
-  const memoEl = el.querySelector('.star-card-memo');
-  memoEl.value = card.memo;
-  const memoViewEl = el.querySelector('.star-card-memo-view');
-  if (memoViewEl) {
-    memoViewEl.innerHTML = linkifyMemoHtml(card.memo);
-    memoViewEl.hidden = false;
+  const liveCard = getCardById(cardId);
+  if (!liveCard) {
+    // カードが削除された等で戻す先を失った場合、OCRした文字自体は失わず新規カードにする
+    createTextCard(result.text);
+    setStatus('元のカードが見つからないため、新しいテクストカードに読み取り結果を残しました');
+    return;
   }
-  syncCardHeight(el);
+  liveCard.memo = liveCard.memo ? `${liveCard.memo}\n\n${result.text}` : result.text;
+  const liveEl = cardElById(cardId);
+  if (liveEl) {
+    const memoEl = liveEl.querySelector('.star-card-memo');
+    if (memoEl) memoEl.value = liveCard.memo;
+    const memoViewEl = liveEl.querySelector('.star-card-memo-view');
+    if (memoViewEl) {
+      memoViewEl.innerHTML = linkifyMemoHtml(liveCard.memo);
+      memoViewEl.hidden = false;
+    }
+    syncCardHeight(liveEl);
+  }
   setStatus('キャプションを反映しました');
   scheduleAutoSave();
 }
@@ -2883,7 +2936,13 @@ async function handleCardCaption(card, el) {
 async function handleCardExtract(card, el) {
   if (card.mediaType !== 'image') return;
   if (!card.imageFileId) {
-    setStatus(card.uploadPending ? 'アップロード中です。少し待ってから試してください' : '画像が読み込めないため抽出できません');
+    if (card.uploadQueued) {
+      setStatus('モバイル通信中のためアップロード待ちです。Wi-Fi接続後に試してください');
+    } else if (card.uploadPending) {
+      setStatus('アップロード中です。少し待ってから試してください');
+    } else {
+      setStatus('画像が読み込めないため抽出できません');
+    }
     return;
   }
 
@@ -3340,10 +3399,14 @@ function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
  * 無くすための最適化)。アップロード完了時にuploadCardFileInBackground()がimageFileIdを
  * 差し込む。動画・音声はローカルサムネイルが無いため、この最適化の恩恵は薄いが、同じ
  * 経路に揃えて実装をシンプルに保っている。
+ * **2026年9月追加**: モバイル通信中は、この時点でアップロードを始めず(通信量節約のため)、
+ * js/upload-queue.jsのIndexedDB待機列へBlobを保存するだけに留める。Wi-Fi接続時にまとめて
+ * アップロードされる(`card.uploadQueued`で見分けがつくようにし、UI上も控えめに表示する)。
  */
 async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) {
   const thumbDataUrl = mediaType === 'image' ? await generateThumbnail(blob) : null;
   const spawnPos = (x === undefined || y === undefined) ? newCardSpawnPos() : null;
+  const shouldQueue = !isUploadAllowedNow();
 
   const card = {
     id: crypto.randomUUID(),
@@ -3357,43 +3420,64 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
     imageFileId: null,
     thumbDataUrl,
     uploadPending: true,
+    uploadQueued: shouldQueue,
     sessionId: activeSessionId(),
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
-  setStatus('追加しました。アップロード中…', { busy: true });
   scheduleAutoSave(); // アップロード完了前にタブを閉じても、カードの存在自体は残るように
 
-  uploadCardFileInBackground(card, blob, filename);
+  if (shouldQueue) {
+    const persisted = await persistToUploadQueue(card, blob, filename);
+    if (persisted) {
+      setStatus('追加しました。モバイル通信中のためWi-Fi接続時にアップロードします');
+    } else {
+      // IndexedDBが使えない等の理由で待機列に保存できなかった場合は、データを失わないよう
+      // その場でアップロードする(通信量節約より、写真を失わないことを優先する)。
+      card.uploadQueued = false;
+      const el = cardElById(card.id);
+      if (el) el.classList.remove('star-card--upload-queued');
+      setStatus('追加しました。アップロード中…', { busy: true });
+      uploadCardFileInBackground(card, blob, filename);
+    }
+  } else {
+    setStatus('追加しました。アップロード中…', { busy: true });
+    uploadCardFileInBackground(card, blob, filename);
+  }
   return card;
 }
 
-/** createCardFromCapture()が即座に表示したカードの実体を、裏でDriveへアップロードする */
+/** createCardFromCapture()が即座に表示したカードの実体を、裏でDriveへアップロードする。
+ *  js/upload-queue.jsの待機列ドレイン時にも(Wi-Fi接続時)同じ関数を使い回す。 */
 async function uploadCardFileInBackground(card, blob, filename) {
   try {
     const folderId = await resolveSessionMediaFolderId(card.sessionId);
     const fileId = await uploadFile(folderId, blob, filename);
     card.imageFileId = fileId;
     card.uploadPending = false;
+    card.uploadQueued = false;
     const el = cardElById(card.id);
     if (el) {
-      el.classList.remove('star-card--upload-pending');
+      el.classList.remove('star-card--upload-pending', 'star-card--upload-queued');
       observeMediaForLazyLoad(el, card);
     }
     scheduleAutoSave();
   } catch (err) {
     console.error(err);
     card.uploadPending = false;
+    card.uploadQueued = false;
     card.uploadFailed = true;
     const el = cardElById(card.id);
     if (el) {
-      el.classList.remove('star-card--upload-pending');
+      el.classList.remove('star-card--upload-pending', 'star-card--upload-queued');
       el.classList.add('star-card--upload-failed');
     }
     setStatus('アップロードに失敗しました(カードは残りますがDriveには保存されていません)', { important: true });
     scheduleAutoSave();
+  } finally {
+    if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
   }
 }
 

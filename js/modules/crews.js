@@ -522,6 +522,14 @@
     try {
       const result = await openCamera('caption');
       if (!result || result.kind !== 'text' || !result.text.trim()) return;
+      // js/camera.jsのOCRはバックグラウンド実行のため、結果が届く頃にはこのパネル自体が
+      // 既に閉じられ、textareaがDOMから外れている可能性がある(2026年9月)。その場合は
+      // 読み取った文字を失わないよう新規テクストカードとして残す。
+      if (!textareaEl.isConnected) {
+        createTextCard(result.text.trim());
+        setStatus('Crewsのパネルが閉じられていたため、読み取った文字は新しいテクストカードに残しました');
+        return;
+      }
       const existing = textareaEl.value.trim();
       textareaEl.value = existing ? `${existing}\n${result.text.trim()}` : result.text.trim();
     } finally {

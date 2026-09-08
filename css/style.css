@@ -127,6 +127,13 @@ html, body {
 
 .toolbar button:disabled { opacity: 0.35; cursor: not-allowed; }
 
+/* モバイル通信中はDriveへのアップロードを保留する切り替えボタン(js/upload-queue.js、2026年9月追加)。
+   既定(モバイル/保留中)は通常のツールバーボタンと同じ見た目、Wi-Fi中(アップロード許可)だけ
+   緑系に切り替えて一目で分かるようにする。 */
+#upload-network-btn.upload-network-btn--allowed {
+  background: #2e7d32;
+}
+
 .status {
   margin-left: auto;
   font-family: var(--mono);
@@ -365,6 +372,41 @@ html, body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* ---------- OCRのピクチャ・イン・ピクチャ表示(js/camera.jsのrunOcrInBackground()、2026年9月追加) ----------
+   「読み取る」を押した瞬間にカメラは閉じ、OCR自体はここで進捗だけを示す。タップ等の操作は
+   要求しない(pointer-events: none、下のキャンバス操作を一切妨げない)控えめな表示。 */
+#ocr-pip {
+  position: fixed;
+  right: 12px;
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(20, 20, 24, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+#ocr-pip[hidden] { display: none; }
+
+.ocr-pip-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  animation: ocr-pip-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes ocr-pip-spin { to { transform: rotate(360deg); } }
+
 .tool-btn {
   flex: 0 0 auto;
   min-width: 56px;
@@ -559,6 +601,27 @@ html, body {
 .star-card--upload-pending .star-card-media {
   outline: 1px dashed var(--line);
   outline-offset: -1px;
+}
+
+/* モバイル通信中でDriveへのアップロードを意図的に保留している状態(js/upload-queue.js、
+   2026年9月追加)。「失敗」とは違い正常な待機なので、rust(赤系)は使わず控えめな青系にする。 */
+.star-card--upload-queued .star-card-media {
+  outline: 1px dashed #3b6fa0;
+  outline-offset: -1px;
+}
+.star-card--upload-queued::after {
+  content: '📵 Wi-Fi待ち';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 6;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #fff;
+  background: #3b6fa0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 /* Driveへのアップロードが失敗し、この端末を離れると写真の実体が失われる状態を分かるようにする */

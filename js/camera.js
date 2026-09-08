@@ -80,9 +80,6 @@ function ensureCameraDom() {
     tiltLayerCaption: document.getElementById('tilt-layer-caption'),
     alignPulseCaption: document.getElementById('align-pulse-caption'),
     focusLayerCaption: document.getElementById('focus-layer-caption'),
-    holdChip: document.getElementById('hold-chip'),
-    holdChipText: document.getElementById('hold-chip-text'),
-    ocrProgress: document.getElementById('ocr-progress'),
     capBtn: document.getElementById('camera-cap-btn'),
     freezeWrap: document.getElementById('caption-freeze-wrap'),
     selectLayer: document.getElementById('caption-select-layer'),
@@ -386,8 +383,6 @@ let selectStartX = 0;
 let selectStartY = 0;
 
 function resetCaptionState() {
-  camEls.holdChip.classList.remove('show');
-  camEls.ocrProgress.hidden = true;
   camEls.capBtn.hidden = false;
   camEls.capBtn.disabled = false;
   camEls.captionHint.textContent = '画面にキャプションを収めてタップ';
@@ -534,44 +529,91 @@ function cropCanvasToBlob(sourceCanvas, containerEl, selRect, quality) {
   return canvasToBlob(out, quality);
 }
 
-/** 「この範囲を読み取る」/「全体を読み取る」ボタン */
+/**
+ * 「この範囲を読み取る」/「全体を読み取る」ボタン。
+ * **2026年9月変更**: 以前はここでGeminiの応答(所要時間が読めず、数秒かかることがある)を
+ * オーバーレイを開いたまま待っていたため、その間ずっと次の写真が撮れなかった。実際に展覧会場で
+ * 使ってみたユーザーから「OCRを待たされている間に次の写真を撮りたい」という要望があり、
+ * 押した瞬間にカメラのオーバーレイ自体を閉じ、OCR(Gemini呼び出し)はrunOcrInBackground()で
+ * バックグラウンドへ回すように変更した。進行中であることは画面右下の小さなPiP表示
+ * (#ocr-pip、css/style.css)だけで示し、カメラは即座に次の撮影に使える状態へ戻る。
+ */
 async function handleSelectionRun() {
   if (!captionFreezeCanvas) return;
-  camEls.selectRunBtn.disabled = true;
-  camEls.selectRetakeBtn.disabled = true;
-  camEls.captionHint.textContent = '読み取り中…';
-  // Gemini応答は所要時間が読めないため、進捗率ではなく「動いている」ことだけを示す
-  // 不定進捗のスライドバーで表現する。
-  camEls.ocrProgress.hidden = false;
+  let blob;
   try {
     // OCR用は取り込み後の作品写真(1600px)より高い解像度・画質で送る。
     // 文字の視認性が最優先なので、ダウンスケールで潰れないようにする。
     // (このBlobはOCRにのみ使い、成功しても保存・アップロードはしない)
-    const blob = captionSelection
+    blob = captionSelection
       ? await cropCanvasToBlob(captionFreezeCanvas, camEls.freezeWrap, captionSelection, 0.92)
       : await canvasToBlob(captionFreezeCanvas, 0.92);
-    camDebugLog(`OCR送信(選択=${captionSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
-    const text = await ocrImage(blob);
-    camDebugLog(`OCR結果: ${JSON.stringify(text)}`);
-    if (!text || text.includes('(テキストなし)')) {
-      camEls.captionHint.textContent = '文字を検出できませんでした。選択し直すか撮り直してください';
-      camEls.selectRunBtn.disabled = false;
-      camEls.selectRetakeBtn.disabled = false;
-      return;
-    }
-    camEls.holdChipText.textContent = text.split('\n')[0].slice(0, 60);
-    camEls.holdChip.classList.add('show');
-    camEls.captionHint.textContent = '読み取りました';
-    setTimeout(() => finishCamera({ kind: 'text', text }), 650);
   } catch (err) {
     console.error(err);
-    camDebugLog('OCRエラー: ' + err.message);
-    camEls.captionHint.textContent = '読み取りに失敗しました(' + err.message + ')';
-    camEls.selectRunBtn.disabled = false;
-    camEls.selectRetakeBtn.disabled = false;
-  } finally {
-    camEls.ocrProgress.hidden = true;
+    showCameraError('画像の切り出しに失敗しました');
+    return;
   }
+  camDebugLog(`OCR送信(選択=${captionSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
+  const resolve = detachCameraForBackgroundOcr();
+  runOcrInBackground(blob, resolve);
+}
+
+/* ---------------- OCRのバックグラウンド実行・PiP表示(2026年9月追加) ----------------
+ * openCamera('caption')の呼び出し元は元々このPromiseをawaitしているだけなので、resolveを
+ * 呼ぶタイミングを後ろへずらすだけで、呼び出し元(app.js/crews.jsの各所)のルーティング
+ * ロジック(新規テクストカードにする/カードのメモへ追記する/セッション名にする、等)は
+ * 一切変更せずに済む。 */
+
+let ocrPipJobCount = 0;
+
+function ocrPipEls() {
+  return { pip: document.getElementById('ocr-pip'), text: document.getElementById('ocr-pip-text') };
+}
+
+function updateOcrPip() {
+  const { pip, text } = ocrPipEls();
+  if (!pip || !text) return;
+  pip.hidden = ocrPipJobCount <= 0;
+  text.textContent = ocrPipJobCount > 1 ? `読み取り中…(${ocrPipJobCount}件)` : '読み取り中…';
+}
+
+/** カメラのUIだけを片付け(ストリーム停止・オーバーレイを閉じる)、このcaption呼び出し専用の
+ *  resolveを切り離して返す。切り離した後は次のopenCamera()呼び出しと完全に独立して扱える。 */
+function detachCameraForBackgroundOcr() {
+  const resolve = resolveCamera;
+  resolveCamera = null;
+  teardownCamera();
+  return resolve;
+}
+
+/** blobをGeminiへ送り、結果が出た時点で(呼び出し元がawaitしたまま待っている)resolveを呼ぶ。
+ *  文字が検出できなかった/エラーになった場合はresolve(null)し、setStatus()(js/app.js)で
+ *  ステータス欄に理由を残す(呼び出し元は元々nullを「キャンセル」として無視するだけなので
+ *  安全に合流する)。 */
+function runOcrInBackground(blob, resolve) {
+  ocrPipJobCount++;
+  updateOcrPip();
+  ocrImage(blob)
+    .then((text) => {
+      camDebugLog(`OCR結果: ${JSON.stringify(text)}`);
+      if (!text || text.includes('(テキストなし)')) {
+        if (typeof setStatus === 'function') setStatus('文字を検出できませんでした');
+        resolve(null);
+        return;
+      }
+      if (typeof setStatus === 'function') setStatus('文字を読み取りました');
+      resolve({ kind: 'text', text });
+    })
+    .catch((err) => {
+      console.error(err);
+      camDebugLog('OCRエラー: ' + err.message);
+      if (typeof setStatus === 'function') setStatus(`読み取りに失敗しました: ${err.message}`, { important: true });
+      resolve(null);
+    })
+    .finally(() => {
+      ocrPipJobCount--;
+      updateOcrPip();
+    });
 }
 
 /* ---------------- 動画モード ---------------- */
