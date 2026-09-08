@@ -587,16 +587,23 @@ html, body {
      0に近い高さまで潰れ、写真が実質消えて見える不具合があった。最低限の高さを保証する。 */
   min-height: 40px;
   background-color: var(--surface-2);
-  /*
-   * cover だとカードの縦横比を変えるたびに写真の一部が意図せずクロップされてしまう
-   * (作品写真やキャプション札の一部が見切れる)。contain にして、リサイズ時は
-   * 常に写真全体が縮尺されるだけで欠けないようにする。
-   */
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
   border-radius: 2px;
   overflow: hidden;
+}
+
+/*
+ * 以前は写真をこの要素自体のbackground-imageとして表示していたが、キャンバス全体を
+ * transform: scale()でズームする構成上、background-imageはモバイルブラウザで祖先の
+ * ズーム倍率まで描画解像度が追従しない(実機で「本画像に切り替わってもなお小さい文字が
+ * ぼやける」という報告があった、2026年9月)。<img>要素(デコード済みの実ピクセルを持つ)に
+ * 置き換え、cover だとリサイズのたびに写真の一部が意図せずクロップされてしまう
+ * (作品写真やキャプション札の一部が見切れる)ため contain で全体を縮尺表示する。
+ */
+.star-card-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .star-card-media video {

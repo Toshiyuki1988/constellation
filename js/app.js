@@ -993,7 +993,7 @@ function renderCard(card) {
     // 概観時はまず軽量サムネイル(あれば)を即表示し、実際にカードが画面内に来たときだけ
     // Driveへ本画像/動画/音声を取りに行く(OneNoteのサムネイル運用と同じ考え方)。
     if (mediaType === 'image' && card.thumbDataUrl) {
-      mediaEl.style.backgroundImage = `url(${card.thumbDataUrl})`;
+      mediaEl.innerHTML = `<img src="${card.thumbDataUrl}" alt="">`;
     }
     // Driveアップロードがバックグラウンドで進行中でまだimageFileIdが無い場合、本体取得は
     // アップロード完了時(uploadCardFileInBackground)に改めてobserveMediaForLazyLoad()を呼ぶ。
@@ -2487,7 +2487,14 @@ function loadFullMedia(el, card) {
       } else if (mediaType === 'audio') {
         mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
       } else {
-        mediaEl.style.backgroundImage = `url(${url})`;
+        // 以前はbackground-imageで表示していたが、実機で「本画像に切り替わったはずなのに
+        // 小さい文字がぼやけたまま」という報告があった(2026年9月)。ズームでキャンバス全体を
+        // transform: scale()している構成上、background-imageはその祖先スケールに応じて
+        // モバイルブラウザ側で描画解像度が頭打ちになりやすい(GPU合成レイヤーのラスタ解像度が
+        // 実際のズーム倍率まで追従しない既知の傾向)。<img>要素(デコード済みの実ピクセルを
+        // 直接持つ)に置き換えることで、ズームインした時により高い解像度でサンプリングされる
+        // ことを期待する変更。
+        mediaEl.innerHTML = `<img src="${url}" alt="">`;
       }
     })
     .catch((err) => {
