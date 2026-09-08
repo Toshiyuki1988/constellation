@@ -537,6 +537,9 @@ async function handleCreateSession() {
 
 function renderAllCards() {
   els.content.innerHTML = '';
+  // 破棄する古いカード要素への参照を残すとGCされずリークするため、再描画のたびに空にする。
+  // 各カードはこの後renderCard()経由でobserveMediaForLazyLoad()が呼ばれ、新しい要素で入り直す。
+  pendingMediaElements.clear();
   if (window.renderMappingStorysLayer) window.renderMappingStorysLayer(); // Mapping Storys: カードより先に挿入し、最背面の地図として敷く
   createAsterismLayer();
   const currentId = activeSessionId();
@@ -2393,18 +2396,73 @@ function evictOldBlobUrls() {
 let mediaVisibilityObserver = null;
 const cardByMediaEl = new WeakMap();
 
+// generateThumbnail()が作るサムネイルの長辺(240px)と合わせたしきい値。カードの画面上の
+// 表示サイズ(ズームスケール込みの実際のpx)がこれを超えたら、サムネイルの画素が足りず
+// ぼやけて見える段階とみなし、本画像(フル解像度)へ切り替える。「画面内に入った瞬間」では
+// なく「ユーザーが実際にその写真へズームしてフォーカスした段階」で読み込むための基準
+// (2026年9月、ユーザー提案)。
+const FULL_RES_TRIGGER_PX = 240;
+
+// IntersectionObserverで「画面内に入った」だけでなく上記の表示サイズ条件も満たすまで
+// 本画像を取りに行かないカード(el)の集合。ズーム操作中はIntersectionObserverが再発火
+// しない(既に画面内に入ったままなので enter/exit イベントが起きない)ため、ズームが
+// 止まった時にjs/canvas.jsから呼ばれるonViewportScaleSettled()側でここを走査し直す。
+const pendingMediaElements = new Set();
+
+/** カードの画像・動画・音声枠(.star-card-media)が、実際の画面上で本画像に見合う大きさで
+ *  表示されているか。 */
+function isMediaDisplaySizeEnoughForFullRes(el) {
+  const mediaEl = el.querySelector('.star-card-media');
+  if (!mediaEl) return false;
+  const rect = mediaEl.getBoundingClientRect();
+  return Math.max(rect.width, rect.height) >= FULL_RES_TRIGGER_PX;
+}
+
 function observeMediaForLazyLoad(el, card) {
   cardByMediaEl.set(el, card);
+  pendingMediaElements.add(el);
   if (!mediaVisibilityObserver) {
     mediaVisibilityObserver = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (!entry.isIntersecting) return;
+        // 画面内に入っても、まだズームアウトしたままで小さくしか表示されていない間は
+        // サムネイルのままにする(監視は続け、unobserveしない)。実際にそのサイズで
+        // 表示されている(=既にズームインした状態で視界に入ってきた)場合のみ即読み込む。
+        if (!isMediaDisplaySizeEnoughForFullRes(entry.target)) return;
         mediaVisibilityObserver.unobserve(entry.target);
+        pendingMediaElements.delete(entry.target);
         loadFullMedia(entry.target, cardByMediaEl.get(entry.target));
       });
     }, { root: els.viewport, rootMargin: '400px' });
   }
   mediaVisibilityObserver.observe(el);
+}
+
+/**
+ * js/canvas.jsからズーム操作が止まった時に呼ばれる。画面内に留まったまま(=交差状態が
+ * 変化しないため、IntersectionObserver自体は再発火しない)ズームインで表示サイズだけが
+ * 大きくなったカードを拾い直し、しきい値を超えたものから本画像へ切り替える。
+ */
+function onViewportScaleSettled() {
+  if (pendingMediaElements.size === 0) return;
+  const viewportRect = els.viewport.getBoundingClientRect();
+  let upgraded = 0;
+  for (const el of Array.from(pendingMediaElements)) {
+    if (!el.isConnected) {
+      pendingMediaElements.delete(el);
+      continue;
+    }
+    const rect = el.getBoundingClientRect();
+    const intersects =
+      rect.right > viewportRect.left && rect.left < viewportRect.right &&
+      rect.bottom > viewportRect.top && rect.top < viewportRect.bottom;
+    if (!intersects || !isMediaDisplaySizeEnoughForFullRes(el)) continue;
+    pendingMediaElements.delete(el);
+    if (mediaVisibilityObserver) mediaVisibilityObserver.unobserve(el);
+    loadFullMedia(el, cardByMediaEl.get(el));
+    upgraded++;
+  }
+  if (upgraded > 0) debugLog(`ズーム確定によりフォーカス中の写真${upgraded}件を本画像へ切り替え`);
 }
 
 // 本画像の取得に失敗した回数(カード要素ごと)。無限リトライで叩き続けないよう上限を設ける。

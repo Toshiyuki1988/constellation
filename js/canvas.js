@@ -21,6 +21,28 @@ const viewportState = { scale: 1, x: 0, y: 0 };
 const MIN_SCALE = 0.01;
 const MAX_SCALE = 4;
 
+// ズームが変化した「あと、操作が止まってから」js/app.js側へ知らせるための簡易デバウンス。
+// 本画像(フル解像度)の読み込みを、以前は「画面内に入った瞬間」に無条件で始めていたが、
+// 俯瞰(全体表示)で多数のカードが画面に入ると並列フェッチが集中し、実際にユーザーが
+// ズームインした1枚が待ち行列の後方に埋もれていつまでもぼやけたまま、という体感になって
+// いた(2026年9月、実機報告)。「ユーザーが実際にその写真へズームしてフォーカスした」タイミング
+// で読み込む方式に変えるため、ズームの変化をここで検知しapp.js側(onViewportScaleSettled())
+// へ伝える。連続するピンチ/ホイール操作の途中で毎回発火すると無駄なので、OneNoteの実機観察
+// (操作が止まってから0.5秒ほどでサムネイルが本画像に切り替わる、js/app.jsの既存コメント参照)
+// に倣い、一定時間ズームが止まってから1回だけ通知する。
+const ZOOM_SETTLE_MS = 450;
+let zoomSettleTimer = null;
+let lastNotifiedScale = viewportState.scale;
+
+function scheduleZoomSettleNotify() {
+  if (viewportState.scale === lastNotifiedScale) return; // 純粋なパンではスケールが変わらないため無視
+  clearTimeout(zoomSettleTimer);
+  zoomSettleTimer = setTimeout(() => {
+    lastNotifiedScale = viewportState.scale;
+    if (typeof onViewportScaleSettled === 'function') onViewportScaleSettled();
+  }, ZOOM_SETTLE_MS);
+}
+
 // カードジェスチャー関連の調整値
 const CARD_LONG_PRESS_MS = 300; // 0.25〜0.35秒の範囲で現代的なバランスとされる値
 const CARD_PRESS_TOLERANCE_PX = 10; // 長押し待機中、指が多少動いてもキャンセルしない許容半径
@@ -62,6 +84,7 @@ let lastViewportTapPos = null;
 function applyViewportTransform() {
   contentEl.style.transform =
     `translate(${viewportState.x}px, ${viewportState.y}px) scale(${viewportState.scale})`;
+  scheduleZoomSettleNotify();
 }
 
 /** カードの位置(translate)を反映する */
