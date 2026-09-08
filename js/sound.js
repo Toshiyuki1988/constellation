@@ -22,6 +22,7 @@
 //   playFlightEngineerTidySound()     整理(グリッド整列)完了時の3音の軽いチャイム
 //   playFlightEngineerUndoSound()     元に戻す時の下降音
 //   playFlightEngineerRedoSound()     やり直す時の上昇音
+//   playChatReplySound()       座談会の自動返信が1件表示される直前の「シュコッ」
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -522,4 +523,41 @@ function playFlightEngineerRedoSound() {
   osc.connect(gain).connect(c.destination);
   osc.start(now);
   osc.stop(now + 0.2);
+}
+
+/**
+ * 座談会の自動カスケード返信(js/app.jsのrunChatCascade())が1件表示される直前の「シュコッ」。
+ * 「シュ」(ノイズバーストをバンドパスで絞りながら下降させる)+「コッ」(ごく短いクリック)の
+ * 2要素で擬音を再現する。LINEのメッセージ受信音のような軽い通知感を狙いつつ、
+ * 他の効果音と同じく控えめな音量に留めている。
+ */
+function playChatReplySound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+  const n = Math.floor(c.sampleRate * 0.05);
+  const buffer = c.createBuffer(1, n, c.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n) ** 1.4;
+  const src = c.createBufferSource();
+  src.buffer = buffer;
+  const filter = c.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(2400, now);
+  filter.frequency.exponentialRampToValueAtTime(850, now + 0.05);
+  filter.Q.value = 0.9;
+  const noiseGain = c.createGain();
+  noiseGain.gain.value = 0.1;
+  src.connect(filter).connect(noiseGain).connect(c.destination);
+  src.start(now);
+
+  const osc = c.createOscillator();
+  const clickGain = c.createGain();
+  osc.type = 'square';
+  osc.frequency.value = 320;
+  clickGain.gain.setValueAtTime(0.0001, now + 0.045);
+  clickGain.gain.exponentialRampToValueAtTime(0.07, now + 0.05);
+  clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+  osc.connect(clickGain).connect(c.destination);
+  osc.start(now + 0.045);
+  osc.stop(now + 0.1);
 }

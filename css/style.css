@@ -134,6 +134,34 @@ html, body {
   background: #2e7d32;
 }
 
+/* グループビューイングモード切り替えボタン(js/app.jsのtoggleGroupViewing()、2026年9月追加)。
+   ON中はCrewsの水色(cyan)に切り替えて、動いていることが一目で分かるようにする。 */
+#group-viewing-btn.group-viewing-btn--active {
+  background: rgba(85, 230, 247, 0.9);
+  color: #06282c;
+}
+
+/* コメント履歴モーダル(js/app.jsのopenCommentHistory()、2026年9月追加)。既存の.modal-overlay/
+   .modalを流用しつつ、リスト部分だけ専用のスタイルを足す。 */
+.comment-history-modal { max-width: 460px; }
+.comment-history-list { max-height: 50vh; overflow-y: auto; margin: 4px 0 16px; display: flex; flex-direction: column; gap: 8px; }
+.comment-history-empty { font-size: 12px; color: var(--muted); margin: 0; }
+.comment-history-row { display: flex; gap: 9px; align-items: flex-start; }
+.comment-history-avatar {
+  width: 26px; height: 26px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  background: rgba(85, 230, 247, 0.25); border: 1px solid rgba(85, 230, 247, 0.6);
+}
+.comment-history-body { flex: 1; min-width: 0; }
+.comment-history-meta {
+  display: flex; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 2px;
+}
+.comment-history-meta span {
+  font-family: var(--mono); font-size: 8.5px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.comment-history-text { font-size: 12px; line-height: 1.55; }
+
 .status {
   margin-left: auto;
   font-family: var(--mono);
@@ -406,6 +434,45 @@ html, body {
   flex-shrink: 0;
 }
 @keyframes ocr-pip-spin { to { transform: rotate(360deg); } }
+
+/* ---------- デイリーコメントのトースト(js/app.jsのmaybeShowDailyComment()、2026年9月追加) ----------
+   ヘッダーの鑑賞可能日ティッカー(#infoTicker)と同じ「控えめなトースト表示」の作法を踏襲し、
+   画面右上に浮かべる。既定で画面外(上)に隠れた状態から、showクラスでスライドイン/フェードする。 */
+#daily-comment-toast {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: 12px;
+  z-index: 60;
+  width: 240px;
+  display: flex;
+  gap: 9px;
+  background: var(--panel, #fff);
+  border: 1.5px solid rgba(85, 230, 247, 0.8);
+  border-radius: 10px;
+  box-shadow: 0 14px 30px rgba(6, 40, 44, 0.2);
+  padding: 11px 12px;
+  opacity: 0;
+  transform: translateY(-10px) scale(0.96);
+  transition: opacity 0.32s ease-out, transform 0.32s ease-out;
+  pointer-events: none;
+}
+#daily-comment-toast.show { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+.daily-comment-avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+  background: rgba(85, 230, 247, 0.25); border: 1px solid rgba(85, 230, 247, 0.6);
+}
+.daily-comment-body { flex: 1; min-width: 0; }
+.daily-comment-label {
+  font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; color: var(--muted);
+  text-transform: uppercase; margin-bottom: 2px;
+}
+.daily-comment-name { font-family: var(--mono); font-size: 10px; font-weight: 700; color: #06282c; margin-bottom: 3px; }
+.daily-comment-text { font-size: 11px; line-height: 1.55; color: var(--text); }
+.daily-comment-close {
+  align-self: flex-start; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--line);
+  background: none; color: var(--muted); font-size: 8px; cursor: pointer; flex: none; line-height: 1;
+}
 
 .tool-btn {
   flex: 0 0 auto;
@@ -1364,7 +1431,10 @@ html, body {
   display: flex; align-items: center; justify-content: center;
   font-size: 12px; background: #f2f2f0; border: 1px solid var(--line);
 }
-.star-card-chat-line.crew .star-card-chat-avatar { background: rgba(85, 230, 247, 0.25); border-color: rgba(85, 230, 247, 0.6); }
+/* .crewは元々.star-card-chat-line(発言の吹き出し全体)にだけ付ける想定だったが、タイピング
+   ドット・宛先選択の選択肢一覧ではアバター単体に付けているため、両方のパターンに対応する。 */
+.star-card-chat-line.crew .star-card-chat-avatar,
+.star-card-chat-avatar.crew { background: rgba(85, 230, 247, 0.25); border-color: rgba(85, 230, 247, 0.6); }
 .star-card-chat-bubble { flex: 1; min-width: 0; }
 .star-card-chat-name { font-family: var(--mono); font-size: 8.5px; color: var(--muted); margin-bottom: 2px; }
 .star-card-chat-text {
@@ -1373,28 +1443,110 @@ html, body {
   padding: 6px 8px; display: inline-block;
 }
 
-.star-card-chat-newq-row { display: flex; gap: 6px; margin-top: 8px; }
-.star-card-chat-newq-input {
+/* 座談会カスケード中の「考え中…」タイピングドット(2026年9月追加、runChatCascade()参照) */
+.star-card-chat-typing { display: flex; gap: 7px; align-items: center; }
+.star-card-chat-typing-dots {
+  display: flex; gap: 3px; background: #f7f7f5; border-radius: 8px; border-top-left-radius: 2px;
+  padding: 7px 9px;
+}
+.star-card-chat-typing-dots span {
+  width: 4px; height: 4px; border-radius: 50%; background: var(--muted); display: block;
+  animation: starCardChatTypingBounce 1s infinite ease-in-out;
+}
+.star-card-chat-typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.star-card-chat-typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes starCardChatTypingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+.star-card-chat-target-tag { color: #2e7d32; font-weight: 400; }
+.star-card-chat-question-img {
+  display: block; margin-top: 6px; width: 72px; height: 54px; object-fit: cover;
+  border-radius: 4px; border: 1px solid var(--line);
+}
+
+/* 質問コンポーザー(🎯宛先・📷写真添付・入力・送信、2026年9月に「次の発言を進める」の
+   手動ボタンから作り替え) */
+.star-card-chat-attach-preview {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px; pointer-events: auto;
+}
+.star-card-chat-attach-thumb {
+  width: 28px; height: 28px; border-radius: 4px; object-fit: cover; border: 1px solid var(--line);
+}
+.star-card-chat-attach-clear {
+  border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 50%;
+  width: 16px; height: 16px; font-size: 8px; cursor: pointer; pointer-events: auto; line-height: 1;
+}
+
+.star-card-chat-target-popover {
+  margin-top: 8px; padding: 7px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); pointer-events: auto;
+}
+.star-card-chat-target-label {
+  font-family: var(--mono); font-size: 8px; letter-spacing: 0.05em; color: var(--muted);
+  text-transform: uppercase; margin: 0 0 5px;
+}
+.star-card-chat-target-options { display: flex; flex-direction: column; gap: 1px; max-height: 140px; overflow-y: auto; }
+.star-card-chat-target-option {
+  display: flex; align-items: center; gap: 7px; padding: 4px 5px; border-radius: 4px;
+  border: none; background: none; cursor: pointer; text-align: left; width: 100%; font-family: var(--sans);
+}
+.star-card-chat-target-option:hover { background: #f4f4f2; }
+.star-card-chat-target-option .star-card-chat-avatar { width: 20px; height: 20px; font-size: 10px; }
+.star-card-chat-target-option-name { font-size: 10.5px; flex: 1; }
+.star-card-chat-target-option-check {
+  width: 13px; height: 13px; border-radius: 3px; border: 1.5px solid var(--line); flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 8px; color: transparent;
+}
+.star-card-chat-target-option.checked .star-card-chat-target-option-check {
+  background: rgba(85, 230, 247, 0.9); border-color: rgba(85, 230, 247, 0.9); color: #06282c;
+}
+.star-card-chat-target-summary {
+  margin: 5px 0 0; padding-top: 5px; border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 8.5px; color: var(--muted);
+}
+
+.star-card-chat-composer-row { display: flex; align-items: center; gap: 5px; margin-top: 8px; }
+.star-card-chat-target-btn, .star-card-chat-attach-btn {
+  flex: none; width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); font-size: 12px; cursor: pointer; pointer-events: auto; position: relative;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.star-card-chat-target-btn.active { border-color: rgba(85, 230, 247, 0.9); background: rgba(85, 230, 247, 0.14); }
+.star-card-chat-target-badge {
+  position: absolute; top: -5px; right: -5px; min-width: 13px; height: 13px; padding: 0 2px;
+  border-radius: 999px; background: rgba(85, 230, 247, 0.9); color: #06282c;
+  font-family: var(--mono); font-size: 7.5px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.star-card-chat-composer-input {
   flex: 1; min-width: 0; font-family: var(--sans); font-size: 10.5px;
-  border: 1px solid var(--line); border-radius: 4px; padding: 6px 7px;
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
   color: var(--text); background: var(--bg); pointer-events: auto;
 }
-.star-card-chat-newq-btn {
-  border: 1px solid var(--line); background: none; color: var(--text);
-  border-radius: 4px; padding: 0 10px; font-family: var(--sans); font-size: 10.5px;
-  font-weight: 700; cursor: pointer; pointer-events: auto;
+.star-card-chat-send-btn {
+  flex: none; width: 28px; height: 28px; border-radius: 6px; border: none;
+  background: #2e7d32; color: #fff; font-size: 12px; cursor: pointer; pointer-events: auto;
+  display: flex; align-items: center; justify-content: center; padding: 0;
 }
-.star-card-chat-newq-btn:hover { border-color: #2e7d32; }
-
-.star-card-chat-next-btn {
-  width: 100%; margin-top: 6px; padding: 7px 8px; border: none; border-radius: 4px;
-  background: #2e7d32; color: #fff; font-family: var(--sans); font-weight: 700; font-size: 10.5px;
-  cursor: pointer; pointer-events: auto;
-}
-.star-card-chat-next-btn:hover:not(:disabled) { background: #256b29; }
-.star-card-chat-next-btn:disabled { opacity: 0.55; cursor: default; }
+.star-card-chat-send-btn:hover:not(:disabled) { background: #256b29; }
+.star-card-chat-send-btn:disabled { opacity: 0.5; cursor: default; }
 
 .star-card-chat-status { font-size: 9px; color: var(--muted); margin: 5px 0 0; min-height: 12px; }
+
+/* ---------- コメントカード(mediaType:'comment'、2026年9月追加) ----------
+   顔文字・名前・コメント本文だけの軽い読み取り専用カード。座談会と同じCrewsの水色(cyan)を
+   踏襲しつつ、既存カードのメモ欄よりも小さく・素早く読める粒度にしてある。 */
+.star-card--comment { border-color: rgba(85, 230, 247, 0.8); }
+.star-card-comment-head { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.star-card-comment-avatar {
+  width: 24px; height: 24px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  background: rgba(85, 230, 247, 0.25); border: 1px solid rgba(85, 230, 247, 0.6);
+}
+.star-card-comment-name { font-family: var(--mono); font-size: 9.5px; font-weight: 700; color: #06282c; }
+.star-card-comment-text { font-size: 11px; line-height: 1.55; }
 
 /* Crewsモジュール(js/modules/crews.js)が追加するペルソナのヘックス。既存のEducation/Academicと
    同じ意匠だが、水色(モジュール共通のcyan)で塗って「ここから先はペルソナ」と分かるようにする */

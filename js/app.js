@@ -30,6 +30,13 @@ const state = {
   // 履歴タップで「やり直し」できる未来の分岐として残る。
   feHistory: [],
   feHistoryIndex: 0,
+  // コメント履歴(2026年9月追加)。デイリーコメント・グループビューイングモードで生成された
+  // 一過性のコメント(カードとしては残らない)を最大COMMENT_HISTORY_MAX件だけ時系列で保持する。
+  // カードに直接付随するコメント(mediaType:'comment')は普通のカードとして永続するため、
+  // ここには含まない(ユーザー方針: 「デイリー・グループビューイングは100件までの一過性、
+  // カードコメントは永続性」で明確に分ける)。
+  // { id, name, avatar, text, source: 'daily'|'group', ts }
+  commentHistory: [],
 };
 
 const FIRST_YEAR = 2025;
@@ -67,6 +74,16 @@ document.addEventListener('DOMContentLoaded', () => {
   els.infoTicker = document.getElementById('infoTicker');
   els.infoTickerText = document.getElementById('infoTickerText');
   els.infoTickerProgress = document.getElementById('infoTickerProgress');
+  els.dailyCommentToast = document.getElementById('daily-comment-toast');
+  els.dailyCommentAvatar = document.getElementById('daily-comment-avatar');
+  els.dailyCommentName = document.getElementById('daily-comment-name');
+  els.dailyCommentText = document.getElementById('daily-comment-text');
+  els.dailyCommentClose = document.getElementById('daily-comment-close');
+  if (els.dailyCommentClose) els.dailyCommentClose.addEventListener('click', hideDailyCommentToast);
+  els.groupViewingBtn = document.getElementById('group-viewing-btn');
+  if (els.groupViewingBtn) els.groupViewingBtn.addEventListener('click', toggleGroupViewing);
+  els.commentHistoryBtn = document.getElementById('comment-history-btn');
+  if (els.commentHistoryBtn) els.commentHistoryBtn.addEventListener('click', openCommentHistory);
 
   initCanvas(els.viewport, els.content);
   initExtractRegionPicker();
@@ -102,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.signOutBtn.addEventListener('click', () => {
     signOut();
     toggleAuthUI(false);
+    stopGroupViewing(); // サインアウト後もタイマーが回り続けてAPIを呼び続けないようにする
     setStatus('サインアウトしました');
   });
   els.toolUpload.addEventListener('click', () => els.imageInput.click());
@@ -366,6 +384,7 @@ async function onSignedIn() {
     state.hiddenAutoLinks = data.hiddenAutoLinks || [];
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
+    state.commentHistory = data.commentHistory || [];
     if (data.feHistory) {
       state.feHistory = data.feHistory;
       state.feHistoryIndex = typeof data.feHistoryIndex === 'number' ? data.feHistoryIndex : state.feHistory.length;
@@ -412,6 +431,8 @@ async function onSignedIn() {
     // 前回終了時にモバイル通信でアップロード待ちのまま残っていたファイルを拾い直す
     // (js/upload-queue.js)。Wi-Fi中ならそのまま送信を再開する。
     await restoreUploadQueueOnLoad();
+    maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
+    maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
     setStatus(`読み込み完了(${state.cards.length}件)`);
   } catch (err) {
     console.error(err);
@@ -508,6 +529,7 @@ function enterSession(id, isYear) {
   renderAllCards();
   if (isYear) refreshInfoTicker(); // ティッカーは年タブ単位なので、年を切り替えた時だけ再集計する
   scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
+  maybeShowDailyComment(); // セッションを開くたびに判定(1日3回までの枠、失敗/中身なしなら消費しない)
 }
 
 /**
@@ -668,6 +690,7 @@ function redrawAsterismLines() {
       c.mediaType !== 'summary' &&
       c.mediaType !== 'streetview' &&
       c.mediaType !== 'chat' &&
+      c.mediaType !== 'comment' && // 生成時に既にASTR接続済みのため、見た順の自動線は対象外
       !c.summarySourceId
   );
 
@@ -735,6 +758,9 @@ function removeAstrConnection(connectionId) {
 }
 
 const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
+// コメントカード(2026年9月追加)の「Comment」ヘックスを出すカード種別。info/session/summary等の
+// 「メタ」なカードは対象外にし、実際に記録・作品の内容を持つカードだけに絞っている。
+const COMMENTABLE_MEDIA_TYPES = ['image', 'video', 'audio', 'text'];
 
 // セッションカードのタイトル編集欄に添えるOCR起動ボタンのアイコン(モノクロのカメラ)
 const CAMERA_ICON_SVG =
@@ -784,13 +810,22 @@ function editGuideHexHtml(mediaType) {
   if (mediaType === 'session') {
     return hex('title', 'Title') + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete');
   }
+  // コメントカード(2026年9月追加)は顔文字・名前・コメント本文だけの読み取り専用カードなので、
+  // 座談会カードと同様ASTRは不要(自分から他のカードへ接続を貼る運用は想定していない。
+  // 生成時に既に接続済みの状態で作られる)。
+  if (mediaType === 'comment') {
+    return hex('delete', 'Delete');
+  }
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
   // 写真の中の文字をOCRで抜き出す機能。画像のみ。「写真を残してメモに追記」「写真を破棄してテクストカード化」の2択
   const extractHex = mediaType === 'image' ? hex('extract', 'Extract') : '';
   // この写真に接続された状態のサマリーカードを新規作成するショートカット。画像のみ(サマリーが
   // 画像を見るのは接続された写真だけなので、動画・音声カードに置いても意味を持たないため)。
   const summonHex = mediaType === 'image' ? hex('summon', 'Summon') : '';
-  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex + summonHex;
+  // ONのCrewsペルソナ1人に、このカードの内容(メモ・写真ならサムネイル)を読んで一言だけ
+  // コメントさせ、ASTR接続済みの新規コメントカードとして残す(2026年9月追加)。
+  const commentHex = COMMENTABLE_MEDIA_TYPES.includes(mediaType) ? hex('comment', 'Comment') : '';
+  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex + summonHex + commentHex;
 }
 
 /**
@@ -843,6 +878,7 @@ function renderCard(card) {
   const isSummaryCard = mediaType === 'summary';
   const isStreetviewCard = mediaType === 'streetview';
   const isChatCard = mediaType === 'chat';
+  const isCommentCard = mediaType === 'comment';
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
@@ -854,6 +890,7 @@ function renderCard(card) {
     (isSummaryCard ? ' star-card--summary' : '') +
     (isStreetviewCard ? ' star-card--streetview' : '') +
     (isChatCard ? ' star-card--chat' : '') +
+    (isCommentCard ? ' star-card--comment' : '') +
     (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
@@ -892,6 +929,8 @@ function renderCard(card) {
     el.innerHTML = streetviewCardInnerHtml(card);
   } else if (isChatCard) {
     el.innerHTML = chatCardInnerHtml(card);
+  } else if (isCommentCard) {
+    el.innerHTML = commentCardInnerHtml(card);
   } else {
     const crewHeadHtml = card.crewPersonaId
       ? `<div class="star-card-crew-head">
@@ -951,8 +990,10 @@ function renderCard(card) {
         handleCardExtract(card, el);
       } else if (action === 'summon') {
         handleSummonSummary(card);
+      } else if (action === 'comment') {
+        handleCardComment(card, el);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment') scheduleAutoSave();
     });
   });
 
@@ -1559,7 +1600,7 @@ function collectSessionTextContext(sessionId, sources, depth = 0) {
       } else if (c.mediaType === 'summary' || c.summarySourceId) {
         // 要約カード自身と、過去に要約から生成されたテクストカードは参照しない
       } else if (c.memo && c.memo.trim()) {
-        const label = c.mediaType === 'text' ? 'テキスト' : c.mediaType === 'info' ? 'インフォ' : 'キャプション/メモ';
+        const label = c.mediaType === 'text' ? 'テキスト' : c.mediaType === 'info' ? 'インフォ' : c.mediaType === 'comment' ? 'コメント' : 'キャプション/メモ';
         sources.push(c.id);
         lines.push(`${indent}- [出典${sources.length}][${label}] ${c.memo.trim()}`);
       }
@@ -1733,19 +1774,23 @@ async function handleSummaryDirectQuestion(card, el) {
   }
 }
 
-/* ---------------- チャットカード「座談会」(2026年9月追加) ----------------
+/* ---------------- チャットカード「座談会」(2026年9月実装、同月に自動カスケード方式へ改修) ----------------
  * サマリーカードの「🗣 座談会をひらく」から、Boy・Professor・Gemini(素の人格無し)・ONの
  * Crewsペルソナ全員を参加者とする新規カード(mediaType:'chat')を隣にポップアップさせる。
- * 「要約の傾向」欄が最初の質問になる。ユーザーが「次の発言を進める」を押すたびに、参加者を
- * 順番に1人ずつ(ラウンドロビン)呼び出し、そこまでの会話ログ全体を文脈として渡した上で
- * 一言だけ発言させる。この「順番に呼んで、直前までの発言を見せる」だけの単純な仕組みで、
- * 特別な相互作用エンジンを実装せずとも自然と相互に言及し合う会話になる。会話の途中でも
- * いつでも新しい質問を投げ込める(次に呼ばれる参加者が、その質問を踏まえて答える)。
  * 参加者はカード作成時点のBoy/Professor/Gemini+ONのCrewsペルソナのスナップショットで固定し、
  * 後からCrewsのON/OFFを変えても既存の座談会カードの参加者は変わらない。
+ *
+ * **2026年9月改修**: 以前は「次の発言を進める」を押すたびに参加者をラウンドロビンで1人ずつ
+ * 手動で呼び出す方式だった。実機でのユーザー要望を受け、質問コンポーザー(🎯宛先選択・📷写真
+ * 添付・入力欄)から質問を送ると、宛先(未指定なら全員)がランダムな順・ランダムな間隔で自動的に
+ * 1人ずつ返信する「LINEのような」カスケード方式に作り直した(runChatCascade())。
+ * 「直前までの会話ログ全文を毎回渡した上で1人ずつ呼ぶ」という土台の仕組み自体は変えていない
+ * ため、特別な相互作用エンジンを実装せずとも自然に相互言及が起きる、という既存の設計はそのまま
+ * 活きている。1回の送信につき各参加者は最大1回しか発言しない(API暴走防止)。
  * 無料運用の範囲内(検索グラウンディング無し、APIキー経由のaskGemini()を直接呼ぶだけ)で、
- * 1発言=1回のAPI呼び出し。会話が長くなるほど1日250回の共有プールを消費するため、ペースは
- * ユーザーのクリック任せ(自動連鎖はしない)。
+ * 1発言=1回のAPI呼び出し。宛先を絞らず全員に聞くと、その場で参加者数ぶんのAPI呼び出しが
+ * 連続して走ることになる(1日250回の共有プールを消費する点は変わらないため、宛先を絞る機能を
+ * 用意した)。
  */
 
 function buildRoundtableParticipants() {
@@ -1772,43 +1817,69 @@ function createChatCard(summaryCard, question) {
     summarySourceId: summaryCard.id, // 出力カードと同じ扱い(自動線・collectSessionTextContext()から除外)
     chatParticipants: buildRoundtableParticipants(),
     chatMessages: question ? [{ type: 'question', text: question, ts: Date.now() }] : [],
-    chatNextIndex: 0,
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
   scheduleAutoSave();
+  if (question) runChatCascade(card, [], undefined); // 宛先未指定=全員、写真添付なしで自動的に返信させる
   return card;
+}
+
+/** 1件ぶんのメッセージ(質問 or 発言)をHTMLへ。初期描画・カスケード中の逐次追加の両方で使う。 */
+function chatMessageHtml(m) {
+  if (m.type === 'question') {
+    const toHtml = m.targetNames ? ` <span class="star-card-chat-target-tag">→ ${escapeHtml(m.targetNames)}</span>` : '';
+    const imgHtml = m.imageDataUrl ? `<img class="star-card-chat-question-img" src="${m.imageDataUrl}" alt="">` : '';
+    return `<div class="star-card-chat-question">❓ ${escapeHtml(m.text)}${toHtml}${imgHtml}</div>`;
+  }
+  return (
+    `<div class="star-card-chat-line${m.kind === 'crew' ? ' crew' : ''}">` +
+    `<div class="star-card-chat-avatar">${escapeHtml(m.avatar || '')}</div>` +
+    '<div class="star-card-chat-bubble">' +
+    `<div class="star-card-chat-name">${escapeHtml(m.name || '')}</div>` +
+    `<div class="star-card-chat-text">${escapeHtml(m.text || '')}</div>` +
+    '</div></div>'
+  );
+}
+
+/** 宛先選択ポップオーバーの選択肢一覧(参加者ぶんのボタン)。 */
+function chatTargetOptionsHtml(card) {
+  return (card.chatParticipants || []).map((p) => (
+    `<button type="button" class="star-card-chat-target-option" data-id="${escapeHtml(p.id)}">` +
+    `<span class="star-card-chat-avatar${p.kind === 'crew' ? ' crew' : ''}">${escapeHtml(p.avatar || '')}</span>` +
+    `<span class="star-card-chat-target-option-name">${escapeHtml(p.name || '')}</span>` +
+    '<span class="star-card-chat-target-option-check">✓</span>' +
+    '</button>'
+  )).join('');
 }
 
 function chatCardInnerHtml(card) {
   const session = getSessionById(card.sessionId);
   const messages = card.chatMessages || [];
   const logHtml = messages.length
-    ? messages.map((m) => {
-        if (m.type === 'question') {
-          return `<div class="star-card-chat-question">❓ ${escapeHtml(m.text)}</div>`;
-        }
-        return `
-          <div class="star-card-chat-line${m.kind === 'crew' ? ' crew' : ''}">
-            <div class="star-card-chat-avatar">${escapeHtml(m.avatar || '')}</div>
-            <div class="star-card-chat-bubble">
-              <div class="star-card-chat-name">${escapeHtml(m.name || '')}</div>
-              <div class="star-card-chat-text">${escapeHtml(m.text || '')}</div>
-            </div>
-          </div>
-        `;
-      }).join('')
-    : '<p class="star-card-chat-empty">まだ発言はありません。「次の発言を進める」を押してください。</p>';
+    ? messages.map((m) => chatMessageHtml(m)).join('')
+    : '<p class="star-card-chat-empty">まだ発言はありません。質問を送ってみましょう。</p>';
   return `
     <p class="star-card-chat-head"><span class="dot"></span>座談会 — ${escapeHtml(session ? session.name : '(不明)')}</p>
     <div class="star-card-chat-log">${logHtml}</div>
-    <div class="star-card-chat-newq-row">
-      <input type="text" class="star-card-chat-newq-input" placeholder="新しい質問を投げる(任意)">
-      <button class="star-card-chat-newq-btn">投げる</button>
+    <div class="star-card-chat-attach-preview" hidden>
+      <img class="star-card-chat-attach-thumb" alt="">
+      <button type="button" class="star-card-chat-attach-clear" title="添付を外す">✕</button>
     </div>
-    <button class="star-card-chat-next-btn">▶ 次の発言を進める</button>
+    <div class="star-card-chat-target-popover" hidden>
+      <p class="star-card-chat-target-label">誰に聞く?(未選択=全員)</p>
+      <div class="star-card-chat-target-options">${chatTargetOptionsHtml(card)}</div>
+      <p class="star-card-chat-target-summary">全員へ質問します</p>
+    </div>
+    <div class="star-card-chat-composer-row">
+      <button type="button" class="star-card-chat-target-btn" title="質問の宛先を選ぶ">🎯<span class="star-card-chat-target-badge" hidden>0</span></button>
+      <button type="button" class="star-card-chat-attach-btn" title="写真を添付">📷</button>
+      <input type="file" class="star-card-chat-attach-input" accept="image/*" hidden>
+      <input type="text" class="star-card-chat-composer-input" placeholder="質問を入力…">
+      <button type="button" class="star-card-chat-send-btn" title="送信">➤</button>
+    </div>
     <p class="star-card-chat-status"></p>
     ${EDIT_GUIDE_HANDLES_HTML}
     ${editGuideHexHtml('chat')}
@@ -1817,30 +1888,114 @@ function chatCardInnerHtml(card) {
 
 function wireChatCard(card, el) {
   const logEl = el.querySelector('.star-card-chat-log');
-  const newqInput = el.querySelector('.star-card-chat-newq-input');
-  const newqBtn = el.querySelector('.star-card-chat-newq-btn');
+  const targetBtn = el.querySelector('.star-card-chat-target-btn');
+  const targetBadge = el.querySelector('.star-card-chat-target-badge');
+  const targetPopover = el.querySelector('.star-card-chat-target-popover');
+  const targetSummary = el.querySelector('.star-card-chat-target-summary');
+  const attachBtn = el.querySelector('.star-card-chat-attach-btn');
+  const attachInput = el.querySelector('.star-card-chat-attach-input');
+  const attachPreview = el.querySelector('.star-card-chat-attach-preview');
+  const attachThumb = el.querySelector('.star-card-chat-attach-thumb');
+  const attachClearBtn = el.querySelector('.star-card-chat-attach-clear');
+  const composerInput = el.querySelector('.star-card-chat-composer-input');
+  const sendBtn = el.querySelector('.star-card-chat-send-btn');
 
-  if (newqInput) newqInput.addEventListener('pointerdown', (e) => e.stopPropagation());
-  if (newqBtn) {
-    newqBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    newqBtn.addEventListener('click', (e) => {
+  // このカードの現在の合成中(未送信)の宛先・添付画像。送信するたびにリセットする、
+  // カードデータ(card.chatMessages)には含まれないUIだけの一時状態。
+  let pendingTargetIds = new Set();
+  let pendingImagePart = null; // askGemini()にそのまま渡せる{base64, mimeType}
+  let pendingImageDataUrl = null; // 表示・保存用のdata URL(サムネイル)
+
+  [targetBtn, attachBtn, attachClearBtn, sendBtn, composerInput, attachInput, targetPopover].forEach((elm) => {
+    if (elm) elm.addEventListener('pointerdown', (e) => e.stopPropagation());
+  });
+
+  function updateTargetUI() {
+    const n = pendingTargetIds.size;
+    if (targetBadge) {
+      targetBadge.textContent = String(n);
+      targetBadge.hidden = n === 0;
+    }
+    if (targetBtn) targetBtn.classList.toggle('active', n > 0);
+    if (targetSummary) targetSummary.textContent = n === 0 ? '全員へ質問します' : `${n}人へ名指しで質問します`;
+  }
+
+  if (targetBtn && targetPopover) {
+    targetBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const text = (newqInput?.value || '').trim();
-      if (!text) return;
-      card.chatMessages = card.chatMessages || [];
-      card.chatMessages.push({ type: 'question', text, ts: Date.now() });
-      scheduleAutoSave();
-      rerenderCardInPlace(card, el);
-      setStatus('新しい質問を投げました');
+      targetPopover.hidden = !targetPopover.hidden;
+    });
+    targetPopover.querySelectorAll('.star-card-chat-target-option').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = opt.dataset.id;
+        if (pendingTargetIds.has(id)) { pendingTargetIds.delete(id); opt.classList.remove('checked'); }
+        else { pendingTargetIds.add(id); opt.classList.add('checked'); }
+        updateTargetUI();
+      });
     });
   }
 
-  const nextBtn = el.querySelector('.star-card-chat-next-btn');
-  if (nextBtn) {
-    nextBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    nextBtn.addEventListener('click', (e) => {
+  if (attachBtn && attachInput) {
+    attachBtn.addEventListener('click', (e) => { e.stopPropagation(); attachInput.click(); });
+    attachInput.addEventListener('change', async () => {
+      const file = attachInput.files && attachInput.files[0];
+      if (!file) return;
+      const dataUrl = await generateThumbnail(file);
+      if (!dataUrl) {
+        setStatus('画像の読み込みに失敗しました', { important: true });
+        return;
+      }
+      pendingImageDataUrl = dataUrl;
+      pendingImagePart = dataUrlToImagePart(dataUrl);
+      if (attachThumb) attachThumb.src = dataUrl;
+      if (attachPreview) attachPreview.hidden = false;
+    });
+  }
+  if (attachClearBtn) {
+    attachClearBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      handleChatAdvanceTurn(card, el);
+      pendingImageDataUrl = null;
+      pendingImagePart = null;
+      if (attachInput) attachInput.value = '';
+      if (attachPreview) attachPreview.hidden = true;
+    });
+  }
+
+  function doSend() {
+    const text = (composerInput?.value || '').trim();
+    if (!text || chatTurnInFlight.has(card.id)) return;
+    const targetIds = Array.from(pendingTargetIds);
+    const targetNames = targetIds.length
+      ? targetIds.map((id) => (card.chatParticipants || []).find((p) => p.id === id)?.name).filter(Boolean).join('・')
+      : null;
+    const questionMsg = { type: 'question', text, ts: Date.now() };
+    if (targetNames) questionMsg.targetNames = targetNames;
+    if (pendingImageDataUrl) questionMsg.imageDataUrl = pendingImageDataUrl;
+    card.chatMessages = (card.chatMessages || []).concat([questionMsg]);
+    scheduleAutoSave();
+    appendChatLine(card.id, questionMsg);
+
+    const imageParts = pendingImagePart ? [pendingImagePart] : undefined;
+    composerInput.value = '';
+    pendingTargetIds = new Set();
+    pendingImageDataUrl = null;
+    pendingImagePart = null;
+    if (attachPreview) attachPreview.hidden = true;
+    if (attachInput) attachInput.value = '';
+    if (targetPopover) {
+      targetPopover.hidden = true;
+      targetPopover.querySelectorAll('.checked').forEach((o) => o.classList.remove('checked'));
+    }
+    updateTargetUI();
+
+    runChatCascade(card, targetIds, imageParts);
+  }
+
+  if (sendBtn) sendBtn.addEventListener('click', (e) => { e.stopPropagation(); doSend(); });
+  if (composerInput) {
+    composerInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); doSend(); }
     });
   }
 
@@ -1857,70 +2012,520 @@ function wireChatCard(card, el) {
       logEl.scrollTop += event.deltaY * 0.35;
     });
   }
+
+  if (chatTurnInFlight.has(card.id)) setChatComposerBusy(card.id, true);
+}
+
+// 宛先ポップオーバーの「外側クリックで閉じる」は、カードの数だけ document リスナーを増やさない
+// よう、ここで1つだけグローバルに監視する(wireChatCard()はカードが再描画されるたびに呼ばれるため、
+// カードごとに document.addEventListener してしまうとリスナーが際限なく積み重なってしまう)。
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('.star-card-chat-target-popover:not([hidden])').forEach((pop) => {
+    if (pop.contains(e.target)) return;
+    const btn = pop.parentElement?.querySelector('.star-card-chat-target-btn');
+    if (btn && (e.target === btn || btn.contains(e.target))) return;
+    pop.hidden = true;
+  });
+});
+
+function chatLogEl(cardId) {
+  const el = cardElById(cardId);
+  return el ? el.querySelector('.star-card-chat-log') : null;
+}
+
+/** カスケード中、参加者が返信を「考えている」ことを示す一時的なタイピングドット。 */
+function appendChatTyping(cardId, speaker) {
+  const log = chatLogEl(cardId);
+  if (!log) return null;
+  const node = document.createElement('div');
+  node.className = 'star-card-chat-typing';
+  node.innerHTML =
+    `<div class="star-card-chat-avatar${speaker.kind === 'crew' ? ' crew' : ''}">${escapeHtml(speaker.avatar || '')}</div>` +
+    '<div class="star-card-chat-typing-dots"><span></span><span></span><span></span></div>';
+  log.appendChild(node);
+  log.scrollTop = log.scrollHeight;
+  return node;
+}
+
+/** 1件ぶんのメッセージをログへ即座に追記する(カード全体の再描画はしない)。 */
+function appendChatLine(cardId, m) {
+  const log = chatLogEl(cardId);
+  if (!log) return;
+  const emptyEl = log.querySelector('.star-card-chat-empty');
+  if (emptyEl) emptyEl.remove();
+  const wrap = document.createElement('div');
+  wrap.innerHTML = chatMessageHtml(m).trim();
+  log.appendChild(wrap.firstElementChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setChatComposerBusy(cardId, busy) {
+  const el = cardElById(cardId);
+  if (!el) return;
+  const sendBtn = el.querySelector('.star-card-chat-send-btn');
+  const statusEl = el.querySelector('.star-card-chat-status');
+  if (sendBtn) sendBtn.disabled = busy;
+  if (statusEl) statusEl.textContent = busy ? '返信を待っています…' : '';
+}
+
+function shuffledArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const chatTurnInFlight = new Set();
 
-/** 座談会の参加者をラウンドロビンで1人呼び出し、そこまでの会話ログを文脈に一言だけ発言させる。 */
-async function handleChatAdvanceTurn(card, el) {
+/** 1人ぶんの発言をGeminiに生成させる(直前までの会話ログ全文を文脈として渡す)。 */
+async function fetchChatReply(card, speaker, messages, imageParts) {
+  const sessionContext = collectSessionTextContext(card.sessionId, []);
+  const transcriptText = messages
+    .map((m) => (m.type === 'question' ? `[質問] ${m.text}` : `[${m.name}] ${m.text}`))
+    .join('\n');
+  const styleInstruction =
+    speaker.kind === 'boy'
+      ? '小学生・中学生にも分かるやさしい言葉で答えてください。'
+      : speaker.kind === 'professor'
+        ? '学術的な視点から答えてください。専門用語を使っても構いません。'
+        : speaker.kind === 'crew'
+          ? 'あなたは次の人物になりきって話してください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
+            `【人物情報】\n${speaker.personInfo}\n\n` +
+            '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
+            `${speaker.theirWords}`
+          : ''; // Gemini: 素の人格のまま、追加の文体指定なし
+  const prompt =
+    `以下はある美術展覧会・セッションの記録です:\n${sessionContext}\n\n` +
+    'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。ここまでの発言:\n' +
+    `${transcriptText || '(まだ発言はありません)'}\n\n` +
+    `あなたは次の話者「${speaker.name}」です。${styleInstruction}\n` +
+    '直前までの発言を踏まえて構いません(賛成・反論・補足など)。前置き・名乗りは書かず、1〜2文の短い一言だけを返してください。';
+  const raw = await askGemini({ prompt, images: imageParts });
+  return raw.trim();
+}
+
+/**
+ * 質問送信後、宛先(targetIdsが空なら全員)がランダムな順・ランダムな間隔で自動的に1人ずつ
+ * 返信する(2026年9月、手動の「次の発言を進める」からLINEのような自動カスケードへ変更)。
+ * 1回のこの呼び出しで各参加者は最大1回しか発言しない(API暴走防止)。カードが削除される等で
+ * 見つからなくなったら、その時点で残りをそっと打ち切る。
+ */
+async function runChatCascade(card, targetIds, imageParts) {
   if (chatTurnInFlight.has(card.id)) return;
-  const participants = card.chatParticipants || [];
-  if (participants.length === 0) {
-    setStatus('参加者がいません', { important: true });
-    return;
-  }
-  const messages = card.chatMessages || [];
-  if (!messages.some((m) => m.type === 'question')) {
-    setStatus('先に質問を投げてください', { important: true });
-    return;
-  }
+  const allParticipants = card.chatParticipants || [];
+  const targets = targetIds.length
+    ? allParticipants.filter((p) => targetIds.includes(p.id))
+    : allParticipants;
+  if (targets.length === 0) return;
 
   chatTurnInFlight.add(card.id);
-  const nextBtn = el.querySelector('.star-card-chat-next-btn');
-  const statusEl = el.querySelector('.star-card-chat-status');
-  if (nextBtn) nextBtn.disabled = true;
-  if (statusEl) statusEl.textContent = '発言を考え中…';
+  setChatComposerBusy(card.id, true);
 
-  const speaker = participants[(card.chatNextIndex || 0) % participants.length];
+  for (const speaker of shuffledArray(targets)) {
+    if (!getCardById(card.id)) break;
+    await sleep(500 + Math.random() * 700);
+    const typingNode = appendChatTyping(card.id, speaker);
+    await sleep(900 + Math.random() * 1400);
+    if (typingNode) typingNode.remove();
+    playChatReplySound();
+    try {
+      const messages = card.chatMessages || [];
+      const text = await fetchChatReply(card, speaker, messages, imageParts);
+      const replyMsg = { kind: speaker.kind, name: speaker.name, avatar: speaker.avatar, text, ts: Date.now() };
+      card.chatMessages = messages.concat([replyMsg]);
+      scheduleAutoSave();
+      appendChatLine(card.id, replyMsg);
+    } catch (err) {
+      console.error(err);
+      debugLog('座談会エラー: ' + err.message);
+      setStatus(`${speaker.name}の発言取得に失敗しました: ${err.message}`, { important: true });
+    }
+  }
+
+  chatTurnInFlight.delete(card.id);
+  setChatComposerBusy(card.id, false);
+}
+
+/* ---------------- コメントカード(2026年9月追加) ----------------
+ * 顔文字(絵文字アバター)・名前・コメント本文だけの軽量な読み取り専用カード(mediaType:'comment')。
+ * 座談会カードと同じくCrewsペルソナの声を借りるが、こちらは「セッション全体を要約する」
+ * のではなく「1枚のカードに一言だけ反応する」軽いつぶやきという位置づけ。
+ * カードとして永続するのはこの「付随タイプ」だけで、現れ方は2通り:
+ * - 手動(このセクションのhandleCardComment()): 画像・動画・音声・テクストカードの編集ガイド
+ *   「💬 Comment」から、ユーザーが選んだ(または唯一の)Crewsペルソナに一言コメントさせる
+ * - 自動(後述のmaybeAddRandomCardComment()): 1日1回、全セッション横断でランダムに選んだ
+ *   カードへ、ユーザーの操作なしで静かに付く
+ * これとは別に、カードにならない一過性の「デイリーコメント」「グループビューイング」がある
+ * (後述のセクション参照)。無料枠の消費を抑えるため、いずれも手動トリガーか低頻度(1日1〜3回・
+ * 1分間隔)の自動トリガーに限り、無制限に呼び出す設計にはしていない。
+ */
+
+/**
+ * 画像・動画・音声・テクストカードの編集ガイド「💬 Comment」。ONのCrewsペルソナが複数いる
+ * 場合はshowChoiceDialog()でどのペルソナに聞くか選ばせる(1人だけなら聞かずそのまま使う)。
+ */
+async function handleCardComment(card, el) {
+  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
+  if (enabledCrews.length === 0) {
+    setStatus('ONになっているCrewsペルソナがいません(Crewsで登録・ONにしてください)', { important: true });
+    return;
+  }
+  let crew = enabledCrews[0];
+  if (enabledCrews.length > 1) {
+    const choice = await showChoiceDialog({
+      title: '誰にコメントさせますか?',
+      options: enabledCrews.map((c) => ({ label: `${c.avatar || '👤'} ${c.name}`, value: c.id })),
+    });
+    if (!choice) return;
+    const picked = enabledCrews.find((c) => c.id === choice);
+    if (!picked) return;
+    crew = picked;
+  }
+
+  setStatus(`${crew.name}のコメントを考え中…`, { busy: true });
   try {
-    const sessionContext = collectSessionTextContext(card.sessionId, []);
-    const transcriptText = messages
-      .map((m) => (m.type === 'question' ? `[質問] ${m.text}` : `[${m.name}] ${m.text}`))
-      .join('\n');
-    const styleInstruction =
-      speaker.kind === 'boy'
-        ? '小学生・中学生にも分かるやさしい言葉で答えてください。'
-        : speaker.kind === 'professor'
-          ? '学術的な視点から答えてください。専門用語を使っても構いません。'
-          : speaker.kind === 'crew'
-            ? 'あなたは次の人物になりきって話してください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
-              `【人物情報】\n${speaker.personInfo}\n\n` +
-              '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
-              `${speaker.theirWords}`
-            : ''; // Gemini: 素の人格のまま、追加の文体指定なし
-    const prompt =
-      `以下はある美術展覧会・セッションの記録です:\n${sessionContext}\n\n` +
-      'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。ここまでの発言:\n' +
-      `${transcriptText || '(まだ発言はありません)'}\n\n` +
-      `あなたは次の話者「${speaker.name}」です。${styleInstruction}\n` +
-      '直前までの発言を踏まえて構いません(賛成・反論・補足など)。前置き・名乗りは書かず、1〜2文の短い一言だけを返してください。';
-    const raw = await askGemini({ prompt });
-
-    card.chatMessages = messages.concat([{
-      kind: speaker.kind, name: speaker.name, avatar: speaker.avatar, text: raw.trim(), ts: Date.now(),
-    }]);
-    card.chatNextIndex = ((card.chatNextIndex || 0) + 1) % participants.length;
-    scheduleAutoSave();
-    rerenderCardInPlace(card, el);
-    setStatus(`${speaker.name}が発言しました`);
+    const text = await fetchPersonaCommentOnCard(crew, card);
+    const newCard = createCommentCard({ sourceCard: card, name: crew.name, avatar: crew.avatar || '👤', text });
+    createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
+    setStatus('コメントを追加しました');
   } catch (err) {
     console.error(err);
-    debugLog('座談会エラー: ' + err.message);
-    setStatus(`発言の取得に失敗しました: ${err.message}`, { important: true });
-    if (nextBtn) nextBtn.disabled = false;
-    if (statusEl) statusEl.textContent = '';
+    debugLog('コメント生成エラー: ' + err.message);
+    setStatus(`コメントの生成に失敗しました: ${err.message}`, { important: true });
+  }
+}
+
+function createCommentCard({ sourceCard, name, avatar, text, x, y }) {
+  const card = {
+    id: crypto.randomUUID(),
+    x: x ?? sourceCard.x + sourceCard.width + 40 + (Math.random() * 40 - 20),
+    y: y ?? sourceCard.y + (Math.random() * 80 - 40),
+    width: 190,
+    height: 100,
+    mediaType: 'comment',
+    memo: text,
+    commentName: name,
+    commentAvatar: avatar,
+    sessionId: sourceCard.sessionId,
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  redrawAsterismLines();
+  scheduleAutoSave();
+  return card;
+}
+
+function commentCardInnerHtml(card) {
+  return `
+    <div class="star-card-comment-head">
+      <div class="star-card-comment-avatar">${escapeHtml(card.commentAvatar || '')}</div>
+      <div class="star-card-comment-name">${escapeHtml(card.commentName || '')}</div>
+    </div>
+    <div class="star-card-comment-text">${escapeHtml(card.memo || '')}</div>
+    ${EDIT_GUIDE_HANDLES_HTML}
+    ${editGuideHexHtml('comment')}
+  `;
+}
+
+/* ---------------- デイリーコメント・コメント履歴・グループビューイング(2026年9月追加) ----------------
+ * ユーザー指示により、以下の3つを明確に使い分ける:
+ * - **デイリーコメント**: セッションを開くたびに(enterSession()/onSignedIn()から)判定し、
+ *   1日3回まで、ONのCrewsペルソナの誰か1人が現在のセッションについて一言トースト表示する。
+ * - **グループビューイング**: ヘッダーのボタンで手動ON/OFF。ONの間、1分に1回、直近に取り込まれた
+ *   写真・記録に対してランダムなペルソナが一言コメントする(展覧会で撮影しながら使う想定)。
+ * - **カードコメント(自動・全セッション横断)**: 1日1回、アプリ全体のどこかのカードから
+ *   ランダムに1枚選び、ランダムなペルソナがASTR接続済みのコメントカードとして残す。
+ *   「僕の認識外で進んでほしい」というユーザー要望により、setStatus等の通知は一切出さない。
+ *
+ * デイリーコメント・グループビューイングの発言は「コメント履歴」(state.commentHistory、
+ * 最大COMMENT_HISTORY_MAX件、古い順に切り捨て)へ記録するだけの一過性データで、カードには
+ * ならない。カードコメント(自動)だけが、削除可能な通常のカードとして永続する。この区別は
+ * ユーザーが明確に指定したもの。
+ */
+const COMMENT_HISTORY_MAX = 100;
+
+function todayDateStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** persona人物になりきらせる指示文(座談会・コメント系のプロンプトで共通して使う土台部分)。 */
+function personaVoiceInstruction(crew) {
+  return (
+    'あなたは次の人物になりきって話してください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
+    `【人物情報】\n${crew.personInfo}\n\n` +
+    '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
+    `${crew.theirWords}`
+  );
+}
+
+function addCommentHistoryEntry({ name, avatar, text, source }) {
+  state.commentHistory = state.commentHistory || [];
+  state.commentHistory.push({ id: crypto.randomUUID(), name, avatar, text, source, ts: Date.now() });
+  if (state.commentHistory.length > COMMENT_HISTORY_MAX) {
+    state.commentHistory = state.commentHistory.slice(state.commentHistory.length - COMMENT_HISTORY_MAX);
+  }
+  scheduleAutoSave();
+}
+
+/** コメント履歴を閲覧するモーダル(既存のshowChoiceDialog()と同じ.modal-overlay/.modalを流用)。 */
+function openCommentHistory() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay visible';
+  const modal = document.createElement('div');
+  modal.className = 'modal comment-history-modal';
+  const heading = document.createElement('h2');
+  heading.textContent = 'コメント履歴';
+  const desc = document.createElement('p');
+  desc.className = 'modal-desc';
+  desc.textContent = 'デイリーコメント・グループビューイングの発言(最新100件)。カードには残らない一過性の記録です。';
+  const list = document.createElement('div');
+  list.className = 'comment-history-list';
+  const entries = (state.commentHistory || []).slice().reverse();
+  if (entries.length === 0) {
+    list.innerHTML = '<p class="comment-history-empty">まだコメントはありません。</p>';
+  } else {
+    entries.forEach((entry) => {
+      const row = document.createElement('div');
+      row.className = 'comment-history-row';
+      const sourceLabel = entry.source === 'group' ? 'グループビューイング' : 'デイリー';
+      row.innerHTML = `
+        <div class="comment-history-avatar">${escapeHtml(entry.avatar || '')}</div>
+        <div class="comment-history-body">
+          <div class="comment-history-meta"><b>${escapeHtml(entry.name || '')}</b><span>${escapeHtml(sourceLabel)}</span></div>
+          <div class="comment-history-text">${escapeHtml(entry.text || '')}</div>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+  }
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'secondary';
+  closeBtn.textContent = '閉じる';
+  actions.appendChild(closeBtn);
+  modal.appendChild(heading);
+  modal.appendChild(desc);
+  modal.appendChild(list);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+  const close = () => overlay.remove();
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+}
+
+/* ---- デイリーコメント: セッションを開くたび判定、1日3回まで ---- */
+
+const DAILY_COMMENT_PROGRESS_KEY = 'constellation-daily-comment-progress';
+const DAILY_COMMENT_MAX_PER_DAY = 3;
+
+function readDailyCommentProgress() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DAILY_COMMENT_PROGRESS_KEY) || 'null');
+    if (raw && raw.date === todayDateStr() && typeof raw.count === 'number') return raw;
+  } catch (err) { /* 壊れたデータは無視して初期値を使う */ }
+  return { date: todayDateStr(), count: 0 };
+}
+function writeDailyCommentProgress(progress) {
+  try { localStorage.setItem(DAILY_COMMENT_PROGRESS_KEY, JSON.stringify(progress)); } catch (err) { /* 無視 */ }
+}
+
+async function maybeShowDailyComment() {
+  const progress = readDailyCommentProgress();
+  if (progress.count >= DAILY_COMMENT_MAX_PER_DAY) return;
+  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
+  if (enabledCrews.length === 0) return;
+  const context = collectSessionTextContext(activeSessionId(), []);
+  if (!context || !context.trim()) return; // 語れる中身が無いセッションでは1日ぶんの枠を消費しない
+
+  // 先に枠を予約する(連続したセッション切り替えで多重に消費してしまわないよう、
+  // Gemini応答を待つ前に「今回ぶんは使った」ことにする)。
+  progress.count += 1;
+  writeDailyCommentProgress(progress);
+
+  const crew = enabledCrews[Math.floor(Math.random() * enabledCrews.length)];
+  try {
+    const prompt =
+      `${personaVoiceInstruction(crew)}\n\n` +
+      `以下はある美術展覧会・セッションの記録です:\n${context}\n\n` +
+      'この記録をふと思い出したような、日々のちょっとしたつぶやきを一言だけ返してください。前置き・名乗りは書かず、1文だけにしてください。';
+    const raw = await askGemini({ prompt });
+    const text = raw.trim();
+    showDailyCommentToast(crew, text);
+    addCommentHistoryEntry({ name: crew.name, avatar: crew.avatar, text, source: 'daily' });
+  } catch (err) {
+    console.error(err);
+    debugLog('デイリーコメントエラー: ' + err.message);
+    progress.count -= 1; // 失敗した回は枠を返す(次のセッション開時に再挑戦できるように)
+    writeDailyCommentProgress(progress);
+  }
+}
+
+let dailyCommentHideTimer = null;
+function showDailyCommentToast(crew, text) {
+  if (!els.dailyCommentToast) return;
+  els.dailyCommentAvatar.textContent = crew.avatar || '👤';
+  els.dailyCommentName.textContent = crew.name;
+  els.dailyCommentText.textContent = text;
+  els.dailyCommentToast.classList.add('show');
+  clearTimeout(dailyCommentHideTimer);
+  dailyCommentHideTimer = setTimeout(hideDailyCommentToast, 8000);
+}
+
+function hideDailyCommentToast() {
+  clearTimeout(dailyCommentHideTimer);
+  if (els.dailyCommentToast) els.dailyCommentToast.classList.remove('show');
+}
+
+/* ---- カードコメント(自動・全セッション横断、1日1回、ユーザーの認識外で静かに進める) ---- */
+
+const CARD_COMMENT_DATE_KEY = 'constellation-card-comment-date';
+
+/**
+ * ASTR接続を「今アクティブなセッション」ではなく、渡されたsessionId(=カード自身の実際の
+ * セッション)で作る、通知・効果音なしの静かな版。既存のcreateAstrConnection()は
+ * activeSessionId()を使うため、ユーザーが今見ていないセッションのカード同士を繋ぐと
+ * 誤ったsessionIdで保存されてしまう(=繋がったはずの線が永久に描画されない)。
+ * 「僕の認識外で進んでほしい」という自動生成の性質上、効果音・発光演出・ステータス表示も
+ * あえて鳴らさない。
+ */
+function createAstrConnectionSilent(cardIdA, cardIdB, sessionId) {
+  if (!cardIdA || !cardIdB || cardIdA === cardIdB) return null;
+  const exists = state.connections.some(
+    (c) =>
+      c.sessionId === sessionId &&
+      ((c.cardIdA === cardIdA && c.cardIdB === cardIdB) || (c.cardIdA === cardIdB && c.cardIdB === cardIdA))
+  );
+  if (exists) return null;
+  const connection = { id: crypto.randomUUID(), sessionId, cardIdA, cardIdB };
+  state.connections.push(connection);
+  return connection;
+}
+
+/** 対象カードの内容(メモ・写真ならサムネイル)を1文でコメントさせる、共通のプロンプト組み立て。 */
+async function fetchPersonaCommentOnCard(crew, targetCard) {
+  const imagePart = targetCard.mediaType === 'image' && targetCard.thumbDataUrl
+    ? dataUrlToImagePart(targetCard.thumbDataUrl)
+    : null;
+  const targetText = targetCard.memo && targetCard.memo.trim()
+    ? targetCard.memo.trim()
+    : '(この記録には文字情報がありません。写真があれば見た目だけから感じたことを一言どうぞ)';
+  const prompt =
+    `${personaVoiceInstruction(crew)}\n\n` +
+    `次の記録を見て/読んで、一言だけ感想やつぶやきを返してください:\n${targetText}\n\n` +
+    '前置き・名乗りは書かず、1文だけの短いつぶやきにしてください。';
+  const raw = await askGemini({ prompt, images: imagePart ? [imagePart] : undefined });
+  return raw.trim();
+}
+
+/**
+ * アプリ起動時に1日1回、全セッション・全カードからランダムに1枚選び、ランダムなONの
+ * Crewsペルソナにコメントさせて、ASTR接続済みの新規コメントカードとして残す。
+ * ユーザー指示「僕の認識外で進んでほしい」により、成功・失敗どちらもsetStatus()等の
+ * 通知は一切出さない(コンソール/デバッグログのみ)。
+ */
+async function maybeAddRandomCardComment() {
+  try {
+    if (localStorage.getItem(CARD_COMMENT_DATE_KEY) === todayDateStr()) return;
+  } catch (err) {
+    return;
+  }
+  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
+  if (enabledCrews.length === 0) return;
+  const candidates = state.cards.filter((c) => COMMENTABLE_MEDIA_TYPES.includes(c.mediaType));
+  if (candidates.length === 0) return;
+
+  try {
+    localStorage.setItem(CARD_COMMENT_DATE_KEY, todayDateStr());
+  } catch (err) { /* 無視 */ }
+
+  const targetCard = candidates[Math.floor(Math.random() * candidates.length)];
+  const crew = enabledCrews[Math.floor(Math.random() * enabledCrews.length)];
+  try {
+    const text = await fetchPersonaCommentOnCard(crew, targetCard);
+    const newCard = createCommentCard({ sourceCard: targetCard, name: crew.name, avatar: crew.avatar || '👤', text });
+    createAstrConnectionSilent(targetCard.id, newCard.id, targetCard.sessionId);
+    scheduleAutoSave();
+  } catch (err) {
+    console.error(err);
+    debugLog('カードコメント(自動)エラー: ' + err.message);
+    try { localStorage.removeItem(CARD_COMMENT_DATE_KEY); } catch (e2) { /* 無視 */ } // 失敗は「今日はやった」扱いにしない
+  }
+}
+
+/* ---- グループビューイングモード(手動ON/OFF、ONの間1分に1回) ---- */
+
+let groupViewingActive = false;
+let groupViewingTimer = null;
+let groupViewingStartedAt = 0;
+let groupViewingTickInFlight = false;
+const GROUP_VIEWING_INTERVAL_MS = 60 * 1000;
+
+function isGroupViewingActive() {
+  return groupViewingActive;
+}
+
+function toggleGroupViewing() {
+  if (groupViewingActive) stopGroupViewing();
+  else startGroupViewing();
+}
+
+function startGroupViewing() {
+  if (groupViewingActive) return;
+  groupViewingActive = true;
+  groupViewingStartedAt = Date.now();
+  updateGroupViewingButton();
+  setStatus('グループビューイングを開始しました(1分に1回、Crewsがコメントします)');
+  groupViewingTimer = setInterval(groupViewingTick, GROUP_VIEWING_INTERVAL_MS);
+}
+
+function stopGroupViewing() {
+  if (!groupViewingActive) return;
+  groupViewingActive = false;
+  clearInterval(groupViewingTimer);
+  groupViewingTimer = null;
+  updateGroupViewingButton();
+  setStatus('グループビューイングを終了しました');
+}
+
+function updateGroupViewingButton() {
+  if (!els.groupViewingBtn) return;
+  els.groupViewingBtn.classList.toggle('group-viewing-btn--active', groupViewingActive);
+  els.groupViewingBtn.textContent = groupViewingActive ? '👀 停止' : '👀 グループビューイング';
+}
+
+/** 開始してから新しく取り込まれたカードの中からランダムに1枚選び、ランダムなペルソナに
+ *  一言コメントさせる。新着が無ければ今回は何もしない(無理にコメントを作らない)。 */
+async function groupViewingTick() {
+  if (groupViewingTickInFlight || !groupViewingActive) return;
+  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
+  if (enabledCrews.length === 0) return;
+  const freshCards = state.cards.filter(
+    (c) => COMMENTABLE_MEDIA_TYPES.includes(c.mediaType) && new Date(c.createdAt).getTime() >= groupViewingStartedAt
+  );
+  if (freshCards.length === 0) return;
+
+  groupViewingTickInFlight = true;
+  try {
+    const targetCard = freshCards[Math.floor(Math.random() * freshCards.length)];
+    const crew = enabledCrews[Math.floor(Math.random() * enabledCrews.length)];
+    const text = await fetchPersonaCommentOnCard(crew, targetCard);
+    showDailyCommentToast(crew, text); // トーストUIをデイリーコメントと共用する(ユーザー指示)
+    addCommentHistoryEntry({ name: crew.name, avatar: crew.avatar, text, source: 'group' });
+  } catch (err) {
+    console.error(err);
+    debugLog('グループビューイングコメントエラー: ' + err.message);
   } finally {
-    chatTurnInFlight.delete(card.id);
+    groupViewingTickInFlight = false;
   }
 }
 
@@ -3491,6 +4096,7 @@ async function handleSave() {
       hiddenAutoLinks: state.hiddenAutoLinks,
       exhibitionCalendarId: state.exhibitionCalendarId,
       crews: state.crews,
+      commentHistory: state.commentHistory,
       feHistory: state.feHistory,
       feHistoryIndex: state.feHistoryIndex,
       breadcrumb: state.breadcrumb,
