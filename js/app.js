@@ -1013,7 +1013,10 @@ function editGuideHexHtml(mediaType) {
     // 2026年9月追加: コメント本文もドラッグ選択してコピペしたい、という要望を受け、
     // 座談会カードと同じ仕組み(Editでpointer-events:noneをトグル解除)のEditを追加した。
     // 本文自体は読み取り専用なので、実際に書き換えることはできない。
-    return hex('edit', 'Edit') + hex('delete', 'Delete');
+    // Reply(2026年9月追加): このコメントを発言したペルソナと会話を続けたい、という要望を
+    // 受け、押すとこのカード自体を座談会カード(mediaType:'chat')へ変換する
+    // (handleCommentReply()参照)。
+    return hex('reply', 'Reply') + hex('edit', 'Edit') + hex('delete', 'Delete');
   }
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
   // 写真の中の文字をOCRで抜き出す機能。画像のみ。「写真を残してメモに追記」「写真を破棄してテクストカード化」の2択
@@ -1195,8 +1198,10 @@ function renderCard(card) {
         handleSummonSummary(card);
       } else if (action === 'comment') {
         handleCardComment(card, el);
+      } else if (action === 'reply') {
+        handleCommentReply(card, el);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply') scheduleAutoSave();
     });
   });
 
@@ -2435,7 +2440,7 @@ async function handleCardComment(card, el) {
   setStatus(`${persona.name}のコメントを考え中…`, { busy: true });
   try {
     const text = await fetchPersonaCommentOnCard(persona, card);
-    const newCard = createCommentCard({ sourceCard: card, name: persona.name, avatar: persona.avatar || '👤', text });
+    const newCard = createCommentCard({ sourceCard: card, persona, name: persona.name, avatar: persona.avatar || '👤', text });
     createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
     setStatus('コメントを追加しました');
   } catch (err) {
@@ -2445,7 +2450,7 @@ async function handleCardComment(card, el) {
   }
 }
 
-function createCommentCard({ sourceCard, name, avatar, text, x, y }) {
+function createCommentCard({ sourceCard, persona, name, avatar, text, x, y }) {
   const card = {
     id: crypto.randomUUID(),
     x: x ?? sourceCard.x + sourceCard.width + 40 + (Math.random() * 40 - 20),
@@ -2456,6 +2461,11 @@ function createCommentCard({ sourceCard, name, avatar, text, x, y }) {
     memo: text,
     commentName: name,
     commentAvatar: avatar,
+    // Reply(2026年9月追加)でこのカードを座談会へ変換する際、buildRoundtableParticipants()の
+    // どの参加者が発言していたかを引き当てるために持たせておく(kind: 'boy'|'professor'|
+    // 'gemini'|'crew'、idはcrewの場合state.crews上のid)。
+    commentPersonaKind: persona ? persona.kind : undefined,
+    commentPersonaId: persona ? persona.id : undefined,
     sessionId: sourceCard.sessionId,
     createdAt: new Date().toISOString(),
   };
@@ -2464,6 +2474,39 @@ function createCommentCard({ sourceCard, name, avatar, text, x, y }) {
   redrawAsterismLines();
   scheduleAutoSave();
   return card;
+}
+
+/**
+ * コメントカードの「Reply」編集ガイド(2026年9月追加): このカード自体を座談会カード
+ * (mediaType: 'chat')へ変換し、発言していたペルソナとの会話をそのまま続けられるようにする。
+ * 新しい座談会カードを別途作るのではなく、このカードのIDと座標を保ったまま載せ替える。
+ * 発言していたペルソナ(commentPersonaKind/commentPersonaId)を今のbuildRoundtableParticipants()
+ * から引き当て、見つからない場合(ONから外されたCrews等)はコメント時点の名前・アバターだけで
+ * 簡易的に参加者へ加える(会話の続きが成立しなくなるのを避けるため)。
+ */
+function handleCommentReply(card, el) {
+  const participants = buildRoundtableParticipants();
+  let persona = participants.find((p) => p.kind === card.commentPersonaKind && p.id === card.commentPersonaId);
+  if (!persona) {
+    persona = { kind: card.commentPersonaKind || 'crew', id: card.commentPersonaId || card.id, name: card.commentName, avatar: card.commentAvatar };
+    participants.push(persona);
+  }
+  const firstMessage = { kind: persona.kind, name: card.commentName, avatar: card.commentAvatar, text: card.memo || '' };
+
+  card.mediaType = 'chat';
+  card.chatParticipants = participants;
+  card.chatMessages = [firstMessage];
+  card.width = 320;
+  card.height = 360;
+  delete card.memo;
+  delete card.commentName;
+  delete card.commentAvatar;
+  delete card.commentPersonaKind;
+  delete card.commentPersonaId;
+
+  rerenderCardInPlace(card, el);
+  scheduleAutoSave();
+  setStatus('座談会に変換しました。続きの質問を送れます');
 }
 
 function commentCardInnerHtml(card) {
@@ -2709,7 +2752,7 @@ async function maybeAddRandomCardComment() {
   const persona = participants[Math.floor(Math.random() * participants.length)];
   try {
     const text = await fetchPersonaCommentOnCard(persona, targetCard);
-    const newCard = createCommentCard({ sourceCard: targetCard, name: persona.name, avatar: persona.avatar || '👤', text });
+    const newCard = createCommentCard({ sourceCard: targetCard, persona, name: persona.name, avatar: persona.avatar || '👤', text });
     createAstrConnectionSilent(targetCard.id, newCard.id, targetCard.sessionId);
     scheduleAutoSave();
   } catch (err) {

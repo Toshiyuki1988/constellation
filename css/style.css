@@ -668,6 +668,7 @@ html, body {
 }
 
 .star-card-hex--caption { left: 0; top: 22%; transform: translate(-115%, -50%); }
+.star-card-hex--reply   { left: 0; top: 22%; transform: translate(-115%, -50%); }
 .star-card-hex--edit    { left: 0; top: 78%; transform: translate(-115%, -50%); }
 .star-card-hex--title   { left: 0; top: 22%; transform: translate(-115%, -50%); }
 .star-card-hex--toggle  { left: 0; top: 22%; transform: translate(-115%, -50%); }
@@ -692,7 +693,7 @@ html, body {
   opacity: 0.7;
   z-index: 6;
 }
-.star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title, .star-card-hex-strut--toggle { right: -20px; top: 50%; transform: translateY(-50%); }
+.star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title, .star-card-hex-strut--toggle, .star-card-hex-strut--reply { right: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--depth, .star-card-hex-strut--delete { left: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--extract { width: 2px; height: 20px; left: 50%; bottom: 100%; transform: translateX(-50%); }
 .star-card-hex-strut--summon { width: 2px; height: 20px; left: 50%; top: 100%; transform: translateX(-50%); }
