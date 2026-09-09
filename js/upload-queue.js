@@ -146,6 +146,7 @@ async function persistToUploadQueue(card, blob, filename) {
     return true;
   } catch (err) {
     console.error('アップロード待機列への保存に失敗', err);
+    if (typeof debugLog === 'function') debugLog(`待機列への保存に失敗: ${err && err.message ? err.message : err}`);
     return false;
   }
 }
@@ -183,16 +184,22 @@ async function drainUploadQueue() {
   uploadQueueDraining = true;
   try {
     let entries = await uploadQueueGetAll();
+    if (typeof debugLog === 'function') debugLog(`アップロード待機列を処理開始(${entries.length}件)`);
     while (entries.length > 0 && isUploadAllowedNow()) {
       const batch = entries.slice(0, UPLOAD_QUEUE_CONCURRENCY);
       await Promise.all(batch.map(uploadQueuedEntry));
       if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
       const nextEntries = await uploadQueueGetAll();
-      if (nextEntries.length >= entries.length) break; // 進捗なし(全滅)。無限リトライを避けて打ち切る
+      if (nextEntries.length >= entries.length) {
+        // 進捗なし(全滅)。無限リトライを避けて打ち切る(個々の失敗理由はuploadCardFileInBackground()側でdebugLog済み)。
+        if (typeof debugLog === 'function') debugLog(`アップロード待機列: 進捗なし(残り${nextEntries.length}件)のため打ち切り`);
+        break;
+      }
       entries = nextEntries;
     }
   } catch (err) {
     console.error('アップロード待機列の処理に失敗', err);
+    if (typeof debugLog === 'function') debugLog(`アップロード待機列の処理に失敗: ${err && err.message ? err.message : err}`);
   } finally {
     uploadQueueDraining = false;
   }

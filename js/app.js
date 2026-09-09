@@ -4203,6 +4203,7 @@ async function uploadCardFileInBackground(card, blob, filename) {
     return true;
   } catch (err) {
     console.error(err);
+    debugLog(`アップロード失敗(card ${card.id}): ${err && err.message ? err.message : err}`);
     card.uploadPending = false;
     card.uploadQueued = false;
     card.uploadFailed = true;
