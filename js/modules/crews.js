@@ -65,6 +65,8 @@
   let pendingAvatar = AVATAR_PALETTE[0];
   let stylesInjected = false; // ペルソナ管理パネルと情報ポップアップ、どちらが先に開かれてもCSSを二重注入しない
   let infoPopupEls = null;
+  let fieldEditorEls = null;
+  let fieldEditorKey = null; // 'personInfo' | 'theirWords' | null(未使用)。今ポップアップが映している項目
 
   /* ---------------- DOM / CSS をこのファイルだけで自己完結させて注入する ---------------- */
 
@@ -173,11 +175,12 @@
         font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
         color: rgba(255, 255, 255, 0.45);
       }
-      .crews-ocr-btn {
+      .crews-ocr-btn, .crews-expand-btn {
         width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
         background: rgba(85, 230, 247, 0.12); border: 1px solid rgba(85, 230, 247, 0.35); color: #55e6f7; cursor: pointer;
+        font-size: 12px;
       }
-      .crews-ocr-btn:hover { background: rgba(85, 230, 247, 0.25); }
+      .crews-ocr-btn:hover, .crews-expand-btn:hover { background: rgba(85, 230, 247, 0.25); }
       .crews-ocr-btn:disabled { opacity: 0.5; cursor: default; }
       .crews-field-input {
         width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px;
@@ -260,6 +263,53 @@
         border-radius: 7px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 12px; line-height: 1.7;
         color: rgba(255, 255, 255, 0.88); white-space: pre-wrap; word-break: break-word;
       }
+
+      /* 【人物情報】【その言葉】を大きく開いて編集するポップアップ(2026年9月追加)。
+         「かなり作り込むことに対応できるよう入力欄をポップアップででかくしたい」という要望。 */
+      .crews-field-editor-overlay {
+        position: fixed; inset: 0; z-index: 140;
+        display: flex; align-items: center; justify-content: center;
+        opacity: 0; pointer-events: none; transition: opacity 0.18s ease-out; padding: 16px;
+      }
+      .crews-field-editor-overlay.open { opacity: 1; pointer-events: auto; }
+      .crews-field-editor-backdrop { position: absolute; inset: 0; background: rgba(6, 10, 12, 0.82); }
+      .crews-field-editor-panel {
+        position: relative; width: min(94vw, 860px); height: min(88vh, 820px);
+        display: flex; flex-direction: column;
+        background: rgba(9, 15, 18, 0.98); border: 1px solid rgba(85, 230, 247, 0.3); border-radius: 16px;
+        padding: 18px 20px 20px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        transform: scale(0.96); transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+      }
+      .crews-field-editor-overlay.open .crews-field-editor-panel { transform: scale(1); }
+      .crews-field-editor-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex: none; }
+      .crews-field-editor-label {
+        flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.06em;
+        color: rgba(255, 255, 255, 0.6); text-transform: uppercase;
+      }
+      .crews-field-editor-ocr-btn {
+        padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(85, 230, 247, 0.35);
+        background: rgba(85, 230, 247, 0.1); color: #55e6f7; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px;
+        font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; flex: none;
+      }
+      .crews-field-editor-ocr-btn svg { width: 13px; height: 13px; }
+      .crews-field-editor-ocr-btn:hover { background: rgba(85, 230, 247, 0.22); }
+      .crews-field-editor-ocr-btn:disabled { opacity: 0.5; cursor: default; }
+      .crews-field-editor-close {
+        width: 28px; height: 28px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+        background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(85, 230, 247, 0.3); color: rgba(255, 255, 255, 0.85);
+        font-size: 13px; cursor: pointer;
+      }
+      .crews-field-editor-close:hover { background: rgba(85, 230, 247, 0.25); }
+      .crews-field-editor-textarea {
+        flex: 1; width: 100%; resize: none;
+        background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px;
+        padding: 14px 16px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 15px; line-height: 1.85; color: #fff;
+      }
+      .crews-field-editor-textarea::placeholder { color: rgba(255, 255, 255, 0.3); }
+      .crews-field-editor-hint {
+        flex: none; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.4);
+        margin: 8px 0 0; line-height: 1.7;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -289,6 +339,7 @@
             <div class="crews-field">
               <div class="crews-field-label-row">
                 <span class="crews-field-label">【人物情報】— 誰か・どの文献か</span>
+                <button class="crews-expand-btn crews-expand-person" title="大きく開いて編集">⛶</button>
                 <button class="crews-ocr-btn crews-ocr-person" title="カメラでOCR読み取り">${CAMERA_ICON_SVG}</button>
               </div>
               <textarea class="crews-field-input crews-person-info" rows="3" placeholder="例: グスタフソン&ハーポヤ『つぼみの本』に登場する、森のそばで長く暮らしてきた人物。"></textarea>
@@ -296,6 +347,7 @@
             <div class="crews-field">
               <div class="crews-field-label-row">
                 <span class="crews-field-label">【その言葉】— 本人の言葉をそのまま引用</span>
+                <button class="crews-expand-btn crews-expand-words" title="大きく開いて編集">⛶</button>
                 <button class="crews-ocr-btn crews-ocr-words" title="カメラでOCR読み取り">${CAMERA_ICON_SVG}</button>
               </div>
               <textarea class="crews-field-input crews-their-words" rows="5" placeholder="本の一節などをそのまま。長ければカメラで複数回読み取って構いません(追記されます)。"></textarea>
@@ -325,6 +377,8 @@
       theirWords: overlay.querySelector('.crews-their-words'),
       ocrPersonBtn: overlay.querySelector('.crews-ocr-person'),
       ocrWordsBtn: overlay.querySelector('.crews-ocr-words'),
+      expandPersonBtn: overlay.querySelector('.crews-expand-person'),
+      expandWordsBtn: overlay.querySelector('.crews-expand-words'),
       avatarGrid: overlay.querySelector('.crews-avatar-grid'),
       saveBtn: overlay.querySelector('.crews-save-btn'),
       deleteBtn: overlay.querySelector('.crews-delete-btn'),
@@ -357,6 +411,13 @@
     crEls.ocrPersonBtn.addEventListener('click', (e) => { e.stopPropagation(); ocrIntoTextarea(crEls.personInfo, crEls.ocrPersonBtn); });
     crEls.ocrWordsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     crEls.ocrWordsBtn.addEventListener('click', (e) => { e.stopPropagation(); ocrIntoTextarea(crEls.theirWords, crEls.ocrWordsBtn); });
+
+    // 大きく開いて編集するポップアップ(2026年9月追加)。「かなり作り込むことに対応できるよう
+    // 入力欄をポップアップで大きくしたい」というユーザー要望を受けて追加した。
+    crEls.expandPersonBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    crEls.expandPersonBtn.addEventListener('click', (e) => { e.stopPropagation(); openFieldEditor('personInfo'); });
+    crEls.expandWordsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    crEls.expandWordsBtn.addEventListener('click', (e) => { e.stopPropagation(); openFieldEditor('theirWords'); });
 
     crEls.saveBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     crEls.saveBtn.addEventListener('click', (e) => { e.stopPropagation(); savePersona(); });
@@ -484,6 +545,7 @@
     crEls.personInfo.value = '';
     crEls.theirWords.value = '';
     crEls.deleteBtn.hidden = true;
+    closeFieldEditor(); // 開いていた大きい編集ポップアップが別ペルソナの内容を映したままにならないように
     renderAvatarGrid();
     renderRoster();
   }
@@ -497,6 +559,7 @@
     crEls.personInfo.value = crew.personInfo || '';
     crEls.theirWords.value = crew.theirWords || '';
     crEls.deleteBtn.hidden = false;
+    closeFieldEditor(); // 同上
     renderAvatarGrid();
     renderRoster();
   }
@@ -586,6 +649,102 @@
 
   function closeCrews() {
     if (crEls) crEls.overlay.classList.remove('open');
+  }
+
+  /* ---------------- 大きく開いて編集するポップアップ(2026年9月追加) ----------------
+   * 【人物情報】【その言葉】は作り込むと長文になりやすいが、召喚フォームのコンパクトな
+   * textarea(3〜5行)では窮屈、というユーザー要望を受けて追加した。召喚フォーム側の小さい
+   * textarea(crEls.personInfo/crEls.theirWords)が実データの持ち主であることは変えず、この
+   * ポップアップはあくまで「同じ値を大きく表示・編集するための鏡」として動く。
+   * - ポップアップでの入力(inputイベント)は都度、小さいtextareaへそのまま反映する
+   * - OCRは小さいtextarea自体に対して実行する(既存のocrIntoTextarea()をそのまま使い回し、
+   *   結果が届いた時点でポップアップがまだ同じ項目を表示中であれば、ポップアップ側にも反映する)。
+   *   ポップアップの表示用textareaを直接OCRの書き込み先にしないのは、OCRがバックグラウンドで
+   *   進む間にポップアップを閉じて別の項目を開き直された場合、後から届いた結果が「今表示中の
+   *   別の項目」を巻き込んで上書きしてしまう事故を避けるため。
+   */
+  const FIELD_EDITOR_CONFIG = {
+    personInfo: {
+      label: '【人物情報】— 誰か・どの文献か',
+      placeholder: '例: グスタフソン&ハーポヤ『つぼみの本』に登場する、森のそばで長く暮らしてきた人物。',
+      hint: '',
+    },
+    theirWords: {
+      label: '【その言葉】— 本人の言葉をそのまま引用',
+      placeholder: '本の一節などをそのまま。長ければカメラで複数回読み取って構いません(追記されます)。',
+      hint: '口調・人となりはこの引用そのものから読み取られます。性別や職業を別途指定する欄はありません。',
+    },
+  };
+
+  function fieldEditorSourceTextarea(key) {
+    return key === 'personInfo' ? crEls.personInfo : crEls.theirWords;
+  }
+
+  function buildFieldEditorDom() {
+    const overlay = document.createElement('div');
+    overlay.className = 'crews-field-editor-overlay';
+    overlay.innerHTML = `
+      <div class="crews-field-editor-backdrop"></div>
+      <div class="crews-field-editor-panel">
+        <div class="crews-field-editor-head">
+          <span class="crews-field-editor-label"></span>
+          <button class="crews-field-editor-ocr-btn" type="button">${CAMERA_ICON_SVG}OCR</button>
+          <button class="crews-field-editor-close" title="閉じる">✕</button>
+        </div>
+        <textarea class="crews-field-editor-textarea"></textarea>
+        <p class="crews-field-editor-hint" hidden></p>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    fieldEditorEls = {
+      overlay,
+      label: overlay.querySelector('.crews-field-editor-label'),
+      textarea: overlay.querySelector('.crews-field-editor-textarea'),
+      ocrBtn: overlay.querySelector('.crews-field-editor-ocr-btn'),
+      closeBtn: overlay.querySelector('.crews-field-editor-close'),
+      hint: overlay.querySelector('.crews-field-editor-hint'),
+    };
+
+    fieldEditorEls.textarea.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fieldEditorEls.textarea.addEventListener('input', () => {
+      if (!fieldEditorKey) return;
+      fieldEditorSourceTextarea(fieldEditorKey).value = fieldEditorEls.textarea.value;
+    });
+    fieldEditorEls.closeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fieldEditorEls.closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeFieldEditor(); });
+    overlay.querySelector('.crews-field-editor-backdrop').addEventListener('click', closeFieldEditor);
+
+    fieldEditorEls.ocrBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fieldEditorEls.ocrBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const keyAtClickTime = fieldEditorKey;
+      if (!keyAtClickTime) return;
+      const sourceTextarea = fieldEditorSourceTextarea(keyAtClickTime);
+      await ocrIntoTextarea(sourceTextarea, fieldEditorEls.ocrBtn);
+      if (fieldEditorKey === keyAtClickTime) {
+        fieldEditorEls.textarea.value = sourceTextarea.value; // ポップアップがまだ同じ項目を表示中なら反映
+      }
+    });
+  }
+
+  function openFieldEditor(key) {
+    if (!stylesInjected) { injectStyles(); stylesInjected = true; }
+    if (!fieldEditorEls) buildFieldEditorDom();
+    fieldEditorKey = key;
+    const cfg = FIELD_EDITOR_CONFIG[key];
+    fieldEditorEls.label.textContent = cfg.label;
+    fieldEditorEls.textarea.placeholder = cfg.placeholder;
+    fieldEditorEls.textarea.value = fieldEditorSourceTextarea(key).value;
+    fieldEditorEls.hint.textContent = cfg.hint;
+    fieldEditorEls.hint.hidden = !cfg.hint;
+    fieldEditorEls.overlay.classList.add('open');
+    setTimeout(() => fieldEditorEls.textarea.focus(), 50);
+  }
+
+  function closeFieldEditor() {
+    if (fieldEditorEls) fieldEditorEls.overlay.classList.remove('open');
+    fieldEditorKey = null;
   }
 
   /* ---------------- 情報ポップアップ(サマリーカードのヘックスを長押しすると開く) ----------------
