@@ -188,7 +188,47 @@ async function acquireStreamForMode(mode) {
   } else if (mode === 'audio') {
     camStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   }
+  if (mode === 'photo' || mode === 'caption' || mode === 'video') {
+    await maximizeVideoTrackResolution(camStream);
+  }
   return camStream;
+}
+
+/**
+ * getUserMediaのideal指定はブラウザ側の裁量が大きく、端末が対応できても
+ * それより低い解像度が選ばれることがある(2026年9月、実機でCAM_VIDEO_CONSTRAINTSを
+ * 3840x2160にしても実際の撮影結果が900x1600止まりだった不具合の調査用に追加)。
+ * 取得できたトラックの実際の対応幅(getCapabilities())を見て、端末が出せる最大解像度へ
+ * 明示的に引き上げを試みる。getCapabilities/applyConstraints非対応のブラウザや失敗時は
+ * 何もせず、既に取得できているストリームをそのまま使う(安全なベストエフォート、失敗しても
+ * 撮影自体は継続できる)。結果は?debugパネルのdebugLog経由で確認できる。
+ */
+async function maximizeVideoTrackResolution(stream) {
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track) return;
+  const before = typeof track.getSettings === 'function' ? track.getSettings() : null;
+  camDebugLog(`カメラ映像 取得直後: ${before ? `${before.width}x${before.height}` : '不明'}`);
+  if (typeof track.getCapabilities !== 'function') {
+    camDebugLog('getCapabilities非対応のためこれ以上の引き上げは試みません');
+    return;
+  }
+  let caps;
+  try {
+    caps = track.getCapabilities();
+  } catch (err) {
+    camDebugLog(`getCapabilities失敗: ${err && err.message ? err.message : err}`);
+    return;
+  }
+  camDebugLog(`カメラ対応幅: width.max=${caps.width && caps.width.max} height.max=${caps.height && caps.height.max}`);
+  if (!caps.width || !caps.width.max || !caps.height || !caps.height.max) return;
+  if (before && caps.width.max <= before.width && caps.height.max <= before.height) return; // 既に上限に達している
+  try {
+    await track.applyConstraints({ width: { ideal: caps.width.max }, height: { ideal: caps.height.max } });
+    const after = typeof track.getSettings === 'function' ? track.getSettings() : null;
+    camDebugLog(`applyConstraints後: ${after ? `${after.width}x${after.height}` : '不明'}`);
+  } catch (err) {
+    camDebugLog(`applyConstraints失敗: ${err && err.message ? err.message : err}`);
+  }
 }
 
 function stopCameraStream() {
