@@ -99,6 +99,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   els.uploadNetworkBtn.addEventListener('click', toggleUploadsAllowed); // js/upload-queue.js
   initUploadNetworkDetection(); // js/upload-queue.js(対応端末では以後自動でボタン表示が追従する)
+  els.exportToPhotosBtn = document.getElementById('export-to-photos-btn');
+  if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', handleExportToPhotos);
   updateUploadNetworkButton();
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
@@ -363,6 +365,33 @@ function updateUploadNetworkButton() {
       els.uploadNetworkBtn.textContent = count > 0 ? `📵 モバイル(保留${count}件)` : '📵 モバイル(保留)';
     }
   });
+  updateExportToPhotosButton();
+}
+
+/**
+ * Drive未保存の写真・動画を端末の「写真」アプリへ保存するボタン(js/upload-queue.js)の表示更新。
+ * 対象(画像・動画)が1件も無い間は、押しても意味が無いため非表示にしておく。
+ */
+function updateExportToPhotosButton() {
+  if (!els.exportToPhotosBtn) return;
+  uploadQueuePhotoExportableCount().then((count) => {
+    els.exportToPhotosBtn.hidden = count === 0;
+    els.exportToPhotosBtn.textContent = `📤 端末へ保存(${count}件)`;
+  });
+}
+
+async function handleExportToPhotos() {
+  const result = await exportPendingUploadsToPhotos(); // js/upload-queue.js
+  if (result === 'shared') {
+    setStatus('共有シートから「写真」アプリなどへ保存してください', { important: true });
+  } else if (result === 'empty') {
+    setStatus('Drive未保存の写真・動画はありません');
+  } else if (result === 'unsupported') {
+    setStatus('この端末・ブラウザは共有機能に対応していません', { important: true });
+  } else if (result === 'error') {
+    setStatus('端末への共有に失敗しました', { important: true });
+  }
+  // 'cancelled'(ユーザーが共有シートを閉じただけ)は何も表示しない
 }
 
 /**

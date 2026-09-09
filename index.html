@@ -65,6 +65,12 @@
            切り替わるが、iOS Safari等では使えないため、タップで手動切り替えできるようにしてある
            (js/upload-queue.js参照)。 -->
       <button id="upload-network-btn" title="モバイル通信中はDriveへのアップロードを保留します。タップでWi-Fi/モバイルを切り替え">📵 モバイル(保留)</button>
+      <!-- Drive未保存(アップロード失敗・Wi-Fi待ち)の写真・動画を、端末の標準の共有シート経由で
+           iPhoneの「写真」アプリへも保存できるようにするボタン(2026年9月追加)。iOS SafariにはWeb
+           ページからユーザー操作なしで写真ライブラリへ書き込むAPIが無いため、共有シートを開いて
+           ユーザー自身に「イメージを保存」を選んでもらう(js/upload-queue.jsのexportPendingUploadsToPhotos()参照)。
+           Drive上の元ファイル・アップロード待機列には一切触れない、あくまで保険としてのコピー。 -->
+      <button id="export-to-photos-btn" hidden title="Drive未保存の写真・動画を端末の「写真」アプリへも保存します(保険用のコピー)">📤 端末へ保存</button>
       <!-- グループビューイングモード(コメントカード機能の一部、2026年9月追加)。展覧会で
            撮影を始める時にONにすると、取り込まれた写真・記録に対してCrewsたちが1分に1回
            ランダムにコメントする(js/app.jsのgroupViewingTick()参照)。 -->
@@ -267,14 +273,14 @@
   <script src="js/config.js?v=20260905f"></script>
   <script src="js/auth.js?v=20260905f"></script>
   <script src="js/drive.js?v=20260911a"></script>
-  <script src="js/upload-queue.js?v=20260911c"></script>
+  <script src="js/upload-queue.js?v=20260911d"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911d"></script>
   <script src="js/camera.js?v=20260910a"></script>
   <script src="js/sound.js?v=20260911e"></script>
   <script src="js/canvas.js?v=20260909a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260911g"></script>
+  <script src="js/app.js?v=20260911h"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260905f"></script>

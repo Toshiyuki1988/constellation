@@ -215,6 +215,69 @@ async function drainUploadQueue() {
   }
 }
 
+/* ---------------- 端末の「写真」アプリへのコピー保存(2026年9月追加) ---------------- */
+//
+// 「アプリ(Drive)だけにデータを預けるのは怖い」というユーザー要望への対応。撮影のたびに
+// 毎回二重保存するのではなく、まだDriveに保存できていない(=アップロード失敗中・Wi-Fi待ち中で
+// IndexedDBの待機列にしか実データが無い)写真・動画だけを対象に、ユーザーが好きなタイミングで
+// まとめて端末の「写真」アプリへも逃がせるようにする。
+//
+// iOS SafariにはWebページからユーザー操作なしで写真ライブラリへ書き込むAPIが存在しないため、
+// Web Share API(navigator.share)で共有シートを開き、ユーザー自身に「イメージを保存」を選んで
+// もらう方式にした。これはIndexedDBの待機列やDrive上のデータには一切触れない、あくまで保険用の
+// コピーを増やすだけの機能(Driveへのアップロード成功/失敗判定・待機列からの削除ロジックとは独立)。
+
+// 写真アプリへ保存する意味があるのは画像・動画のみ(音声はカメラロールの対象外なので除く)。
+const PHOTO_EXPORTABLE_MEDIA_TYPES = ['image', 'video'];
+
+function isPhotoExportableEntry(entry) {
+  return PHOTO_EXPORTABLE_MEDIA_TYPES.includes(entry.mediaType);
+}
+
+/** ヘッダーのボタン表示更新用。画像・動画に絞った待機件数を返す。 */
+async function uploadQueuePhotoExportableCount() {
+  try {
+    const entries = await uploadQueueGetAll();
+    return entries.filter(isPhotoExportableEntry).length;
+  } catch (err) {
+    return 0;
+  }
+}
+
+/**
+ * Drive未保存の写真・動画を、端末標準の共有シート経由で「写真」アプリへ保存する。
+ * @returns {Promise<'shared'|'cancelled'|'unsupported'|'empty'|'error'>}
+ */
+async function exportPendingUploadsToPhotos() {
+  let entries;
+  try {
+    entries = (await uploadQueueGetAll()).filter(isPhotoExportableEntry);
+  } catch (err) {
+    console.error('待機列の読み込みに失敗', err);
+    return 'error';
+  }
+  if (entries.length === 0) return 'empty';
+
+  if (!navigator.share || !navigator.canShare) return 'unsupported';
+
+  const files = entries.map((entry, i) => {
+    const name = entry.filename || `constellation-${entry.cardId || i}`;
+    return new File([entry.blob], name, { type: entry.blob.type || (entry.mediaType === 'video' ? 'video/mp4' : 'image/jpeg') });
+  });
+
+  if (!navigator.canShare({ files })) return 'unsupported';
+
+  try {
+    await navigator.share({ files, title: 'CONSTELLATION - Drive未保存の写真・動画' });
+    return 'shared';
+  } catch (err) {
+    if (err && err.name === 'AbortError') return 'cancelled'; // ユーザーが共有シートを閉じただけ
+    console.error('端末への共有に失敗', err);
+    if (typeof debugLog === 'function') debugLog(`端末への共有に失敗: ${err && err.message ? err.message : err}`);
+    return 'error';
+  }
+}
+
 /**
  * 再読み込み直後、js/app.jsのonSignedIn()から1回呼ぶ。前回終了時に待機列へ残っていたぶんを
  * 拾い直し、Wi-Fi中ならそのままドレインを始める。card.uploadQueuedが立っているのに実データが
