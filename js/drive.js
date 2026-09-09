@@ -28,6 +28,19 @@ async function driveFetch(path, options = {}) {
   return res;
 }
 
+/**
+ * Googleアカウント全体のストレージ使用量を取得する(2026年9月追加、ヘッダーの容量表示用)。
+ * `about.get`は`drive.file`スコープでも呼べる(ファイル一覧ではなくアカウント全体の集計情報
+ * であるため、drive.fileの「このアプリが作成したファイルにしか触れない」制約の対象外)。
+ * `usage`はGoogleアカウント全体(Gmail・フォト等も含む)の合計、`usageInDrive`はDriveのみ。
+ * Google Workspaceの無制限プラン等では`limit`が返らないことがある。
+ */
+async function getDriveStorageQuota() {
+  const res = await driveFetch('/about?fields=storageQuota');
+  const data = await res.json();
+  return data.storageQuota || {};
+}
+
 /** "Constellation" フォルダを探し、なければ作成してIDを返す */
 async function findOrCreateAppFolder() {
   const q = encodeURIComponent(

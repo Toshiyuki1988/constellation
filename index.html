@@ -71,6 +71,10 @@
       <button id="group-viewing-btn" title="ONの間、1分に1回Crewsが取り込んだ写真・記録にコメントします">👀 グループビューイング</button>
       <button id="comment-history-btn" title="デイリーコメント・グループビューイングの発言履歴(最新100件)">💬 履歴</button>
       <button id="settings-btn" title="設定(クライアントID・APIキー)">⚙ 設定</button>
+      <!-- Googleアカウントのストレージ使用量(2026年9月追加)。drive.fileスコープのままabout.get
+           で取得できる(このアプリが作成したファイル以外は見えない制約の対象外)。タップで
+           再取得する(js/app.jsのrefreshDriveQuota()参照)。 -->
+      <button id="drive-quota-btn" class="drive-quota-btn" title="タップで更新" hidden></button>
       <button id="sign-in-btn" disabled>Googleでサインイン</button>
       <button id="sign-out-btn" hidden>サインアウト</button>
     </div>
@@ -262,7 +266,7 @@
 
   <script src="js/config.js?v=20260905f"></script>
   <script src="js/auth.js?v=20260905f"></script>
-  <script src="js/drive.js?v=20260909c"></script>
+  <script src="js/drive.js?v=20260911a"></script>
   <script src="js/upload-queue.js?v=20260910a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260907c"></script>
@@ -270,7 +274,7 @@
   <script src="js/sound.js?v=20260910a"></script>
   <script src="js/canvas.js?v=20260909a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260910c"></script>
+  <script src="js/app.js?v=20260911a"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260905f"></script>

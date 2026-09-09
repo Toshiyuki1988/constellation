@@ -87,6 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (els.groupViewingBtn) els.groupViewingBtn.addEventListener('click', toggleGroupViewing);
   els.commentHistoryBtn = document.getElementById('comment-history-btn');
   if (els.commentHistoryBtn) els.commentHistoryBtn.addEventListener('click', openCommentHistory);
+  els.driveQuotaBtn = document.getElementById('drive-quota-btn');
+  if (els.driveQuotaBtn) els.driveQuotaBtn.addEventListener('click', () => refreshDriveQuota());
 
   initCanvas(els.viewport, els.content);
   initExtractRegionPicker();
@@ -302,6 +304,7 @@ function armAutoSignInOnFirstGesture() {
 function toggleAuthUI(signedIn) {
   els.signInBtn.hidden = signedIn;
   els.signOutBtn.hidden = !signedIn;
+  if (els.driveQuotaBtn && !signedIn) els.driveQuotaBtn.hidden = true; // サインアウト後は表示を消す(古い数値を残さない)
   els.toolUpload.disabled = !signedIn;
   els.toolCamera.disabled = !signedIn;
   els.toolText.disabled = !signedIn;
@@ -360,6 +363,35 @@ function updateUploadNetworkButton() {
       els.uploadNetworkBtn.textContent = count > 0 ? `📵 モバイル(保留${count}件)` : '📵 モバイル(保留)';
     }
   });
+}
+
+/**
+ * ヘッダーのDriveストレージ使用量表示(2026年9月追加)。about.get()はdrive.fileスコープの
+ * ままでも呼べる(アカウント全体の集計値であり、個々のファイル一覧を返すものではないため)。
+ * サインイン時と、ボタン自体をタップした時(手動更新)に呼ぶ。
+ */
+function formatBytesGB(bytes) {
+  return (bytes / 1024 ** 3).toFixed(1);
+}
+
+async function refreshDriveQuota() {
+  if (!els.driveQuotaBtn || !state.folderId) return;
+  try {
+    const quota = await getDriveStorageQuota();
+    const usage = Number(quota.usage || 0);
+    const usageInDrive = Number(quota.usageInDrive || 0);
+    const limit = quota.limit ? Number(quota.limit) : null; // Workspaceの無制限プラン等ではlimitが無い
+    els.driveQuotaBtn.textContent = limit
+      ? `💾 ${formatBytesGB(usage)} / ${formatBytesGB(limit)} GB`
+      : `💾 ${formatBytesGB(usage)} GB使用中`;
+    els.driveQuotaBtn.title = `タップで更新(Driveのみ: ${formatBytesGB(usageInDrive)} GB。表示はGoogleアカウント全体の合計で、Gmail・フォト等も含みます)`;
+    els.driveQuotaBtn.hidden = false;
+  } catch (err) {
+    console.error(err);
+    debugLog('Drive容量の取得に失敗: ' + err.message);
+    // 失敗時は前回表示があればそのまま残し、無ければ何も表示しない(取得できないだけで
+    // アプリの他の機能に影響は無いため、目立つエラー表示はしない)。
+  }
 }
 
 /* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ---------------- */
@@ -437,6 +469,7 @@ async function onSignedIn() {
     await restoreUploadQueueOnLoad();
     maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
     maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
+    refreshDriveQuota(); // ヘッダーのDrive使用量表示
     setStatus(`読み込み完了(${state.cards.length}件)`);
   } catch (err) {
     console.error(err);
