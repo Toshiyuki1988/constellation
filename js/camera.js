@@ -177,7 +177,7 @@ async function switchCameraMode(mode) {
 // width/height は「これくらい欲しい」という ideal 指定。端末が対応していなければ
 // 自動的に近い値に調整される(失敗はしない)。指定しないとブラウザ既定の低解像度
 // (端末によっては 640x480 程度)になり、特にテクストモードのOCR精度に響くため必須。
-const CAM_VIDEO_CONSTRAINTS = { facingMode: 'environment', width: { ideal: 2560 }, height: { ideal: 1440 } };
+const CAM_VIDEO_CONSTRAINTS = { facingMode: 'environment', width: { ideal: 3840 }, height: { ideal: 2160 } };
 
 async function acquireStreamForMode(mode) {
   stopCameraStream();
