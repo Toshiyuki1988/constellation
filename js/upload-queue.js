@@ -150,19 +150,33 @@ async function persistToUploadQueue(card, blob, filename) {
   }
 }
 
+/**
+ * @returns {Promise<boolean>} このエントリを待機列から消してよいか(=アップロードが実際に
+ *   成功したか、またはカード自体が既に削除済みで送りようがないか)。
+ *   **2026年9月の重大な不具合修正**: 以前はuploadCardFileInBackground()の成功/失敗に
+ *   関わらず無条件でuploadQueueDelete()していたため、アクセストークン切れ等で一時的に
+ *   アップロードが失敗しただけでも、待機中の実データ(Blob)がIndexedDBから消えてしまい、
+ *   現地で撮った写真が二度と復元できなくなる事故があった。失敗時は消さずに残し、次回の
+ *   drainUploadQueue()呼び出し(再度Wi-Fiボタンを押す、アプリを開き直す等)で再試行できる
+ *   ようにする。
+ */
 async function uploadQueuedEntry(entry) {
   const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
   if (!card) {
     // カード自体が既に削除済み。待機中のファイルだけDriveへ送っても紐付け先が無いため破棄する。
     await uploadQueueDelete(entry.cardId).catch(() => {});
-    return;
+    return true;
   }
-  await uploadCardFileInBackground(card, entry.blob, entry.filename);
-  await uploadQueueDelete(entry.cardId).catch(() => {});
+  const ok = await uploadCardFileInBackground(card, entry.blob, entry.filename);
+  if (ok) await uploadQueueDelete(entry.cardId).catch(() => {});
+  return ok;
 }
 
 /** Wi-Fi中(isUploadAllowedNow()がtrue)の間だけ、待機列を少しずつアップロードしていく。
- *  ドレイン中にモバイルへ戻った場合はそこで打ち切り、残りは次にWi-Fiになった時に再開する。 */
+ *  ドレイン中にモバイルへ戻った場合はそこで打ち切り、残りは次にWi-Fiになった時に再開する。
+ *  失敗したエントリは待機列に残り続けるため、1周しても1件も減らなければ(=全滅)、同じ
+ *  失敗(トークン切れ等)を無限に繰り返さないようそこで打ち切る。次にWi-Fiボタンを押し直す・
+ *  アプリを開き直す等、改めてdrainUploadQueue()が呼ばれたタイミングで再挑戦される。 */
 async function drainUploadQueue() {
   if (uploadQueueDraining) return;
   if (!isUploadAllowedNow()) return;
@@ -173,7 +187,9 @@ async function drainUploadQueue() {
       const batch = entries.slice(0, UPLOAD_QUEUE_CONCURRENCY);
       await Promise.all(batch.map(uploadQueuedEntry));
       if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
-      entries = await uploadQueueGetAll();
+      const nextEntries = await uploadQueueGetAll();
+      if (nextEntries.length >= entries.length) break; // 進捗なし(全滅)。無限リトライを避けて打ち切る
+      entries = nextEntries;
     }
   } catch (err) {
     console.error('アップロード待機列の処理に失敗', err);

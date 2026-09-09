@@ -4182,7 +4182,10 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
 }
 
 /** createCardFromCapture()が即座に表示したカードの実体を、裏でDriveへアップロードする。
- *  js/upload-queue.jsの待機列ドレイン時にも(Wi-Fi接続時)同じ関数を使い回す。 */
+ *  js/upload-queue.jsの待機列ドレイン時にも(Wi-Fi接続時)同じ関数を使い回す。
+ *  @returns {Promise<boolean>} 成功したか。js/upload-queue.jsのuploadQueuedEntry()が、
+ *    IndexedDB上の待機中データを削除してよいかどうかの判断に使う(2026年9月、失敗時にも
+ *    無条件で削除していたため、アップロード失敗のたびに元データが消えてしまうバグがあった)。 */
 async function uploadCardFileInBackground(card, blob, filename) {
   try {
     const folderId = await resolveSessionMediaFolderId(card.sessionId);
@@ -4190,12 +4193,14 @@ async function uploadCardFileInBackground(card, blob, filename) {
     card.imageFileId = fileId;
     card.uploadPending = false;
     card.uploadQueued = false;
+    card.uploadFailed = false; // 前回失敗して付いたバッジを、再試行成功時にはきちんと消す
     const el = cardElById(card.id);
     if (el) {
-      el.classList.remove('star-card--upload-pending', 'star-card--upload-queued');
+      el.classList.remove('star-card--upload-pending', 'star-card--upload-queued', 'star-card--upload-failed');
       observeMediaForLazyLoad(el, card);
     }
     scheduleAutoSave();
+    return true;
   } catch (err) {
     console.error(err);
     card.uploadPending = false;
@@ -4208,6 +4213,7 @@ async function uploadCardFileInBackground(card, blob, filename) {
     }
     setStatus('アップロードに失敗しました(カードは残りますがDriveには保存されていません)', { important: true });
     scheduleAutoSave();
+    return false;
   } finally {
     if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
   }
