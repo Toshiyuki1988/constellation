@@ -86,6 +86,7 @@
   let cstCards = [];
   let cstIdSeq = 1;
   let cstDragCard = null, cstDragOffsetX = 0, cstDragOffsetY = 0;
+  let cstActivePhotoCardId = null; // 直前にクリックした写真カード。Ctrl+V貼り付け先の決定に使う
 
   /* ---------------- DOM / CSS をこのファイルだけで自己完結させて注入する ---------------- */
 
@@ -329,17 +330,18 @@
       .cst-board { position: relative; z-index: 1; width: 100%; height: 100%; }
 
       .cst-card {
-        position: absolute;
+        position: absolute; cursor: grab;
         border-radius: 10px; padding: 9px 10px 10px;
         background: rgba(12, 20, 24, 0.92); border: 1px solid rgba(85, 230, 247, 0.3);
         box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
         color: #fff; user-select: none;
       }
+      .cst-card:active { cursor: grabbing; }
       .cst-card.profile { border-color: rgba(85, 230, 247, 0.5); }
       .cst-card.words { border-color: rgba(255, 255, 255, 0.28); }
       .cst-card.photo { border-color: rgba(255, 209, 102, 0.4); }
-      .cst-card-head { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; cursor: grab; }
-      .cst-card-head:active { cursor: grabbing; }
+      .cst-card.photo.cst-photo-active { box-shadow: 0 0 0 2px rgba(85, 230, 247, 0.65), 0 10px 26px rgba(0, 0, 0, 0.4); }
+      .cst-card-head { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
       .cst-card-icon { font-size: 12px; flex: none; }
       .cst-card-kind {
         font-family: 'IBM Plex Mono', monospace; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.5);
@@ -366,8 +368,12 @@
       .cst-card.words .cst-card-text { font-style: italic; }
       .cst-card-photo-box {
         width: 100%; height: 64px; border-radius: 6px; background: rgba(255, 255, 255, 0.05); border: 1px dashed rgba(255, 255, 255, 0.18);
-        display: flex; align-items: center; justify-content: center; font-size: 20px; color: rgba(255, 255, 255, 0.35); margin-bottom: 5px;
+        display: flex; align-items: center; justify-content: center; color: rgba(255, 255, 255, 0.35); margin-bottom: 5px;
+        cursor: pointer; overflow: hidden; outline: none;
       }
+      .cst-card-photo-box:focus { border-color: rgba(85, 230, 247, 0.5); }
+      .cst-card-photo-hint { font-size: 9px; line-height: 1.5; text-align: center; }
+      .cst-card-photo-img { width: 100%; height: 100%; object-fit: cover; display: block; }
       .cst-card-title-input {
         width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 5px;
         padding: 5px 6px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10px; color: #fff;
@@ -785,6 +791,21 @@
     cstEls.saveBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     cstEls.saveBtn.addEventListener('click', (e) => { e.stopPropagation(); commitConstellationSave(); });
 
+    // 写真カードへのクリップボード貼り付け(Ctrl+V)。個々のphoto-box要素のフォーカス状態に
+    // 頼らず、オーバーレイ全体で拾って「直前にクリックした写真カード」(cstActivePhotoCardId)
+    // へ反映する(座談会の質問コンポーザーと同じ、画像アイテムが無ければ何もしない設計)。
+    cstEls.overlay.addEventListener('paste', async (e) => {
+      if (!cstActivePhotoCardId) return;
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
+      if (!imageItem) return;
+      e.preventDefault();
+      const blob = imageItem.getAsFile();
+      if (!blob) return;
+      await applyCstPhotoBlob(cstActivePhotoCardId, blob);
+    });
+
     // スワイプで閉じる(モジュール共通デザイン言語)。トップバーの掴みバー部分から。
     let swipeStartX = null, swipeStartY = null, swipeStartT = 0;
     cstEls.overlay.querySelector('.cst-topbar').addEventListener('pointerdown', (e) => {
@@ -810,6 +831,7 @@
     const crew = editingId ? getCrewById(editingId) : null;
     cstCards = crew ? (crew.constellationCards || []).map((c) => ({ ...c })) : cstCards;
     cstIdSeq = 1;
+    cstActivePhotoCardId = null; // 前回開いていた別ペルソナのカードを指したままにならないようにする
     cstEls.nameInput.value = crEls.nameInput.value || '';
     cstEls.topbarAvatar.textContent = pendingAvatar;
     renderConstellationBoard();
@@ -862,8 +884,12 @@
     let body = '';
     let ocrBtnHtml = '';
     if (card.type === 'photo') {
+      const imgHtml = card.imageDataUrl
+        ? `<img class="cst-card-photo-img" src="${escapeAttr(card.imageDataUrl)}" alt="">`
+        : `<span class="cst-card-photo-hint">🖼️<br>クリックで選択<br>/貼り付け</span>`;
       body = `
-        <div class="cst-card-photo-box">🖼️</div>
+        <div class="cst-card-photo-box" data-photo-box="${card.id}" tabindex="0">${imgHtml}</div>
+        <input type="file" accept="image/*" class="cst-card-photo-file" data-photo-file="${card.id}" hidden>
         <input class="cst-card-title-input" value="${escapeAttr(card.title || '')}" placeholder="作品タイトル">
       `;
     } else {
@@ -871,9 +897,13 @@
       body = `<textarea class="cst-card-text" placeholder="${escapeAttr(meta.placeholder)}">${escapeHtmlLocal(card.text || '')}</textarea>`;
       ocrBtnHtml = `<button class="cst-card-ocr-btn" data-ocr="${card.id}" title="カメラでOCR読み取り">📷</button>`;
     }
+    // data-dragはカード全体に付ける(以前はヘッダー行だけがドラッグ起点で、写真カードは
+    // 見た目の大部分を占めるphoto-box領域を掴んでも動かせない不具合報告があったため)。
+    // textarea/input/ボタン類は個別にpointerdownをstopPropagation済みなので、フォーム操作は
+    // 引き続き邪魔されない。
     return `
-      <div class="cst-card ${card.type}" id="cst-card-${card.id}" style="left:${card.x}px; top:${card.y}px; width:${width}px;">
-        <div class="cst-card-head" data-drag="${card.id}">
+      <div class="cst-card ${card.type}" id="cst-card-${card.id}" data-drag="${card.id}" style="left:${card.x}px; top:${card.y}px; width:${width}px;">
+        <div class="cst-card-head">
           <span class="cst-card-icon">${meta.icon}</span>
           <span class="cst-card-kind">${meta.label}</span>
           ${ocrBtnHtml}
@@ -941,8 +971,60 @@
       });
     });
 
+    // 写真カードの画像インポート(ファイル選択)・クリップボード貼り付け。
+    // クリックでそのカードを「アクティブ」にしつつファイル選択ダイアログを開き、
+    // 選んだ/貼り付けた画像はgenerateThumbnail()(js/app.js、座談会の添付画像と同じ関数)で
+    // サムネイル化してcard.imageDataUrlへ直接埋め込む(Driveへは別途アップロードしない)。
+    cstEls.board.querySelectorAll('[data-photo-box]').forEach((box) => {
+      // photo-box領域はカードの見た目の大部分を占めるため、ここも掴んでカードを動かしたい
+      // という実機報告があった。stopPropagationはせず、カード全体のドラッグ(onCstCardDragStart)
+      // にもそのまま伝播させつつ、pointerdownからの移動距離が小さい(=実質クリック)場合だけ
+      // ファイル選択ダイアログを開く、という判定にしている。
+      let downX = 0, downY = 0;
+      box.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; });
+      box.addEventListener('click', (e) => {
+        if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return; // ドラッグとみなし何もしない
+        setCstActivePhotoCard(box.dataset.photoBox);
+        const fileInput = cstEls.board.querySelector(`[data-photo-file="${box.dataset.photoBox}"]`);
+        if (fileInput) fileInput.click();
+      });
+    });
+    cstEls.board.querySelectorAll('[data-photo-file]').forEach((input) => {
+      input.addEventListener('pointerdown', (e) => e.stopPropagation());
+      input.addEventListener('change', async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        await applyCstPhotoBlob(input.dataset.photoFile, file);
+        input.value = '';
+      });
+    });
+    if (cstActivePhotoCardId) {
+      const activeEl = cstEls.board.querySelector('#cst-card-' + cstActivePhotoCardId);
+      if (activeEl) activeEl.classList.add('cst-photo-active');
+    }
+
     updateConstellationRequirement();
     requestAnimationFrame(drawConstellationStars);
+  }
+
+  /** 写真カードのクリック起点を記録する(Ctrl+V貼り付け先の決定に使う)。 */
+  function setCstActivePhotoCard(cardId) {
+    cstActivePhotoCardId = cardId;
+    cstEls.board.querySelectorAll('.cst-card.photo').forEach((el) => {
+      el.classList.toggle('cst-photo-active', el.id === 'cst-card-' + cardId);
+    });
+  }
+
+  async function applyCstPhotoBlob(cardId, blob) {
+    const card = cstCards.find((c) => c.id === cardId);
+    if (!card) return;
+    const dataUrl = await generateThumbnail(blob);
+    if (!dataUrl) {
+      setStatus('画像の読み込みに失敗しました', { important: true });
+      return;
+    }
+    card.imageDataUrl = dataUrl;
+    renderConstellationBoard();
   }
 
   function onCstCardDragStart(e) {
@@ -979,6 +1061,7 @@
     const x = 30 + Math.random() * Math.max(40, stageRect.width - 220);
     const y = 30 + Math.random() * Math.max(40, stageRect.height - 160);
     cstCards.push(type === 'photo' ? { id, type, x, y, title: '' } : { id, type, x, y, text: '' });
+    if (type === 'photo') cstActivePhotoCardId = id; // 追加直後はすぐ貼り付け/選択できるよう自動でアクティブにする
     playConstellationAddCardSound();
     renderConstellationBoard();
   }
