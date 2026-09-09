@@ -358,7 +358,7 @@ async function capturePhoto() {
   if (!camStream) return;
   camEls.shutterPhoto.disabled = true;
   try {
-    const blob = await captureFrameBlob(camEls.videoPhoto, 1600, 0.88);
+    const blob = await captureFrameBlob(camEls.videoPhoto, 3840, 0.88);
     playShutter();
     finishCamera({ kind: 'photo', blob });
   } catch (err) {
@@ -542,7 +542,7 @@ async function handleSelectionRun() {
   if (!captionFreezeCanvas) return;
   let blob;
   try {
-    // OCR用は取り込み後の作品写真(1600px)より高い解像度・画質で送る。
+    // OCR用はダウンスケールを一切かけず、映像そのままの解像度・高画質で送る。
     // 文字の視認性が最優先なので、ダウンスケールで潰れないようにする。
     // (このBlobはOCRにのみ使い、成功しても保存・アップロードはしない)
     blob = captionSelection
