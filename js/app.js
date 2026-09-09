@@ -2419,8 +2419,10 @@ function writeDailyCommentProgress(progress) {
 async function maybeShowDailyComment() {
   const progress = readDailyCommentProgress();
   if (progress.count >= DAILY_COMMENT_MAX_PER_DAY) return;
-  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
-  if (enabledCrews.length === 0) return;
+  // 2026年9月: Crewsペルソナが1つもONになっていないと誰も喋らず「何も起きない」ままだった
+  // という実機報告を受け、座談会・コメントカードのCommentヘックスと同じくBoy/Professor/Gemini
+  // も候補に含める(buildRoundtableParticipants()は常に最低3人を返す)。
+  const participants = buildRoundtableParticipants();
   const context = collectSessionTextContext(activeSessionId(), []);
   if (!context || !context.trim()) return; // 語れる中身が無いセッションでは1日ぶんの枠を消費しない
 
@@ -2429,16 +2431,17 @@ async function maybeShowDailyComment() {
   progress.count += 1;
   writeDailyCommentProgress(progress);
 
-  const crew = enabledCrews[Math.floor(Math.random() * enabledCrews.length)];
+  const persona = participants[Math.floor(Math.random() * participants.length)];
   try {
+    const styleInstruction = personaStyleInstruction(persona);
     const prompt =
-      `${personaVoiceInstruction(crew)}\n\n` +
+      `${styleInstruction ? `${styleInstruction}\n\n` : ''}` +
       `以下はある美術展覧会・セッションの記録です:\n${context}\n\n` +
       'この記録をふと思い出したような、日々のちょっとしたつぶやきを一言だけ返してください。前置き・名乗りは書かず、1文だけにしてください。';
     const raw = await askGemini({ prompt });
     const text = raw.trim();
-    showDailyCommentToast(crew, text);
-    addCommentHistoryEntry({ name: crew.name, avatar: crew.avatar, text, source: 'daily' });
+    showDailyCommentToast(persona, text);
+    addCommentHistoryEntry({ name: persona.name, avatar: persona.avatar, text, source: 'daily' });
   } catch (err) {
     console.error(err);
     debugLog('デイリーコメントエラー: ' + err.message);
@@ -2447,13 +2450,16 @@ async function maybeShowDailyComment() {
   }
 }
 
+/** デイリーコメント・グループビューイングで共用するトースト。表示と同時に「シュコッ」を
+ *  鳴らす(2026年9月追加、座談会の自動返信と同じ音・同じ関数を使い回す)。 */
 let dailyCommentHideTimer = null;
-function showDailyCommentToast(crew, text) {
+function showDailyCommentToast(persona, text) {
   if (!els.dailyCommentToast) return;
-  els.dailyCommentAvatar.textContent = crew.avatar || '👤';
-  els.dailyCommentName.textContent = crew.name;
+  els.dailyCommentAvatar.textContent = persona.avatar || '👤';
+  els.dailyCommentName.textContent = persona.name;
   els.dailyCommentText.textContent = text;
   els.dailyCommentToast.classList.add('show');
+  playChatReplySound();
   clearTimeout(dailyCommentHideTimer);
   dailyCommentHideTimer = setTimeout(hideDailyCommentToast, 8000);
 }
@@ -2517,8 +2523,9 @@ async function maybeAddRandomCardComment() {
   } catch (err) {
     return;
   }
-  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
-  if (enabledCrews.length === 0) return;
+  // 2026年9月: Crewsペルソナが1つもONになっていないと何も起きないままだった実機報告を受け、
+  // Boy/Professor/Geminiも候補に含める(buildRoundtableParticipants()は常に最低3人を返す)。
+  const participants = buildRoundtableParticipants();
   const candidates = state.cards.filter((c) => COMMENTABLE_MEDIA_TYPES.includes(c.mediaType));
   if (candidates.length === 0) return;
 
@@ -2527,10 +2534,10 @@ async function maybeAddRandomCardComment() {
   } catch (err) { /* 無視 */ }
 
   const targetCard = candidates[Math.floor(Math.random() * candidates.length)];
-  const crew = enabledCrews[Math.floor(Math.random() * enabledCrews.length)];
+  const persona = participants[Math.floor(Math.random() * participants.length)];
   try {
-    const text = await fetchPersonaCommentOnCard(crew, targetCard);
-    const newCard = createCommentCard({ sourceCard: targetCard, name: crew.name, avatar: crew.avatar || '👤', text });
+    const text = await fetchPersonaCommentOnCard(persona, targetCard);
+    const newCard = createCommentCard({ sourceCard: targetCard, name: persona.name, avatar: persona.avatar || '👤', text });
     createAstrConnectionSilent(targetCard.id, newCard.id, targetCard.sessionId);
     scheduleAutoSave();
   } catch (err) {
@@ -2598,24 +2605,34 @@ function updateGroupViewingButton() {
   els.groupViewingBtn.textContent = groupViewingActive ? '👀 停止' : '👀 グループビューイング';
 }
 
-/** 開始してから新しく取り込まれたカードの中からランダムに1枚選び、ランダムなペルソナに
- *  一言コメントさせる。新着が無ければ今回は何もしない(無理にコメントを作らない)。 */
+/**
+ * 開始してから新しく取り込まれたカードの中からランダムに1枚選び、ランダムなペルソナに
+ * 一言コメントさせる。新着が無ければ今回は何もしない(無理にコメントを作らない)。
+ * **「10秒間隔にしても誰もコメントしてこない」という実機報告(2026年9月)**への対応で2点修正した:
+ * (1) Crewsペルソナが1つもONになっていないと無言のまま何も起きなかったため、座談会・
+ *     コメントカードのCommentヘックスと同じくBoy/Professor/Geminiも候補に含めた。
+ * (2) 「グループビューイングを開始してから新しく作られたカード」だけを対象にしているため、
+ *     ONにしただけで新しい写真を撮っていない間は(意図通り)何も起きない。原因の切り分けが
+ *     しやすいよう、スキップした理由をdebugLog()に残すようにした(🐞デバッグパネルで確認可能)。
+ */
 async function groupViewingTick() {
   if (groupViewingTickInFlight || !groupViewingActive) return;
-  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
-  if (enabledCrews.length === 0) return;
+  const participants = buildRoundtableParticipants();
   const freshCards = state.cards.filter(
     (c) => COMMENTABLE_MEDIA_TYPES.includes(c.mediaType) && new Date(c.createdAt).getTime() >= groupViewingStartedAt
   );
-  if (freshCards.length === 0) return;
+  if (freshCards.length === 0) {
+    debugLog('グループビューイング: 開始後に新しく取り込まれた写真/記録が無いためスキップ');
+    return;
+  }
 
   groupViewingTickInFlight = true;
   try {
     const targetCard = freshCards[Math.floor(Math.random() * freshCards.length)];
-    const crew = enabledCrews[Math.floor(Math.random() * enabledCrews.length)];
-    const text = await fetchPersonaCommentOnCard(crew, targetCard);
-    showDailyCommentToast(crew, text); // トーストUIをデイリーコメントと共用する(ユーザー指示)
-    addCommentHistoryEntry({ name: crew.name, avatar: crew.avatar, text, source: 'group' });
+    const persona = participants[Math.floor(Math.random() * participants.length)];
+    const text = await fetchPersonaCommentOnCard(persona, targetCard);
+    showDailyCommentToast(persona, text); // トーストUIをデイリーコメントと共用する(ユーザー指示)
+    addCommentHistoryEntry({ name: persona.name, avatar: persona.avatar, text, source: 'group' });
   } catch (err) {
     console.error(err);
     debugLog('グループビューイングコメントエラー: ' + err.message);
