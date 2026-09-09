@@ -2606,14 +2606,13 @@ function updateGroupViewingButton() {
 }
 
 /**
- * 開始してから新しく取り込まれたカードの中からランダムに1枚選び、ランダムなペルソナに
- * 一言コメントさせる。新着が無ければ今回は何もしない(無理にコメントを作らない)。
- * **「10秒間隔にしても誰もコメントしてこない」という実機報告(2026年9月)**への対応で2点修正した:
- * (1) Crewsペルソナが1つもONになっていないと無言のまま何も起きなかったため、座談会・
- *     コメントカードのCommentヘックスと同じくBoy/Professor/Geminiも候補に含めた。
- * (2) 「グループビューイングを開始してから新しく作られたカード」だけを対象にしているため、
- *     ONにしただけで新しい写真を撮っていない間は(意図通り)何も起きない。原因の切り分けが
- *     しやすいよう、スキップした理由をdebugLog()に残すようにした(🐞デバッグパネルで確認可能)。
+ * 開始してから新しく取り込まれたカードがあればそれを最優先で対象にし、無ければ現在開いている
+ * セッションのカードから選ぶ。ランダムなペルソナに一言コメントさせる。
+ * **「展覧会現地だけでなく、家で見返している時にも機能してほしい。新規撮影に最も反応して
+ * ほしいが、それを唯一のトリガーにはしないでほしい」というユーザー要望(2026年9月)**を受けて、
+ * 「新着優先・無ければ今見ているセッション内から」の2段構えにした。以前は新着カードが
+ * 無いティックは常にスキップしていたため、新しい写真を撮っていない(=家で見返しているだけの)
+ * 間は永久に無反応だった。
  */
 async function groupViewingTick() {
   if (groupViewingTickInFlight || !groupViewingActive) return;
@@ -2621,18 +2620,27 @@ async function groupViewingTick() {
   const freshCards = state.cards.filter(
     (c) => COMMENTABLE_MEDIA_TYPES.includes(c.mediaType) && new Date(c.createdAt).getTime() >= groupViewingStartedAt
   );
-  if (freshCards.length === 0) {
-    debugLog('グループビューイング: 開始後に新しく取り込まれた写真/記録が無いためスキップ');
+  let candidates = freshCards;
+  let isFallback = false;
+  if (candidates.length === 0) {
+    candidates = state.cards.filter(
+      (c) => c.sessionId === activeSessionId() && COMMENTABLE_MEDIA_TYPES.includes(c.mediaType)
+    );
+    isFallback = true;
+  }
+  if (candidates.length === 0) {
+    debugLog('グループビューイング: 対象になる新着カード・現在のセッションのカードが無いためスキップ');
     return;
   }
 
   groupViewingTickInFlight = true;
   try {
-    const targetCard = freshCards[Math.floor(Math.random() * freshCards.length)];
+    const targetCard = candidates[Math.floor(Math.random() * candidates.length)];
     const persona = participants[Math.floor(Math.random() * participants.length)];
     const text = await fetchPersonaCommentOnCard(persona, targetCard);
     showDailyCommentToast(persona, text); // トーストUIをデイリーコメントと共用する(ユーザー指示)
     addCommentHistoryEntry({ name: persona.name, avatar: persona.avatar, text, source: 'group' });
+    debugLog(`グループビューイング: ${isFallback ? '現在のセッション内から' : '新着カードから'}選出`);
   } catch (err) {
     console.error(err);
     debugLog('グループビューイングコメントエラー: ' + err.message);
