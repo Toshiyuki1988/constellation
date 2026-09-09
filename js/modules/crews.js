@@ -104,6 +104,21 @@
         color: rgba(255, 255, 255, 0.85); font-size: 14px; cursor: pointer;
       }
       .crews-close-btn:hover { background: rgba(85, 230, 247, 0.25); }
+
+      .crews-settings-row {
+        display: flex; align-items: center; gap: 8px; margin: 0 0 16px; padding: 9px 12px;
+        background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 9px;
+      }
+      .crews-settings-label {
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px; color: rgba(255, 255, 255, 0.75); flex: 1;
+      }
+      .crews-group-viewing-interval {
+        width: 64px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-align: right;
+        padding: 5px 7px; border-radius: 5px; border: 1px solid rgba(85, 230, 247, 0.3);
+        background: rgba(255, 255, 255, 0.05); color: #fff;
+      }
+      .crews-settings-unit { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.5); }
+
       .crews-body { display: grid; grid-template-columns: 1fr 1.15fr; gap: 22px; }
       @media (max-width: 640px) { .crews-body { grid-template-columns: 1fr; } }
 
@@ -259,6 +274,11 @@
           <span class="crews-top-label">Crews — ペルソナ管理</span>
           <button class="crews-close-btn" title="閉じる">✕</button>
         </div>
+        <div class="crews-settings-row">
+          <label class="crews-settings-label" for="crews-group-viewing-interval">グループビューイングの間隔</label>
+          <input type="number" id="crews-group-viewing-interval" class="crews-group-viewing-interval" min="10" step="5" value="60">
+          <span class="crews-settings-unit">秒</span>
+        </div>
         <div class="crews-body">
           <div>
             <p class="crews-col-label">登録済み — ONのペルソナがサマリーの話し手候補になる</p>
@@ -308,10 +328,22 @@
       avatarGrid: overlay.querySelector('.crews-avatar-grid'),
       saveBtn: overlay.querySelector('.crews-save-btn'),
       deleteBtn: overlay.querySelector('.crews-delete-btn'),
+      groupViewingInterval: overlay.querySelector('.crews-group-viewing-interval'),
     };
 
     [crEls.personInfo, crEls.theirWords].forEach((ta) => {
       ta.addEventListener('pointerdown', (e) => e.stopPropagation());
+    });
+
+    // グループビューイングモード(js/app.js)のコメント間隔。実行中に変更した場合は
+    // 即座に新しい間隔でタイマーを張り直す(止まっていれば次回起動時に反映されるだけ)。
+    crEls.groupViewingInterval.addEventListener('pointerdown', (e) => e.stopPropagation());
+    crEls.groupViewingInterval.addEventListener('change', () => {
+      const sec = Math.max(10, parseInt(crEls.groupViewingInterval.value, 10) || 60);
+      crEls.groupViewingInterval.value = sec;
+      state.groupViewingIntervalSec = sec;
+      scheduleAutoSave();
+      applyGroupViewingIntervalChange();
     });
 
     crEls.overlay.querySelector('.crews-close-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -542,6 +574,7 @@
   function openCrews() {
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
     if (!crEls) buildDom();
+    crEls.groupViewingInterval.value = state.groupViewingIntervalSec || 60;
     renderRoster();
     if (editingId && getCrewById(editingId)) {
       loadPersonaIntoEditor(editingId);

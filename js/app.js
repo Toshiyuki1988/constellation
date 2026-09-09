@@ -37,6 +37,9 @@ const state = {
   // カードコメントは永続性」で明確に分ける)。
   // { id, name, avatar, text, source: 'daily'|'group', ts }
   commentHistory: [],
+  // グループビューイングモード(js/app.jsのgroupViewingTick())のコメント間隔(秒)。
+  // js/modules/crews.jsのペルソナ管理パネルから設定できる。既定60秒。
+  groupViewingIntervalSec: 60,
 };
 
 const FIRST_YEAR = 2025;
@@ -385,6 +388,7 @@ async function onSignedIn() {
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
     state.commentHistory = data.commentHistory || [];
+    state.groupViewingIntervalSec = typeof data.groupViewingIntervalSec === 'number' ? data.groupViewingIntervalSec : 60;
     if (data.feHistory) {
       state.feHistory = data.feHistory;
       state.feHistoryIndex = typeof data.feHistoryIndex === 'number' ? data.feHistoryIndex : state.feHistory.length;
@@ -1805,6 +1809,13 @@ function buildRoundtableParticipants() {
   return list;
 }
 
+/**
+ * カードを開いた瞬間に全参加者の返信が強制的に流れてしまう(=ユーザー自身の質問より先に
+ * 大量のコメントが来る)という実機報告(2026年9月)を受け、質問は自動送信しないよう変更した。
+ * 「要約の傾向」欄の文面は、送信済みの質問としてではなく、質問コンポーザーの入力欄へ
+ * あらかじめ入れておくだけに留める。ユーザーが内容を確認し(必要なら🎯で宛先を絞り)、
+ * 自分の意思で送信ボタンを押すまでは何も始まらない。
+ */
 function createChatCard(summaryCard, question) {
   const card = {
     id: crypto.randomUUID(),
@@ -1816,14 +1827,18 @@ function createChatCard(summaryCard, question) {
     sessionId: summaryCard.sessionId,
     summarySourceId: summaryCard.id, // 出力カードと同じ扱い(自動線・collectSessionTextContext()から除外)
     chatParticipants: buildRoundtableParticipants(),
-    chatMessages: question ? [{ type: 'question', text: question, ts: Date.now() }] : [],
+    chatMessages: [],
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
   scheduleAutoSave();
-  if (question) runChatCascade(card, [], undefined); // 宛先未指定=全員、写真添付なしで自動的に返信させる
+  if (question) {
+    const el = cardElById(card.id);
+    const input = el ? el.querySelector('.star-card-chat-composer-input') : null;
+    if (input) input.value = question;
+  }
   return card;
 }
 
@@ -1936,20 +1951,25 @@ function wireChatCard(card, el) {
     });
   }
 
+  /** 📷ボタンからのファイル選択・クリップボード貼り付けの両方で使う、添付画像の反映処理。 */
+  async function applyAttachedImageBlob(blob) {
+    const dataUrl = await generateThumbnail(blob);
+    if (!dataUrl) {
+      setStatus('画像の読み込みに失敗しました', { important: true });
+      return;
+    }
+    pendingImageDataUrl = dataUrl;
+    pendingImagePart = dataUrlToImagePart(dataUrl);
+    if (attachThumb) attachThumb.src = dataUrl;
+    if (attachPreview) attachPreview.hidden = false;
+  }
+
   if (attachBtn && attachInput) {
     attachBtn.addEventListener('click', (e) => { e.stopPropagation(); attachInput.click(); });
     attachInput.addEventListener('change', async () => {
       const file = attachInput.files && attachInput.files[0];
       if (!file) return;
-      const dataUrl = await generateThumbnail(file);
-      if (!dataUrl) {
-        setStatus('画像の読み込みに失敗しました', { important: true });
-        return;
-      }
-      pendingImageDataUrl = dataUrl;
-      pendingImagePart = dataUrlToImagePart(dataUrl);
-      if (attachThumb) attachThumb.src = dataUrl;
-      if (attachPreview) attachPreview.hidden = false;
+      await applyAttachedImageBlob(file);
     });
   }
   if (attachClearBtn) {
@@ -1959,6 +1979,24 @@ function wireChatCard(card, el) {
       pendingImagePart = null;
       if (attachInput) attachInput.value = '';
       if (attachPreview) attachPreview.hidden = true;
+    });
+  }
+  // 質問入力欄にフォーカスした状態でCtrl+V(コピーしてきた画像の貼り付け)しても添付できる
+  // ようにする(2026年9月追加)。document全体のペースト処理(createCardFromCapture()経由で
+  // 新規写真カードを作る方)は、テキスト入力中はテキストの貼り付けを妨げないよう既定で
+  // スキップする作りになっているため、この入力欄専用に別途拾う必要がある。画像が無ければ
+  // 通常のテキスト貼り付けに任せる(preventDefaultしない)。
+  if (composerInput) {
+    composerInput.addEventListener('paste', async (event) => {
+      const items = event.clipboardData && event.clipboardData.items;
+      if (!items) return;
+      const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
+      if (!imageItem) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const blob = imageItem.getAsFile();
+      if (!blob) return;
+      await applyAttachedImageBlob(blob);
     });
   }
 
@@ -2083,23 +2121,25 @@ function sleep(ms) {
 
 const chatTurnInFlight = new Set();
 
+/**
+ * 参加者の種別(kind)ごとの文体指示。座談会(fetchChatReply)・コメントカード
+ * (fetchPersonaCommentOnCard)の両方で共通して使う(2026年9月、コメントカードの手動生成に
+ * Boy/Professor/Geminiも選べるようにした際、重複していたこの分岐を1箇所へまとめた)。
+ */
+function personaStyleInstruction(p) {
+  if (p.kind === 'boy') return '小学生・中学生にも分かるやさしい言葉で答えてください。';
+  if (p.kind === 'professor') return '学術的な視点から答えてください。専門用語を使っても構いません。';
+  if (p.kind === 'crew') return personaVoiceInstruction(p);
+  return ''; // Gemini: 素の人格のまま、追加の文体指定なし
+}
+
 /** 1人ぶんの発言をGeminiに生成させる(直前までの会話ログ全文を文脈として渡す)。 */
 async function fetchChatReply(card, speaker, messages, imageParts) {
   const sessionContext = collectSessionTextContext(card.sessionId, []);
   const transcriptText = messages
     .map((m) => (m.type === 'question' ? `[質問] ${m.text}` : `[${m.name}] ${m.text}`))
     .join('\n');
-  const styleInstruction =
-    speaker.kind === 'boy'
-      ? '小学生・中学生にも分かるやさしい言葉で答えてください。'
-      : speaker.kind === 'professor'
-        ? '学術的な視点から答えてください。専門用語を使っても構いません。'
-        : speaker.kind === 'crew'
-          ? 'あなたは次の人物になりきって話してください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
-            `【人物情報】\n${speaker.personInfo}\n\n` +
-            '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
-            `${speaker.theirWords}`
-          : ''; // Gemini: 素の人格のまま、追加の文体指定なし
+  const styleInstruction = personaStyleInstruction(speaker);
   const prompt =
     `以下はある美術展覧会・セッションの記録です:\n${sessionContext}\n\n` +
     'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。ここまでの発言:\n' +
@@ -2129,19 +2169,28 @@ async function runChatCascade(card, targetIds, imageParts) {
 
   for (const speaker of shuffledArray(targets)) {
     if (!getCardById(card.id)) break;
-    await sleep(500 + Math.random() * 700);
+    await sleep(500 + Math.random() * 700); // 人と人の「間」の演出(この間はまだ何も呼び出していない)
     const typingNode = appendChatTyping(card.id, speaker);
-    await sleep(900 + Math.random() * 1400);
-    if (typingNode) typingNode.remove();
-    playChatReplySound();
     try {
+      // 「シュコッ」の音とコメント表示のタイミングがズレる不具合があった(2026年9月)。
+      // 原因は、演出用の待ち時間が終わった直後に音を鳴らし、その"あとで"実際のGemini
+      // 呼び出しを始めていたため、実際の応答が返ってくるまでの(読めない)時間ぶん、
+      // 音だけが先に鳴っていたこと。タイピング表示中に実際の呼び出しを済ませておき、
+      // 最低限のタイピング表示時間(演出)と実応答のどちらか長い方を待ってから、
+      // 音と表示を同時に出すようにした。
       const messages = card.chatMessages || [];
-      const text = await fetchChatReply(card, speaker, messages, imageParts);
+      const [text] = await Promise.all([
+        fetchChatReply(card, speaker, messages, imageParts),
+        sleep(700 + Math.random() * 900),
+      ]);
+      if (typingNode) typingNode.remove();
+      playChatReplySound();
       const replyMsg = { kind: speaker.kind, name: speaker.name, avatar: speaker.avatar, text, ts: Date.now() };
       card.chatMessages = messages.concat([replyMsg]);
       scheduleAutoSave();
       appendChatLine(card.id, replyMsg);
     } catch (err) {
+      if (typingNode) typingNode.remove();
       console.error(err);
       debugLog('座談会エラー: ' + err.message);
       setStatus(`${speaker.name}の発言取得に失敗しました: ${err.message}`, { important: true });
@@ -2171,27 +2220,22 @@ async function runChatCascade(card, targetIds, imageParts) {
  * 場合はshowChoiceDialog()でどのペルソナに聞くか選ばせる(1人だけなら聞かずそのまま使う)。
  */
 async function handleCardComment(card, el) {
-  const enabledCrews = (state.crews || []).filter((c) => c.enabled);
-  if (enabledCrews.length === 0) {
-    setStatus('ONになっているCrewsペルソナがいません(Crewsで登録・ONにしてください)', { important: true });
-    return;
-  }
-  let crew = enabledCrews[0];
-  if (enabledCrews.length > 1) {
-    const choice = await showChoiceDialog({
-      title: '誰にコメントさせますか?',
-      options: enabledCrews.map((c) => ({ label: `${c.avatar || '👤'} ${c.name}`, value: c.id })),
-    });
-    if (!choice) return;
-    const picked = enabledCrews.find((c) => c.id === choice);
-    if (!picked) return;
-    crew = picked;
-  }
+  // 2026年9月: Crewsペルソナだけでなく、座談会と同じ顔ぶれ(Boy/Professor/Gemini+ONのCrews)
+  // から選べるようにした(buildRoundtableParticipants()は常に最低3人を返すため、
+  // 「ペルソナがいない」という早期returnは不要になった)。
+  const participants = buildRoundtableParticipants();
+  const choice = await showChoiceDialog({
+    title: '誰にコメントさせますか?',
+    options: participants.map((p) => ({ label: `${p.avatar || '👤'} ${p.name}`, value: p.id })),
+  });
+  if (!choice) return;
+  const persona = participants.find((p) => p.id === choice);
+  if (!persona) return;
 
-  setStatus(`${crew.name}のコメントを考え中…`, { busy: true });
+  setStatus(`${persona.name}のコメントを考え中…`, { busy: true });
   try {
-    const text = await fetchPersonaCommentOnCard(crew, card);
-    const newCard = createCommentCard({ sourceCard: card, name: crew.name, avatar: crew.avatar || '👤', text });
+    const text = await fetchPersonaCommentOnCard(persona, card);
+    const newCard = createCommentCard({ sourceCard: card, name: persona.name, avatar: persona.avatar || '👤', text });
     createAstrConnection(card.id, newCard.id); // 効果音・発光演出・保存もここで行われる
     setStatus('コメントを追加しました');
   } catch (err) {
@@ -2412,15 +2456,16 @@ function createAstrConnectionSilent(cardIdA, cardIdB, sessionId) {
 }
 
 /** 対象カードの内容(メモ・写真ならサムネイル)を1文でコメントさせる、共通のプロンプト組み立て。 */
-async function fetchPersonaCommentOnCard(crew, targetCard) {
+async function fetchPersonaCommentOnCard(persona, targetCard) {
   const imagePart = targetCard.mediaType === 'image' && targetCard.thumbDataUrl
     ? dataUrlToImagePart(targetCard.thumbDataUrl)
     : null;
   const targetText = targetCard.memo && targetCard.memo.trim()
     ? targetCard.memo.trim()
     : '(この記録には文字情報がありません。写真があれば見た目だけから感じたことを一言どうぞ)';
+  const styleInstruction = personaStyleInstruction(persona);
   const prompt =
-    `${personaVoiceInstruction(crew)}\n\n` +
+    `${styleInstruction ? `${styleInstruction}\n\n` : ''}` +
     `次の記録を見て/読んで、一言だけ感想やつぶやきを返してください:\n${targetText}\n\n` +
     '前置き・名乗りは書かず、1文だけの短いつぶやきにしてください。';
   const raw = await askGemini({ prompt, images: imagePart ? [imagePart] : undefined });
@@ -2468,7 +2513,16 @@ let groupViewingActive = false;
 let groupViewingTimer = null;
 let groupViewingStartedAt = 0;
 let groupViewingTickInFlight = false;
-const GROUP_VIEWING_INTERVAL_MS = 60 * 1000;
+const GROUP_VIEWING_INTERVAL_DEFAULT_SEC = 60;
+const GROUP_VIEWING_INTERVAL_MIN_SEC = 10; // API暴走防止の下限(Crews画面からの入力もここでクランプする)
+
+/** Crewsモジュール画面(js/modules/crews.js)の設定入力で変えられる、コメント間隔(ミリ秒)。
+ *  下限を下回る/未設定の値は既定の60秒として扱う。 */
+function groupViewingIntervalMs() {
+  const sec = state.groupViewingIntervalSec;
+  const clamped = typeof sec === 'number' && sec >= GROUP_VIEWING_INTERVAL_MIN_SEC ? sec : GROUP_VIEWING_INTERVAL_DEFAULT_SEC;
+  return clamped * 1000;
+}
 
 function isGroupViewingActive() {
   return groupViewingActive;
@@ -2484,8 +2538,16 @@ function startGroupViewing() {
   groupViewingActive = true;
   groupViewingStartedAt = Date.now();
   updateGroupViewingButton();
-  setStatus('グループビューイングを開始しました(1分に1回、Crewsがコメントします)');
-  groupViewingTimer = setInterval(groupViewingTick, GROUP_VIEWING_INTERVAL_MS);
+  setStatus(`グループビューイングを開始しました(${groupViewingIntervalMs() / 1000}秒に1回、Crewsがコメントします)`);
+  groupViewingTimer = setInterval(groupViewingTick, groupViewingIntervalMs());
+}
+
+/** js/modules/crews.jsの間隔設定が変わった時に呼ぶ。実行中なら新しい間隔でタイマーを
+ *  張り直し、止まっていれば何もしない(次にstartGroupViewing()した時に反映される)。 */
+function applyGroupViewingIntervalChange() {
+  if (!groupViewingActive) return;
+  clearInterval(groupViewingTimer);
+  groupViewingTimer = setInterval(groupViewingTick, groupViewingIntervalMs());
 }
 
 function stopGroupViewing() {
@@ -4097,6 +4159,7 @@ async function handleSave() {
       exhibitionCalendarId: state.exhibitionCalendarId,
       crews: state.crews,
       commentHistory: state.commentHistory,
+      groupViewingIntervalSec: state.groupViewingIntervalSec,
       feHistory: state.feHistory,
       feHistoryIndex: state.feHistoryIndex,
       breadcrumb: state.breadcrumb,
