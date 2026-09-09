@@ -161,10 +161,20 @@ async function persistToUploadQueue(card, blob, filename) {
  *   drainUploadQueue()呼び出し(再度Wi-Fiボタンを押す、アプリを開き直す等)で再試行できる
  *   ようにする。
  */
+// カードがまだ見つからない場合に、それが「本当に削除された」のか「作成直後でオートセーブ
+// (デバウンス)がまだDriveに反映されていないだけ」なのかを区別できないため、この猶予時間内は
+// 待機列から消さずに次回のドレインで再確認する(2026年9月、精査で発見)。
+const UPLOAD_QUEUE_ORPHAN_GRACE_MS = 10 * 60 * 1000; // 10分
+
 async function uploadQueuedEntry(entry) {
   const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
   if (!card) {
-    // カード自体が既に削除済み。待機中のファイルだけDriveへ送っても紐付け先が無いため破棄する。
+    if (Date.now() - (entry.createdAt || 0) < UPLOAD_QUEUE_ORPHAN_GRACE_MS) {
+      // まだ判断を保留する(削除もアップロードもしない)。カードがscheduleAutoSave()の
+      // デバウンス中にタブが閉じられた等で、まだDrive側のJSONに存在しないだけの可能性がある。
+      return false;
+    }
+    // 猶予時間を過ぎても見つからない=本当に削除されたとみなし、紐付け先の無いファイルを破棄する。
     await uploadQueueDelete(entry.cardId).catch(() => {});
     return true;
   }
@@ -210,6 +220,10 @@ async function drainUploadQueue() {
  * 拾い直し、Wi-Fi中ならそのままドレインを始める。card.uploadQueuedが立っているのに実データが
  * 見つからない(別端末で作られた・ブラウザのストレージが消去された等)場合は、詰まったままに
  * せず「アップロード失敗」扱いにして、少なくともユーザーが気づけるようにする。
+ * **2026年9月追加**: Wi-Fi中の即時アップロード(card.uploadQueuedはfalseのまま待機列だけを
+ * 経由する)が完了前に中断された場合、実データは待機列に残っているのに表示が「アップロード
+ * 中」のまま古くなってしまうため、待機列に実データが見つかれば表示を「待機中」に補正する
+ * (実際の再送はこの関数の末尾でisUploadAllowedNow()ならdrainUploadQueue()が行う)。
  */
 async function restoreUploadQueueOnLoad() {
   let entries;
@@ -230,6 +244,10 @@ async function restoreUploadQueueOnLoad() {
         el.classList.remove('star-card--upload-pending', 'star-card--upload-queued');
         el.classList.add('star-card--upload-failed');
       }
+    } else if (!card.uploadQueued && card.uploadPending && queuedCardIds.has(card.id)) {
+      card.uploadQueued = true;
+      const el = typeof cardElById === 'function' ? cardElById(card.id) : null;
+      if (el) el.classList.add('star-card--upload-queued');
     }
   });
   if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();

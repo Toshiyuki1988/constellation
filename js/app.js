@@ -394,16 +394,77 @@ async function refreshDriveQuota() {
   }
 }
 
-/* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ---------------- */
+/* ---------------- オートセーブ(手動の保存ボタンは廃止し、変更のたびに自動保存する) ----------------
+ * 2026年9月、写真データ喪失の徹底精査を受けて以下を強化した:
+ *   - 保存中フラグ(saveInFlight)を設け、保存に時間がかかっている間に別の変更が入っても
+ *     並行して2つのhandleSave()を走らせない。代わりに完了後にもう一度、その時点の最新state
+ *     で保存し直す(saveQueued)。これが無いと、後から始まった保存(新しい変更を含む)が先に
+ *     完了し、後で完了した古い保存が新しいデータを上書きしてしまうレースが起こりうる。
+ *   - pendingSaveフラグで「まだDriveに反映されていない変更があるか」を追跡し、
+ *     visibilitychangeでページがバックグラウンドになった瞬間・beforeunloadでページを
+ *     離れようとした瞬間に、デバウンス(1.2秒)を待たず即座に保存を試みる。iOS Safariは
+ *     バックグラウンドタブのプロセスをある程度の時間経過後に終了させることがあるため、
+ *     隠れた直後に保存を始めておくことで、プロセスが終了する前に間に合わせやすくする。
+ */
 
 const AUTO_SAVE_DELAY_MS = 1200; // 連続した変更(タイピング等)をまとめて1回の保存にする
 let autoSaveTimer = null;
+let pendingSave = false; // まだDriveへ反映されていない変更があるか
+let saveInFlight = false; // handleSave()が今まさに実行中か
+let saveQueued = false; // 実行中の保存が終わったら、最新stateでもう一度保存すべきか
 
 function scheduleAutoSave() {
   if (!state.folderId) return; // サインイン前は何もしない
+  pendingSave = true;
   clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(() => { handleSave(); }, AUTO_SAVE_DELAY_MS);
+  autoSaveTimer = setTimeout(runScheduledSave, AUTO_SAVE_DELAY_MS);
 }
+
+/** デバウンスを待たず、今すぐ保存する(新規カード追加など、タブが閉じられる前に必ず
+ *  Driveへ残しておきたい変更で使う)。 */
+function saveImmediately() {
+  if (!state.folderId) return;
+  pendingSave = true;
+  clearTimeout(autoSaveTimer);
+  runScheduledSave();
+}
+
+async function runScheduledSave() {
+  if (saveInFlight) {
+    saveQueued = true; // 今の保存が終わり次第、最新stateでもう一度保存する
+    return;
+  }
+  saveInFlight = true;
+  try {
+    await handleSave();
+  } finally {
+    saveInFlight = false;
+    if (saveQueued) {
+      saveQueued = false;
+      runScheduledSave();
+    } else {
+      pendingSave = false;
+    }
+  }
+}
+
+// ページが隠れる(タブ切り替え・ホーム画面へ戻る等)瞬間に、保存待ちがあれば即座に走らせる。
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && pendingSave) {
+    clearTimeout(autoSaveTimer);
+    runScheduledSave();
+  }
+});
+
+// ページを閉じよう/離れようとした時、まだDriveへ反映されていない変更が残っていれば
+// ブラウザ標準の確認ダイアログを出す(モバイルSafari等では効かないこともあるが、
+// PCブラウザでの誤操作防止として有効)。
+window.addEventListener('beforeunload', (e) => {
+  if (pendingSave || saveInFlight) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 async function onSignedIn() {
   toggleAuthUI(true);
@@ -4134,6 +4195,13 @@ function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
  * **2026年9月追加**: モバイル通信中は、この時点でアップロードを始めず(通信量節約のため)、
  * js/upload-queue.jsのIndexedDB待機列へBlobを保存するだけに留める。Wi-Fi接続時にまとめて
  * アップロードされる(`card.uploadQueued`で見分けがつくようにし、UI上も控えめに表示する)。
+ * **2026年9月追加(再発防止)**: 「アップロード失敗のたびに元データが消えていた」不具合の
+ * 修正を経て、Wi-Fi中の即時アップロードにも同じ脆弱性(=IndexedDBを経由せずメモリ上のBlobに
+ * しか実体が無いため、アップロード中にタブが閉じられる/iOS Safariがバックグラウンドタブの
+ * プロセスを終了させる等で完全に失われる)が残っていることが判明した。そのため**通信種別に
+ * 関わらず、常にまずIndexedDBの待機列へ保存してから**アップロードを試みるよう統一した。
+ * Wi-Fi中は保存直後にdrainUploadQueue()を呼んで体感速度を維持しつつ、万一中断されても
+ * 待機列に残るため次回起動時に必ず再試行できる。
  */
 async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) {
   const thumbDataUrl = mediaType === 'image' ? await generateThumbnail(blob) : null;
@@ -4159,10 +4227,12 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
-  scheduleAutoSave(); // アップロード完了前にタブを閉じても、カードの存在自体は残るように
+  saveImmediately(); // アップロード完了前にタブを閉じても、カードの存在自体は確実に残るように(デバウンスを待たない)
 
+  // 通信種別に関わらず、まずIndexedDBへ保存する(2026年9月、Wi-Fi中の即時アップロードが
+  // 中断された場合に復元不能になる不具合の再発防止)。
+  const persisted = await persistToUploadQueue(card, blob, filename);
   if (shouldQueue) {
-    const persisted = await persistToUploadQueue(card, blob, filename);
     if (persisted) {
       setStatus('追加しました。モバイル通信中のためWi-Fi接続時にアップロードします');
     } else {
@@ -4176,7 +4246,11 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
     }
   } else {
     setStatus('追加しました。アップロード中…', { busy: true });
-    uploadCardFileInBackground(card, blob, filename);
+    if (persisted) {
+      drainUploadQueue(); // 待機列経由で処理させる(中断されても次回起動時に再試行できる)
+    } else {
+      uploadCardFileInBackground(card, blob, filename);
+    }
   }
   return card;
 }
