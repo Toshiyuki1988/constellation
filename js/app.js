@@ -3535,6 +3535,16 @@ function removeCardFromState(card, el) {
     refreshInfoTicker();
     if (card.infoParsed) removeInfoCardCalendarEvents(card);
   }
+  // アップロード待機列(IndexedDB)にも実データが残っている場合があるため、カードの削除に
+  // 合わせて破棄する。**2026年9月の不具合修正**: 以前はここで待機列を一切触っておらず、
+  // 「⚠Drive未保存」カードを削除しても待機列の実データ(Blob)だけが孤児として残り続け、
+  // ヘッダーの「モバイル保留N件」「端末へ保存N件」の件数がいつまでも減らなかった。カードが
+  // 待機列に載っていたかどうかに関わらず常に試みる(載っていなければ何も起きない、安全な no-op)。
+  if (typeof uploadQueueDelete === 'function') {
+    uploadQueueDelete(card.id)
+      .then(() => { if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton(); })
+      .catch(() => {});
+  }
   scheduleAutoSave();
 }
 
