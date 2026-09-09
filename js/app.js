@@ -1057,6 +1057,16 @@ function attachTapToOpen(el, onOpen) {
   });
 }
 
+// 写真・動画・音声・ストリートビューに付随するキャプションは、写真のリサイズと同じ縦一列の
+// 箱の中で場所を取り合っており、情報量が多い(複数キャプションのまとめ貼り等)と全文を読めない
+// (Editのドラッグ選択でスクロールさせてようやく見える程度)という実機報告があった(2026年9月)。
+// これらのmediaTypeだけ、読み取り専用ビューを常に低い「のぞき見」高さへ固定し(写真の
+// リサイズと完全に無関係にする)、あふれる場合だけ⛶ボタンで全画面ポップアップ
+// (showMemoOverlay())から全文を読む設計にした(モックアップで検討した3案のうち「案B」を採用。
+// Crewsの拡大ポップアップ等と違いグラスモーフィズムは不要、というユーザー判断により
+// 既存のsettings-modal等と同じ不透明な.modal-overlay/.modalをそのまま流用する)。
+const MEMO_PEEK_MEDIA_TYPES = ['image', 'video', 'audio', 'streetview'];
+
 /**
  * メモ欄のマークアップ(2026年9月、ハイパーリンク対応で二重構造に変更)。
  * `.star-card-memo-view`(読み取り専用、URLをクリックできる<a>として描画、既定で表示)と
@@ -1064,12 +1074,63 @@ function attachTapToOpen(el, onOpen) {
  * plainテキストしか描画できずリンクをクリックさせられないため、既定表示はview側が担い、
  * textareaはEditボタン/Eキーで開く入力専用の役割に変わった(以前はtextarea自身が
  * 表示も編集も兼ねていた)。
+ * MEMO_PEEK_MEDIA_TYPESに該当するカードは、viewを`.star-card-memo-shell`で包み、
+ * ⛶ボタン(既定hidden、updateMemoExpandState()があふれを検知した時だけ表示)を添える。
+ * ボタンをview自身の子ではなく兄弟にしているのは、Edit確定時に`memoViewEl.innerHTML`を
+ * まるごと差し替える既存処理(handleCardCaption()等)がボタンごと消してしまわないため。
  */
 function memoFieldHtml(card, hasMemo) {
+  const peek = MEMO_PEEK_MEDIA_TYPES.includes(card.mediaType);
+  const viewClass = peek ? ' star-card-memo-view--peek' : '';
+  const expandBtn = peek ? '<button type="button" class="star-card-memo-expand-btn" title="全文を見る" hidden>⛶</button>' : '';
   return (
-    `<div class="star-card-memo-view" ${hasMemo ? '' : 'hidden'}>${linkifyMemoHtml(card.memo || '')}</div>` +
+    `<div class="star-card-memo-shell">` +
+    `<div class="star-card-memo-view${viewClass}" ${hasMemo ? '' : 'hidden'}>${linkifyMemoHtml(card.memo || '')}</div>` +
+    `${expandBtn}</div>` +
     `<textarea class="star-card-memo" placeholder="メモ" hidden>${escapeHtml(card.memo || '')}</textarea>`
   );
+}
+
+/** MEMO_PEEK_MEDIA_TYPESのキャプションのぞき見プレビューが実際にあふれているか判定し、
+ *  ⛶ボタンと下端フェードの表示を更新する。新規描画時・メモ更新時(Edit確定・OCR追記)に呼ぶ。 */
+function updateMemoExpandState(el) {
+  const memoViewEl = el.querySelector('.star-card-memo-view--peek');
+  const expandBtn = el.querySelector('.star-card-memo-expand-btn');
+  if (!memoViewEl || !expandBtn) return;
+  const overflowing = memoViewEl.scrollHeight > memoViewEl.clientHeight + 1;
+  memoViewEl.classList.toggle('star-card-memo-view--overflowing', overflowing);
+  expandBtn.hidden = !overflowing;
+}
+
+/**
+ * 「⛶ 全文を見る」ポップアップ(2026年9月、キャプションのぞき見プレビューの案Bとして採用)。
+ * settings-modal等と同じ.modal-overlay/.modalの不透明な意匠をそのまま流用する
+ * (Crewsの拡大ポップアップと違い、ここではグラスモーフィズムは不要というユーザー判断)。
+ */
+function showMemoOverlay(card) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay visible';
+  const modal = document.createElement('div');
+  modal.className = 'modal star-card-memo-overlay-modal';
+  const heading = document.createElement('h2');
+  heading.textContent = 'キャプション全文';
+  const body = document.createElement('div');
+  body.className = 'star-card-memo-overlay-body';
+  body.innerHTML = linkifyMemoHtml(card.memo || '');
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'secondary';
+  closeBtn.textContent = '閉じる';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  actions.appendChild(closeBtn);
+  modal.appendChild(heading);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 function renderCard(card) {
@@ -1150,6 +1211,16 @@ function renderCard(card) {
   }
   els.content.appendChild(el);
   makeCardInteractive(el);
+  updateMemoExpandState(el);
+
+  const memoExpandBtn = el.querySelector('.star-card-memo-expand-btn');
+  if (memoExpandBtn) {
+    memoExpandBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    memoExpandBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showMemoOverlay(card);
+    });
+  }
 
   if (card.depthBlurred) el.classList.add('star-card--depth-blurred');
   el.querySelectorAll('.star-card-hex').forEach((hexEl) => {
@@ -1237,20 +1308,23 @@ function renderCard(card) {
         memoViewEl.hidden = !(isTextCard || memoEl.value.trim());
       }
       syncCardHeight(el);
+      updateMemoExpandState(el);
     });
-    // メモ欄(ビュー/textareaいずれか表示中の方)は既定でpointer-events:none相当なので
-    // (カード移動を優先するため)、通常はホイールもカード自身(ひいてはキャンバスのズーム)に
-    // 流れてしまう。写真付きカードのメモ欄だけ最大高さ+内部スクロールにしてあるので、
-    // カーソルがメモ欄の範囲内にある時だけホイールでメモ欄自体をスクロールできるようにする
-    // (キャンバスのズームには渡さない)。hasMediaのチェックが無いと、テキストカードなど
-    // max-heightの掛かっていないメモ欄でもわずかなサブピクセルの誤差でscrollHeightが
-    // clientHeightよりわずかに大きく判定されることがあり、そのたびにホイールズームを
-    // 奪ってしまうバグがあった(リサイズでsyncCardHeight()が再計算されるとこの誤差が
-    // 解消されるため「リサイズすると直る」という症状になっていた)。
+    // Edit中のtextarea(既定でpointer-events:none相当だが、Edit中はauto)は最大高さ+内部
+    // スクロールのままなので、カーソルがtextareaの範囲内にある時だけホイールでtextarea自体を
+    // スクロールできるようにする(キャンバスのズームには渡さない)。hasMediaのチェックが無いと、
+    // テキストカードなどmax-heightの掛かっていないメモ欄でもわずかなサブピクセルの誤差で
+    // scrollHeightがclientHeightよりわずかに大きく判定されることがあり、そのたびにホイール
+    // ズームを奪ってしまうバグがあった。
+    // **2026年9月のキャプションのぞき見プレビュー導入(案B)に伴い、読み取り専用ビュー側の
+    // ホイール転送は撤去した**: あふれた分は常に⛶ボタンの全画面ポップアップ(showMemoOverlay())
+    // で読む設計に変わり、固定の低い高さしか持たないプレビューをホイールでスクロールさせても
+    // 最初の数行が隠れてしまうだけで意味を持たなくなったため。
     const hasMedia = Boolean(el.querySelector('.star-card-media'));
     el.addEventListener('wheel', (event) => {
-      const target = memoEl.hidden ? memoViewEl : memoEl;
-      if (!hasMedia || !target || target.hidden || target.scrollHeight - target.clientHeight < 4) return;
+      if (!hasMedia || memoEl.hidden) return; // 読み取り専用プレビュー表示中は対象外
+      const target = memoEl;
+      if (target.scrollHeight - target.clientHeight < 4) return;
       const rect = target.getBoundingClientRect();
       const inside =
         event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
@@ -3861,6 +3935,7 @@ async function handleCardCaption(card, el) {
       memoViewEl.hidden = false;
     }
     syncCardHeight(liveEl);
+    updateMemoExpandState(liveEl);
   }
   setStatus('キャプションを反映しました');
   scheduleAutoSave();

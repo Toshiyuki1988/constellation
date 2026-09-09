@@ -838,15 +838,68 @@ html, body {
 .star-card-memo-view a { pointer-events: auto; color: #2e7d32; text-decoration: underline; }
 .star-card-memo-favicon { width: 14px; height: 14px; vertical-align: -2px; margin-right: 3px; border-radius: 2px; }
 
-/* 写真・動画・音声カードのメモ欄は、抽出テキストなどで長くなっても無制限には伸ばさない。
-   flex:1の写真エリアはflex-basisが0%のため、メモが際限なく伸びると写真側の再計算の余地が
-   なくなり、リサイズのたびに写真が潰れて戻らなくなる不具合があったため上限+内部スクロールにした。
-   テキストカード(.star-card--textの直下)には写真が無く競合しないので対象外。 */
-.star-card-media ~ .star-card-memo,
-.star-card-media ~ .star-card-memo-view {
+/* 写真・動画・音声カードのメモ欄(Edit中のtextarea)は、抽出テキストなどで長くなっても
+   無制限には伸ばさない。flex:1の写真エリアはflex-basisが0%のため、メモが際限なく伸びると
+   写真側の再計算の余地がなくなり、リサイズのたびに写真が潰れて戻らなくなる不具合があった
+   ため上限+内部スクロールにした。テキストカード(.star-card--textの直下)には写真が無く
+   競合しないので対象外。 */
+.star-card-media ~ .star-card-memo {
   max-height: 220px;
   overflow-y: auto;
 }
+
+/* ---------- キャプションのぞき見プレビュー(2026年9月、案Bとして採用) ----------
+   写真・動画・音声・ストリートビューの読み取り専用ビュー(.star-card-memo-view)は、以前は
+   textareaと同じmax-height:220px+内部スクロールだったが、pointer-events:noneのため
+   タップ/ホイールでの実際のスクロールを受け付けず、情報量の多いCaption(複数キャプションの
+   まとめ貼り等)が実質見切れたままになる不具合があった。常に低い固定高さの「のぞき見」に
+   割り切り(=写真のリサイズと完全に無関係)、あふれる分は⛶ボタンの全画面ポップアップ
+   (js/app.jsのshowMemoOverlay())で読む設計にした。 */
+.star-card-memo-shell { position: relative; }
+.star-card-memo-view--peek {
+  max-height: 62px;
+  overflow: hidden;
+  position: relative;
+}
+.star-card-memo-view--peek.star-card-memo-view--overflowing::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0; height: 20px;
+  background: linear-gradient(rgba(255, 255, 255, 0), var(--panel));
+  pointer-events: none;
+}
+.star-card-memo-expand-btn {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  pointer-events: auto;
+  z-index: 2;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.star-card-memo-expand-btn[hidden] { display: none; }
+
+/* 「⛶ 全文を見る」ポップアップの中身。既存の.modal-overlay/.modal(settings-modal等と同じ
+   不透明な意匠、グラスモーフィズムなし)をそのまま使い、この2つだけ追加する。 */
+.star-card-memo-overlay-modal { max-width: 560px; }
+.star-card-memo-overlay-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 16px;
+}
+.star-card-memo-overlay-body a { color: #2e7d32; text-decoration: underline; }
 
 /* ---------- セッションカード(入れ子セッションへのポータル) ---------- */
 
