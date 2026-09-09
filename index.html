@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260910b">
+<link rel="stylesheet" href="css/style.css?v=20260910c">
 <link rel="stylesheet" href="css/camera.css?v=20260910a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -209,6 +209,14 @@
     <span id="ocr-pip-text">読み取り中…</span>
   </div>
 
+  <!-- テキスト媒体(テクストカード・コメント・座談会・メモ欄など)の文字をドラッグ選択した時に
+       出る「Googleで検索」ポップアップ(2026年9月追加)。キャンバス全体のcontextmenuを
+       preventDefault()しているため(js/canvas.js)、標準のOS選択メニューが出せない代わりに
+       用意した(js/app.jsのinitTextSearchPopup()参照)。 -->
+  <div id="text-search-popup" class="text-search-popup" hidden>
+    <button id="text-search-popup-btn" type="button">🔍 Googleで検索</button>
+  </div>
+
   <!-- デイリーコメント/グループビューイング共用のトースト(コメントカード機能の一部、2026年9月追加)。
        セッションを開くたび(1日3回まで)、ONのCrewsペルソナの誰かがふらっと一言挟んでくる控えめな
        表示。グループビューイングモード中の発言もこのトーストを使い回す。カードとしては保存され
@@ -278,9 +286,9 @@
   <script src="js/gemini.js?v=20260911d"></script>
   <script src="js/camera.js?v=20260910d"></script>
   <script src="js/sound.js?v=20260911e"></script>
-  <script src="js/canvas.js?v=20260909a"></script>
+  <script src="js/canvas.js?v=20260909b"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260911i"></script>
+  <script src="js/app.js?v=20260911j"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260905f"></script>

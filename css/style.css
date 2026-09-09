@@ -303,6 +303,17 @@ html, body {
   pointer-events: auto;
 }
 
+/* コメントカードの本文も同じ理由・同じ仕組みでコピペ可能にした(2026年9月追加) */
+.star-card-comment-text {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+  pointer-events: none;
+}
+.star-card-comment-editing .star-card-comment-text {
+  pointer-events: auto;
+}
+
 @media (max-width: 480px) {
   .toolbar h1 { font-size: 14px; }
   .toolbar button { padding: 6px 8px; font-size: 10px; }
@@ -434,6 +445,36 @@ html, body {
   flex-shrink: 0;
 }
 @keyframes ocr-pip-spin { to { transform: rotate(360deg); } }
+
+/* ---------- テキスト選択時の「Googleで検索」ポップアップ(js/app.jsのinitTextSearchPopup()、
+   2026年9月追加) ----------
+   キャンバス全体でcontextmenuをpreventDefault()しているため(js/canvas.js)、カード内の
+   テキスト(テクスト/コメント/座談会・メモ欄)をドラッグ選択してもOS標準の「Web検索」メニューが
+   出せない。選択が確定した位置(pointerup座標)の近くにこの小さいポップアップを出し、押すと
+   選択文字列でGoogle検索を新規タブで開く。 */
+.text-search-popup {
+  position: fixed;
+  z-index: 210;
+  transform: translate(-50%, -100%);
+  pointer-events: none; /* ボタン自体には別途autoを付ける、外枠は当たり判定を持たない */
+}
+.text-search-popup[hidden] { display: none; }
+.text-search-popup button {
+  pointer-events: auto;
+  display: block;
+  background: rgba(20, 20, 24, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 8px 14px;
+  margin-bottom: 8px;
+  font-family: var(--sans);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
 
 /* ---------- デイリーコメントのトースト(js/app.jsのmaybeShowDailyComment()、2026年9月追加) ----------
    ヘッダーの鑑賞可能日ティッカー(#infoTicker)と同じ「控えめなトースト表示」の作法を踏襲し、
@@ -1688,6 +1729,7 @@ html, body {
 
 .modal-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }

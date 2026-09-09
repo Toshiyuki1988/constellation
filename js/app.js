@@ -151,6 +151,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   });
   els.viewport.addEventListener('drop', handleViewportDrop);
+
+  initTextSearchPopup();
 });
 
 /* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ---------------- */
@@ -243,6 +245,72 @@ function showChoiceDialog({ title, message, options }) {
     });
 
     document.body.appendChild(overlay);
+  });
+}
+
+/**
+ * テキスト媒体(テクストカード・コメント・座談会の発言・各カードのメモ欄・インフォの本文欄)を
+ * ドラッグ選択した時に「Googleで検索」ポップアップを出す(2026年9月追加)。js/canvas.jsが
+ * キャンバス全体でcontextmenuをpreventDefault()しているため、OS標準の「Web検索」メニューが
+ * 出せない(ドラッグ選択自体はできるが、選んだ文字列を検索する手段が無かった)。
+ * textarea(メモ欄・テクストカード・インフォの本文欄)はselectionStart/Endで、それ以外
+ * (座談会・コメントの発言、document Selection APIで選択するもの)はgetSelection()で
+ * 選択文字列を取り、pointerupの座標の近くにポップアップを出す。
+ */
+const TEXT_SEARCH_SELECTABLE_SELECTOR =
+  '.star-card-memo, .star-card-info-text, .star-card-chat-text, .star-card-chat-question, .star-card-comment-text';
+
+function getTextSearchSelection(event) {
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest(TEXT_SEARCH_SELECTABLE_SELECTOR)) return '';
+  if (target.tagName === 'TEXTAREA') {
+    const { selectionStart, selectionEnd, value } = target;
+    return selectionStart == null || selectionStart === selectionEnd ? '' : value.slice(selectionStart, selectionEnd);
+  }
+  const sel = document.getSelection();
+  return sel && !sel.isCollapsed ? sel.toString() : '';
+}
+
+function hideTextSearchPopup() {
+  if (els.textSearchPopup) els.textSearchPopup.hidden = true;
+}
+
+function showTextSearchPopup(text, x, y) {
+  if (!els.textSearchPopup) return;
+  els.textSearchPopup.dataset.query = text;
+  const margin = 12;
+  const clampedX = Math.min(Math.max(x, margin), window.innerWidth - margin);
+  const clampedY = Math.max(y, 40);
+  els.textSearchPopup.style.left = `${clampedX}px`;
+  els.textSearchPopup.style.top = `${clampedY}px`;
+  els.textSearchPopup.hidden = false;
+}
+
+function initTextSearchPopup() {
+  els.textSearchPopup = document.getElementById('text-search-popup');
+  els.textSearchPopupBtn = document.getElementById('text-search-popup-btn');
+  if (!els.textSearchPopup || !els.textSearchPopupBtn) return;
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('#text-search-popup')) hideTextSearchPopup();
+  });
+
+  document.addEventListener('pointerup', (event) => {
+    if (event.target.closest('#text-search-popup')) return; // ポップアップ自身の操作は無視
+    // pointerup時点ではブラウザの選択確定(特にタッチ)がまだ済んでいないことがあるため、
+    // 次のタスクへ回してから判定する。
+    setTimeout(() => {
+      const text = getTextSearchSelection(event).trim();
+      if (text) showTextSearchPopup(text, event.clientX, event.clientY);
+      else hideTextSearchPopup();
+    }, 0);
+  });
+
+  els.textSearchPopupBtn.addEventListener('click', () => {
+    const query = els.textSearchPopup.dataset.query || '';
+    hideTextSearchPopup();
+    if (!query) return;
+    window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank', 'noopener');
   });
 }
 
@@ -942,7 +1010,10 @@ function editGuideHexHtml(mediaType) {
   // 座談会カードと同様ASTRは不要(自分から他のカードへ接続を貼る運用は想定していない。
   // 生成時に既に接続済みの状態で作られる)。
   if (mediaType === 'comment') {
-    return hex('delete', 'Delete');
+    // 2026年9月追加: コメント本文もドラッグ選択してコピペしたい、という要望を受け、
+    // 座談会カードと同じ仕組み(Editでpointer-events:noneをトグル解除)のEditを追加した。
+    // 本文自体は読み取り専用なので、実際に書き換えることはできない。
+    return hex('edit', 'Edit') + hex('delete', 'Delete');
   }
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
   // 写真の中の文字をOCRで抜き出す機能。画像のみ。「写真を残してメモに追記」「写真を破棄してテクストカード化」の2択
@@ -1097,6 +1168,10 @@ function renderCard(card) {
           // 座談会カードには編集可能なメモ欄が無いため、代わりに発言テキストの
           // 選択(コピペ)可否をトグルする(2026年9月追加、実際に書き換えることはできない)。
           el.classList.toggle('star-card-chat-editing');
+        } else if (card.mediaType === 'comment') {
+          // コメントカードも座談会と同じ理由・同じ仕組み(2026年9月追加)。
+          // コメント本文は読み取り専用なので、Editは「選択(コピペ)を許可するか」のトグルのみ。
+          el.classList.toggle('star-card-comment-editing');
         }
       } else if (action === 'title') {
         startSessionTitleEdit(card, el);
@@ -3594,6 +3669,11 @@ document.addEventListener('keydown', (event) => {
     if (guideCard && guideCard.mediaType === 'chat') {
       event.preventDefault();
       guideEl.classList.toggle('star-card-chat-editing');
+      return;
+    }
+    if (guideCard && guideCard.mediaType === 'comment') {
+      event.preventDefault();
+      guideEl.classList.toggle('star-card-comment-editing');
       return;
     }
   }

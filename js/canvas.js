@@ -112,7 +112,7 @@ function initCanvas(viewportElArg, contentElArg) {
       // 自体に「これらの要素上から始まったジェスチャーは無視する」と一元的に教える。
       // 座談会カードの発言・質問(既定はpointer-events:noneだが、Editモード中はauto)も
       // 同じ理由で含める。pointer-events:noneの間はそもそもヒットしないため無害。
-      ignoreFrom: 'textarea, input, select, .star-card-chat-text, .star-card-chat-question',
+      ignoreFrom: 'textarea, input, select, .star-card-chat-text, .star-card-chat-question, .star-card-comment-text',
     })
     .gesturable({
       listeners: { move: onViewportPinch },
@@ -347,6 +347,7 @@ function deactivateEditGuide(el) {
   // 解除されるタイミングで一緒にリセットしておく(付けっぱなしのまま次に開いた時に
   // 予期せず選択可能な状態から始まってしまうのを防ぐ)。
   el.classList.remove('star-card-chat-editing');
+  el.classList.remove('star-card-comment-editing');
   if (editGuideCard === el) editGuideCard = null;
 }
 
@@ -427,7 +428,7 @@ function attachCardGestures(el) {
     if (event.target.closest('button, textarea, input, a')) return; // 公式ページリンク(<a>)などはカードのドラッグ/長押し処理の対象外
     // 座談会カードの発言・質問(コピペできるようuser-select:textにした部分、2026年9月)は、
     // ここでも除外しないとテキストのドラッグ選択がカードの移動に奪われてしまう。
-    if (event.target.closest('.star-card-chat-text, .star-card-chat-question')) return;
+    if (event.target.closest('.star-card-chat-text, .star-card-chat-question, .star-card-comment-text')) return;
     // Flight Engineerモジュール起動中(Shiftキーによる一時解除を除く)は、カード個別の
     // 長押し編集ガイド/移動を止め、矩形選択(js/modules/flight-engineer.js)に譲る。
     if (window.isFlightEngineerActive && window.isFlightEngineerActive() && !event.shiftKey) return;
