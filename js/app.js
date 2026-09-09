@@ -419,6 +419,7 @@ async function onSignedIn() {
     state.hiddenAutoLinks = data.hiddenAutoLinks || [];
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
+    if (window.migrateLegacyCrews) window.migrateLegacyCrews(); // 旧【人物情報】【その言葉】形式からConstellation形式への一度きりの移行
     state.commentHistory = data.commentHistory || [];
     state.groupViewingIntervalSec = typeof data.groupViewingIntervalSec === 'number' ? data.groupViewingIntervalSec : 60;
     if (data.feHistory) {
@@ -1698,7 +1699,7 @@ async function handleSummaryGenerate(card, el, modeOrCrewId) {
     const direction = (el.querySelector('.star-card-summary-input')?.value || '').trim();
     card.summaryDirection = direction;
     const images = collectConnectedImageParts(card.id);
-    const persona = crew ? { personInfo: crew.personInfo, theirWords: crew.theirWords } : undefined;
+    const persona = crew ? window.getCrewNarrativeParts(crew) : undefined;
     const { answer, mostRelevantSource } = await summarizeSession({ context, mode, persona, direction, images });
     // 要約傾向に質問文を入れても素直に回答が返ってくるため、後から見返した時に「何を
     // 指示して出てきた要約か」が分かるよう、指示文をQ.として冒頭に残しておく。
@@ -1837,7 +1838,8 @@ function buildRoundtableParticipants() {
     { kind: 'gemini', id: 'gemini', name: 'Gemini', avatar: '✨' },
   ];
   (state.crews || []).filter((c) => c.enabled).forEach((c) => {
-    list.push({ kind: 'crew', id: c.id, name: c.name, avatar: c.avatar, personInfo: c.personInfo, theirWords: c.theirWords });
+    const narrative = window.getCrewNarrativeParts ? window.getCrewNarrativeParts(c) : { personInfo: '', theirWords: '' };
+    list.push({ kind: 'crew', id: c.id, name: c.name, avatar: c.avatar, ...narrative });
   });
   return list;
 }
@@ -2333,14 +2335,19 @@ function todayDateStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** persona人物になりきらせる指示文(座談会・コメント系のプロンプトで共通して使う土台部分)。 */
+/** persona人物になりきらせる指示文(座談会・コメント系のプロンプトで共通して使う土台部分)。
+ *  crew.personInfo/theirWords/photoTitlesはwindow.getCrewNarrativeParts()がConstellationの
+ *  プロフィール/言葉/写真カードから集約した文字列(buildRoundtableParticipants()で埋め込み済み)。 */
 function personaVoiceInstruction(crew) {
-  return (
+  let text =
     'あなたは次の人物になりきって話してください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
     `【人物情報】\n${crew.personInfo}\n\n` +
     '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
-    `${crew.theirWords}`
-  );
+    `${crew.theirWords}`;
+  if (crew.photoTitles && crew.photoTitles.length) {
+    text += '\n\n【好きな作品】\n' + crew.photoTitles.map((t) => `・${t}`).join('\n');
+  }
+  return text;
 }
 
 function addCommentHistoryEntry({ name, avatar, text, source }) {

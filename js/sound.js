@@ -23,6 +23,8 @@
 //   playFlightEngineerUndoSound()     元に戻す時の下降音
 //   playFlightEngineerRedoSound()     やり直す時の上昇音
 //   playChatReplySound()       座談会の自動返信が1件表示される直前の「シュコッ」
+//   playConstellationAddCardSound()  Crews Constellationでカードを追加した時の「キン☆」
+//   playConstellationMoveCardSound() Crews Constellationでカードのドラッグを始めた時の「ヒュウ…」
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -560,4 +562,64 @@ function playChatReplySound() {
   osc.connect(clickGain).connect(c.destination);
   osc.start(now + 0.045);
   osc.stop(now + 0.1);
+}
+
+/** Crews Constellation: カード追加時「キン☆」。高い倍音の短いピークを2つ重ねる
+ *  (playAstrConnectSound()と近い質感だが、より短く軽い)。 */
+function playConstellationAddCardSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 900;
+  const dryGain = c.createGain(); dryGain.gain.value = 0.85;
+  const wetGain = c.createGain(); wetGain.gain.value = 0.3;
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  highpass.connect(dryGain).connect(c.destination);
+  highpass.connect(wetGain).connect(convolver).connect(c.destination);
+
+  [2600, 3800].forEach((freq, i) => {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const t0 = now + i * 0.03;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.16);
+    osc.connect(gain).connect(highpass);
+    osc.start(t0);
+    osc.stop(t0 + 0.18);
+  });
+}
+
+/** Crews Constellation: カードのドラッグ移動を始めた瞬間「ヒュウ…」(高いピッチから
+ *  スッと下降するスイープ)。ドラッグ中ずっと鳴らすのではなく、開始時に1回だけ鳴らす。 */
+function playConstellationMoveCardSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 500;
+  const dryGain = c.createGain(); dryGain.gain.value = 0.8;
+  const wetGain = c.createGain(); wetGain.gain.value = 0.25;
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  highpass.connect(dryGain).connect(c.destination);
+  highpass.connect(wetGain).connect(convolver).connect(c.destination);
+
+  const sweep = c.createOscillator();
+  const sweepGain = c.createGain();
+  sweep.type = 'sine';
+  sweep.frequency.setValueAtTime(2000, now);
+  sweep.frequency.exponentialRampToValueAtTime(650, now + 0.32);
+  sweepGain.gain.setValueAtTime(0.0001, now);
+  sweepGain.gain.exponentialRampToValueAtTime(0.16, now + 0.02);
+  sweepGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.36);
+  sweep.connect(sweepGain).connect(highpass);
+  sweep.start(now);
+  sweep.stop(now + 0.38);
 }

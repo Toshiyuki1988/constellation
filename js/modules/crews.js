@@ -7,49 +7,54 @@
 // 直接参照する(モジュールだからといって完全に独立させる必要はないため)。
 //
 // 起動: js/module-launcher.js(モジュール共通の起動基盤)経由。背景を2本指でダブルタップ
-//       するとキーパッドHUDが開き、"456"(電話キーパッドの中央の横一列、洛書の対角線でもある
-//       4-5-6=15の並び。中央5を軸に複数のペルソナが集う、というこのモジュールの性質にちなむ)
-//       と入力すると起動する(PCではCONSTELLATION PIEの「キーパッド」項目からも同じキーパッドを
-//       開ける)。このモジュール自身は registerModuleCode('456', openCrews) で登録するだけでよい。
+//       するとキーパッドHUDが開き、"456"と入力すると起動する(PCではCONSTELLATION PIEの
+//       「キーパッド」項目からも同じキーパッドを開ける)。
 //
-// データモデル: state.crews (配列)。複数セッション・複数年をまたいで使い回すデータなので、
-//   カード単位ではなくstate直下に持たせ、js/app.jsのhandleSave()/onSignedIn()で
-//   通常のカード/セッションと同じくDriveへ保存/復元する。
-//   { id, personInfo, theirWords, name, avatar, enabled, createdAt }
-//   - personInfo:【人物情報】— 誰か・どの文献か(自由記述)
-//   - theirWords:【その言葉】— 本人の言葉の引用(自由記述)
-//   - name: personInfoの冒頭からクライアント側だけで自動生成する表示名(API不使用、deriveName())
-//   - enabled: ONのペルソナだけがサマリーカードのヘックス候補になる
+// 【2026年9月、Constellation化】ペルソナの人物像を【人物情報】【その言葉】という単一2欄の
+// 自由記述から、「Constellation」——プロフィール・言葉・好きな作品の3種のカードをキャンバス
+// (夜空)の上に自由配置する小さな星座——へ作り替えた。きっかけは「ペルソナの解像度を上げる
+// ために入力欄を大きなポップアップへ広げた」延長として、いっそCrewsの召喚元の人物自身にも
+// Constellation形式を持たせよう、というユーザーの発想。展覧会だけでなく、Crewsのモデルと
+// なった人物そのものを掘り下げていく行為という位置づけ。
+//   - データモデル: state.crews[].constellationCards (配列、{id, type:'profile'|'words'|'photo',
+//     text?, title?, x, y})。旧personInfo/theirWords(単一2欄)は初回アクセス時に
+//     migrateLegacyCrews() が自動でプロフィールカード1枚・言葉カード1枚へ変換する。
+//   - ロスターへの保存は、プロフィールカード1枚・言葉カード1枚が揃うまでできない
+//     (空のConstellationのままなりきり生成を呼ぶ事態が構造的に起きないようにするため)。
+//   - アステリズム(手動接続線)は実装しない。カードはドラッグで自由配置できるだけ
+//     (重くなるので接続線は見送り、というユーザー判断)。傾き・浮遊アニメーションも
+//     同様の理由(実装が軽い方を優先)で持たない。
+//   - プロフィール・言葉カードはスクロールなしで全文表示し、文字量に応じてカード自体が
+//     なるべく正方形に近い形へ自動リサイズされる(computeSquareWidth())。
+//   - なりきり生成(personaVoiceInstruction()/summarizeSession())には、Constellation内の
+//     全プロフィールカード・全言葉カードのテキストを連結して渡す。写真カードは
+//     タイトル文字列だけを渡し、画像そのものは一切送らない(API使用最小化のご要望)。
+//     この集約はgetCrewNarrativeParts()が行い、window経由でjs/app.jsから参照される。
+//   - 起動時は画面いっぱいに広がるフルスクリーンオーバーレイ(Crewsのペルソナ管理パネル
+//     よりもさらに一段大きく展開する)。効果音はカード追加時に「キン☆」
+//     (playConstellationAddCardSound())、カードのドラッグ移動を始めた瞬間に「ヒュウ…」
+//     (playConstellationMoveCardSound())をjs/sound.jsから鳴らす。
 //
 // 【設計上の重要な決定】ペルソナの「形成」(=人格になりきった実際の生成)は、登録・保存の
-// 時点ではGeminiを一切呼ばない。2026年9月、インフォメーションカードの展覧会リンク自動検索で
-// google_searchツール(検索グラウンディング)を追加した際、請求先アカウント非紐付けの無料キー
-// では割り当てがゼロで即座に429 RESOURCE_EXHAUSTEDになることが実機で判明した。この教訓を
-// 踏まえ、Crewsでは「登録のたびに余分なAPI呼び出しを増やす」設計を避けている(表示名の自動
-// 抽出のようなAPI呼び出しも含めて、ユーザーの意向により見送った)。実際にGeminiが呼ばれるのは、
-// ユーザーがサマリーカード上でそのペルソナのヘックスを押した瞬間だけ(=既存の
-// summarizeSession()を1回呼ぶだけで、Education/Academicと全く同じ呼び出しパターン)。
+// 時点ではGeminiを一切呼ばない(Constellation化後も変更なし)。実際にGeminiが呼ばれるのは、
+// ユーザーがサマリーカード上でそのペルソナのヘックスを押した瞬間だけ。
 //
 // 統合ポイント(js/app.js側):
 //   - summaryCardInnerHtml() が window.crewsSummaryHexButtonsHtml() を呼び、ONのペルソナ数ぶん
 //     ヘックスボタンを追加で描画する。
 //   - wireSummaryCard() が各ヘックスにタップ(=生成)と長押し(=window.showCrewInfoPopup()で
-//     【人物情報】【その言葉】をコピー可能な形で見返す)の両方を割り当てる。表示名(ニックネーム)
-//     だけでは元の人物情報を思い出せない、というユーザー要望を受けて追加した(2026年9月)。
+//     Constellationの集約テキストをコピー可能な形で見返す)の両方を割り当てる。
 //   - handleSummaryGenerate() が window.getCrewById() でmodeOrCrewIdがペルソナIDかどうかを判定し、
-//     ペルソナなら summarizeSession() に persona: {personInfo, theirWords} を渡す。
+//     ペルソナなら summarizeSession() に window.getCrewNarrativeParts(crew) の結果を渡す。
+//   - buildRoundtableParticipants() も同様に window.getCrewNarrativeParts() を使う。
 //   - renderCard() が card.crewPersonaId を見て、水色グラスモーフ(.star-card--crew)と
 //     ペルソナの名前・絵文字ヘッダー(.star-card-crew-head)を付ける。
+//   - onSignedIn() が state.crews 読み込み直後に window.migrateLegacyCrews() を1回呼ぶ。
 
 (function () {
   'use strict';
 
   // 固定の絵文字パレットから選ぶだけ(生成しない、APIを使わない)。
-  // 「あらゆる立場の人間」を召喚するモジュールという趣旨に合わせ、肌の色(Fitzpatrick
-  // スケール5段階)・性別・年齢に幅を持たせた人物絵文字を中心に据える(2026年9月、初期の
-  // パレットに黒人女性が含まれていない、という指摘を受けて全面的に見直した)。文化的な装いの
-  // バリエーション(スカーフ・ターバン)、車椅子利用者、非人間(森の番人のようなペルソナ用)も
-  // 少数残す。
   const AVATAR_PALETTE = [
     '👤',
     '👩🏿', '👨🏿', '👩🏾', '👨🏾', '👩🏽', '👨🏽', '🧑🏽', '👩🏼', '👨🏼', '👩🏻', '👨🏻',
@@ -60,13 +65,27 @@
     '🌳', '🕊️', '🖋️',
   ];
 
+  const CST_KIND_META = {
+    profile: { icon: '📇', label: 'プロフィール', placeholder: '誰か・どういう人物か' },
+    words: { icon: '🗨️', label: '言葉', placeholder: '本人の言葉をそのまま引用' },
+    photo: { icon: '🖼️', label: '写真', placeholder: '作品タイトル' },
+  };
+  const CST_PHOTO_WIDTH = 150;
+  const CST_TEXT_MIN_WIDTH = 140; // ヘッダー行(アイコン+ラベル+✕)が折り返さずに収まる最小幅
+  const CST_TEXT_MAX_WIDTH = 280;
+
   let crEls = null;
   let editingId = null; // 編集中のペルソナID。null なら「新規」
   let pendingAvatar = AVATAR_PALETTE[0];
-  let stylesInjected = false; // ペルソナ管理パネルと情報ポップアップ、どちらが先に開かれてもCSSを二重注入しない
+  let stylesInjected = false;
   let infoPopupEls = null;
-  let fieldEditorEls = null;
-  let fieldEditorKey = null; // 'personInfo' | 'theirWords' | null(未使用)。今ポップアップが映している項目
+
+  // Constellationオーバーレイの状態(編集中の一時ドラフト。「ロスターに保存する」を
+  // 押すまではcrewオブジェクトへ反映しない)。
+  let cstEls = null;
+  let cstCards = [];
+  let cstIdSeq = 1;
+  let cstDragCard = null, cstDragOffsetX = 0, cstDragOffsetY = 0;
 
   /* ---------------- DOM / CSS をこのファイルだけで自己完結させて注入する ---------------- */
 
@@ -175,17 +194,17 @@
         font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
         color: rgba(255, 255, 255, 0.45);
       }
-      .crews-ocr-btn, .crews-expand-btn {
+      .crews-ocr-btn {
         width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
         background: rgba(85, 230, 247, 0.12); border: 1px solid rgba(85, 230, 247, 0.35); color: #55e6f7; cursor: pointer;
         font-size: 12px;
       }
-      .crews-ocr-btn:hover, .crews-expand-btn:hover { background: rgba(85, 230, 247, 0.25); }
+      .crews-ocr-btn:hover { background: rgba(85, 230, 247, 0.25); }
       .crews-ocr-btn:disabled { opacity: 0.5; cursor: default; }
       .crews-field-input {
         width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px;
         padding: 8px 10px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 12.5px; color: #fff;
-        line-height: 1.6; resize: vertical;
+        line-height: 1.6;
       }
       .crews-field-input::placeholder { color: rgba(255, 255, 255, 0.3); }
       .crews-field-hint { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(255, 255, 255, 0.35); margin: 5px 0 0; line-height: 1.6; }
@@ -197,16 +216,18 @@
       }
       .crews-avatar-opt.sel { background: rgba(85, 230, 247, 0.22); border-color: #55e6f7; }
 
-      .crews-actions { display: flex; gap: 8px; margin-top: 4px; }
-      .crews-save-btn {
-        flex: 1; padding: 10px 12px; border-radius: 8px; border: none;
-        background: #55e6f7; color: #06282c; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 12px;
-        cursor: pointer;
+      .crews-open-constellation-btn {
+        display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 14px; border-radius: 8px; border: none;
+        background: #55e6f7; color: #06282c; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 12.5px;
+        cursor: pointer; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
-      .crews-save-btn:hover { background: #83eefb; }
+      .crews-open-constellation-btn:hover { background: #83eefb; }
+      .crews-open-constellation-btn .star { font-size: 15px; }
+
+      .crews-actions { display: flex; gap: 8px; margin-top: 4px; }
       .crews-delete-btn {
         padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.18); background: transparent;
-        color: rgba(255, 255, 255, 0.6); font-family: 'IBM Plex Mono', monospace; font-size: 11px; cursor: pointer;
+        color: rgba(255, 255, 255, 0.6); font-family: 'IBM Plex Mono', monospace; font-size: 11px; cursor: pointer; width: 100%;
       }
       .crews-delete-btn:hover { border-color: #b3402b; color: #ff8a70; }
 
@@ -216,7 +237,7 @@
         font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; line-height: 1.8; color: rgba(255, 255, 255, 0.55);
       }
 
-      /* サマリーカードのペルソナのヘックスを長押しすると出る、人物情報・その言葉の閲覧/コピー用ポップアップ */
+      /* サマリーカードのペルソナのヘックスを長押しすると出る、Constellation集約の閲覧/コピー用ポップアップ */
       .crews-info-overlay {
         position: fixed; inset: 0; z-index: 130;
         display: flex; align-items: center; justify-content: center;
@@ -264,52 +285,119 @@
         color: rgba(255, 255, 255, 0.88); white-space: pre-wrap; word-break: break-word;
       }
 
-      /* 【人物情報】【その言葉】を大きく開いて編集するポップアップ(2026年9月追加)。
-         「かなり作り込むことに対応できるよう入力欄をポップアップででかくしたい」という要望。 */
-      .crews-field-editor-overlay {
-        position: fixed; inset: 0; z-index: 140;
-        display: flex; align-items: center; justify-content: center;
-        opacity: 0; pointer-events: none; transition: opacity 0.18s ease-out; padding: 16px;
-      }
-      .crews-field-editor-overlay.open { opacity: 1; pointer-events: auto; }
-      .crews-field-editor-backdrop { position: absolute; inset: 0; background: rgba(6, 10, 12, 0.82); }
-      .crews-field-editor-panel {
-        position: relative; width: min(94vw, 860px); height: min(88vh, 820px);
+      /* ---------------- Constellation(フルスクリーンオーバーレイ、2026年9月追加) ---------------- */
+      .cst-overlay {
+        position: fixed; inset: 0; z-index: 150;
         display: flex; flex-direction: column;
-        background: rgba(9, 15, 18, 0.98); border: 1px solid rgba(85, 230, 247, 0.3); border-radius: 16px;
-        padding: 18px 20px 20px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-        transform: scale(0.96); transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+        background: #05080a;
+        opacity: 0; pointer-events: none;
+        transform: scale(0.98);
+        transition: opacity 0.22s ease-out, transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
       }
-      .crews-field-editor-overlay.open .crews-field-editor-panel { transform: scale(1); }
-      .crews-field-editor-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex: none; }
-      .crews-field-editor-label {
-        flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.06em;
-        color: rgba(255, 255, 255, 0.6); text-transform: uppercase;
+      .cst-overlay.open { opacity: 1; pointer-events: auto; }
+      .cst-topbar {
+        display: flex; align-items: center; gap: 10px; padding: 12px 16px; flex: none;
+        background: #0a1114; border-bottom: 1px solid rgba(85, 230, 247, 0.22);
       }
-      .crews-field-editor-ocr-btn {
-        padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(85, 230, 247, 0.35);
-        background: rgba(85, 230, 247, 0.1); color: #55e6f7; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px;
-        font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; flex: none;
+      .cst-topbar-avatar {
+        width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+        font-size: 15px; background: rgba(85, 230, 247, 0.16); border: 1px solid rgba(85, 230, 247, 0.4); flex: none;
       }
-      .crews-field-editor-ocr-btn svg { width: 13px; height: 13px; }
-      .crews-field-editor-ocr-btn:hover { background: rgba(85, 230, 247, 0.22); }
-      .crews-field-editor-ocr-btn:disabled { opacity: 0.5; cursor: default; }
-      .crews-field-editor-close {
-        width: 28px; height: 28px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+      .cst-name-input {
+        flex: 1; background: transparent; border: none; outline: none; color: #fff;
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 14px; min-width: 0;
+      }
+      .cst-name-input::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .cst-topbar-label {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(85, 230, 247, 0.75);
+      }
+      .cst-close {
+        width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
         background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(85, 230, 247, 0.3); color: rgba(255, 255, 255, 0.85);
-        font-size: 13px; cursor: pointer;
+        font-size: 12px; cursor: pointer;
       }
-      .crews-field-editor-close:hover { background: rgba(85, 230, 247, 0.25); }
-      .crews-field-editor-textarea {
-        flex: 1; width: 100%; resize: none;
-        background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px;
-        padding: 14px 16px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 15px; line-height: 1.85; color: #fff;
+      .cst-close:hover { background: rgba(85, 230, 247, 0.25); }
+
+      .cst-stage {
+        position: relative; flex: 1; min-height: 0; overflow: hidden;
+        background:
+          radial-gradient(ellipse at 30% 20%, rgba(85, 230, 247, 0.10), transparent 55%),
+          radial-gradient(ellipse at 80% 80%, rgba(85, 230, 247, 0.06), transparent 50%),
+          #05080a;
       }
-      .crews-field-editor-textarea::placeholder { color: rgba(255, 255, 255, 0.3); }
-      .crews-field-editor-hint {
-        flex: none; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.4);
-        margin: 8px 0 0; line-height: 1.7;
+      .cst-starfield { position: absolute; inset: 0; opacity: 0.9; pointer-events: none; }
+      .cst-board { position: relative; z-index: 1; width: 100%; height: 100%; }
+
+      .cst-card {
+        position: absolute;
+        border-radius: 10px; padding: 9px 10px 10px;
+        background: rgba(12, 20, 24, 0.92); border: 1px solid rgba(85, 230, 247, 0.3);
+        box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+        color: #fff; user-select: none;
       }
+      .cst-card.profile { border-color: rgba(85, 230, 247, 0.5); }
+      .cst-card.words { border-color: rgba(255, 255, 255, 0.28); }
+      .cst-card.photo { border-color: rgba(255, 209, 102, 0.4); }
+      .cst-card-head { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; cursor: grab; }
+      .cst-card-head:active { cursor: grabbing; }
+      .cst-card-icon { font-size: 12px; flex: none; }
+      .cst-card-kind {
+        font-family: 'IBM Plex Mono', monospace; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.5);
+        flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+      }
+      .cst-card-ocr-btn {
+        width: 16px; height: 16px; border-radius: 50%; flex: none; border: none;
+        background: rgba(85, 230, 247, 0.15); color: #55e6f7; font-size: 8px; cursor: pointer; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .cst-card-ocr-btn:hover { background: rgba(85, 230, 247, 0.3); }
+      .cst-card-ocr-btn:disabled { opacity: 0.5; cursor: default; }
+      .cst-card-del {
+        width: 15px; height: 15px; border-radius: 50%; border: none; background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.6);
+        font-size: 9px; cursor: pointer; flex: none; line-height: 15px; padding: 0;
+      }
+      .cst-card-del:hover { background: rgba(179, 64, 43, 0.5); color: #fff; }
+      .cst-card-text {
+        display: block; width: 100%; min-height: 44px; resize: none; overflow: hidden;
+        background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 5px; padding: 5px 6px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10px; line-height: 1.55; color: #fff;
+      }
+      .cst-card-text::placeholder { color: rgba(255, 255, 255, 0.32); }
+      .cst-card.words .cst-card-text { font-style: italic; }
+      .cst-card-photo-box {
+        width: 100%; height: 64px; border-radius: 6px; background: rgba(255, 255, 255, 0.05); border: 1px dashed rgba(255, 255, 255, 0.18);
+        display: flex; align-items: center; justify-content: center; font-size: 20px; color: rgba(255, 255, 255, 0.35); margin-bottom: 5px;
+      }
+      .cst-card-title-input {
+        width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 5px;
+        padding: 5px 6px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10px; color: #fff;
+      }
+
+      .cst-toolbar {
+        display: flex; align-items: center; gap: 8px; padding: 11px 16px; flex-wrap: wrap; flex: none;
+        background: #0a1114; border-top: 1px solid rgba(85, 230, 247, 0.18);
+      }
+      .cst-add-btn {
+        display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px;
+        background: rgba(85, 230, 247, 0.1); border: 1px solid rgba(85, 230, 247, 0.35); color: #55e6f7;
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px; font-weight: 700; cursor: pointer;
+      }
+      .cst-add-btn:hover { background: rgba(85, 230, 247, 0.22); }
+      .cst-toolbar-hint {
+        margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(255, 255, 255, 0.4); text-align: right;
+      }
+      .cst-req-row {
+        display: flex; align-items: center; gap: 10px; padding: 9px 16px; flex-wrap: wrap; flex: none;
+        background: #0a1114; border-top: 1px solid rgba(85, 230, 247, 0.12);
+      }
+      .cst-save-btn {
+        padding: 8px 16px; border-radius: 8px; border: none; background: #55e6f7; color: #06282c;
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 12px; cursor: pointer;
+      }
+      .cst-save-btn:hover { background: #83eefb; }
+      .cst-save-btn:disabled { background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.35); cursor: not-allowed; }
+      .cst-req-msg { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 138, 112, 0.9); }
+      .cst-req-msg.ok { color: rgba(140, 255, 180, 0.85); }
     `;
     document.head.appendChild(style);
   }
@@ -337,33 +425,26 @@
           <div class="crews-editor">
             <p class="crews-col-label crews-editor-title">召喚フォーム — 新規</p>
             <div class="crews-field">
-              <div class="crews-field-label-row">
-                <span class="crews-field-label">【人物情報】— 誰か・どの文献か</span>
-                <button class="crews-expand-btn crews-expand-person" title="大きく開いて編集">⛶</button>
-                <button class="crews-ocr-btn crews-ocr-person" title="カメラでOCR読み取り">${CAMERA_ICON_SVG}</button>
-              </div>
-              <textarea class="crews-field-input crews-person-info" rows="3" placeholder="例: グスタフソン&ハーポヤ『つぼみの本』に登場する、森のそばで長く暮らしてきた人物。"></textarea>
-            </div>
-            <div class="crews-field">
-              <div class="crews-field-label-row">
-                <span class="crews-field-label">【その言葉】— 本人の言葉をそのまま引用</span>
-                <button class="crews-expand-btn crews-expand-words" title="大きく開いて編集">⛶</button>
-                <button class="crews-ocr-btn crews-ocr-words" title="カメラでOCR読み取り">${CAMERA_ICON_SVG}</button>
-              </div>
-              <textarea class="crews-field-input crews-their-words" rows="5" placeholder="本の一節などをそのまま。長ければカメラで複数回読み取って構いません(追記されます)。"></textarea>
-              <p class="crews-field-hint">口調・人となりはこの引用そのものから読み取られます。性別や職業を別途指定する欄はありません。</p>
+              <div class="crews-field-label-row"><span class="crews-field-label">名前</span></div>
+              <input type="text" class="crews-field-input crews-name-input" placeholder="例: つぼみの番人">
             </div>
             <div class="crews-field">
               <div class="crews-field-label-row"><span class="crews-field-label">似顔絵(任意・APIは使わない)</span></div>
               <div class="crews-avatar-grid"></div>
             </div>
+            <div class="crews-field">
+              <div class="crews-field-label-row"><span class="crews-field-label">Constellation</span></div>
+              <button class="crews-open-constellation-btn" type="button">
+                <span class="star">⭐</span>Constellationをひらく(<span class="crews-cst-badge">0</span>枚)
+              </button>
+              <p class="crews-field-hint">プロフィール・言葉のカードを1枚ずつ以上置くと、ロスターに保存できるようになります。</p>
+            </div>
             <div class="crews-actions">
-              <button class="crews-save-btn">ロスターに保存する</button>
               <button class="crews-delete-btn" hidden>削除</button>
             </div>
           </div>
         </div>
-        <p class="crews-rationale">保存時にGeminiは呼びません。実際にこの人格になりきって語らせるのは、サマリーカード上でこのペルソナのヘックスを押した瞬間だけです(Education/Academicと同じ1回のAPI呼び出し)。長押しすると、召喚時に入力した【人物情報】【その言葉】をいつでも見返せます(コピーも可能)。</p>
+        <p class="crews-rationale">Constellationの編集・保存時にGeminiは呼びません。実際にこの人格になりきって語らせるのは、サマリーカード上でこのペルソナのヘックスを押した瞬間だけです(Education/Academicと同じ1回のAPI呼び出し)。長押しすると、Constellationの内容をいつでも見返せます(コピーも可能)。</p>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -373,21 +454,15 @@
       panel: overlay.querySelector('.crews-panel'),
       roster: overlay.querySelector('.crews-roster'),
       editorTitle: overlay.querySelector('.crews-editor-title'),
-      personInfo: overlay.querySelector('.crews-person-info'),
-      theirWords: overlay.querySelector('.crews-their-words'),
-      ocrPersonBtn: overlay.querySelector('.crews-ocr-person'),
-      ocrWordsBtn: overlay.querySelector('.crews-ocr-words'),
-      expandPersonBtn: overlay.querySelector('.crews-expand-person'),
-      expandWordsBtn: overlay.querySelector('.crews-expand-words'),
+      nameInput: overlay.querySelector('.crews-name-input'),
       avatarGrid: overlay.querySelector('.crews-avatar-grid'),
-      saveBtn: overlay.querySelector('.crews-save-btn'),
+      openConstellationBtn: overlay.querySelector('.crews-open-constellation-btn'),
+      cstBadge: overlay.querySelector('.crews-cst-badge'),
       deleteBtn: overlay.querySelector('.crews-delete-btn'),
       groupViewingInterval: overlay.querySelector('.crews-group-viewing-interval'),
     };
 
-    [crEls.personInfo, crEls.theirWords].forEach((ta) => {
-      ta.addEventListener('pointerdown', (e) => e.stopPropagation());
-    });
+    crEls.nameInput.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     // グループビューイングモード(js/app.js)のコメント間隔。実行中に変更した場合は
     // 即座に新しい間隔でタイマーを張り直す(止まっていれば次回起動時に反映されるだけ)。
@@ -407,20 +482,9 @@
     });
     crEls.overlay.querySelector('.crews-backdrop').addEventListener('click', closeCrews);
 
-    crEls.ocrPersonBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    crEls.ocrPersonBtn.addEventListener('click', (e) => { e.stopPropagation(); ocrIntoTextarea(crEls.personInfo, crEls.ocrPersonBtn); });
-    crEls.ocrWordsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    crEls.ocrWordsBtn.addEventListener('click', (e) => { e.stopPropagation(); ocrIntoTextarea(crEls.theirWords, crEls.ocrWordsBtn); });
+    crEls.openConstellationBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    crEls.openConstellationBtn.addEventListener('click', (e) => { e.stopPropagation(); openConstellation(); });
 
-    // 大きく開いて編集するポップアップ(2026年9月追加)。「かなり作り込むことに対応できるよう
-    // 入力欄をポップアップで大きくしたい」というユーザー要望を受けて追加した。
-    crEls.expandPersonBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    crEls.expandPersonBtn.addEventListener('click', (e) => { e.stopPropagation(); openFieldEditor('personInfo'); });
-    crEls.expandWordsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    crEls.expandWordsBtn.addEventListener('click', (e) => { e.stopPropagation(); openFieldEditor('theirWords'); });
-
-    crEls.saveBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    crEls.saveBtn.addEventListener('click', (e) => { e.stopPropagation(); savePersona(); });
     crEls.deleteBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     crEls.deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); deletePersona(); });
 
@@ -455,17 +519,58 @@
   }
 
   /**
+   * 旧【人物情報】【その言葉】(単一2欄)形式のペルソナを、Constellation形式
+   * (constellationCards配列)へ一度きりで変換する。personInfoがあればプロフィールカード1枚、
+   * theirWordsがあれば言葉カード1枚として持たせ、旧プロパティは削除する。
+   * js/app.jsのonSignedIn()がstate.crews読み込み直後に window.migrateLegacyCrews() を1回呼ぶ。
+   */
+  function migrateLegacyCrews() {
+    (state.crews || []).forEach((crew) => {
+      if (Array.isArray(crew.constellationCards)) return; // 既に新形式
+      const cards = [];
+      if (crew.personInfo && crew.personInfo.trim()) {
+        cards.push({ id: crypto.randomUUID(), type: 'profile', text: crew.personInfo.trim(), x: 30, y: 30 });
+      }
+      if (crew.theirWords && crew.theirWords.trim()) {
+        cards.push({ id: crypto.randomUUID(), type: 'words', text: crew.theirWords.trim(), x: 220, y: 60 });
+      }
+      crew.constellationCards = cards;
+      delete crew.personInfo;
+      delete crew.theirWords;
+    });
+  }
+
+  /**
+   * Constellation内の全プロフィールカード・全言葉カードのテキストを連結し、なりきり生成用の
+   * {personInfo, theirWords, photoTitles}を組み立てる(js/app.jsのpersonaVoiceInstruction()、
+   * js/gemini.jsのsummarizeSession()から参照される)。写真カードはタイトル文字列のみを渡す
+   * (画像は一切送らない、API使用最小化のご要望)。
+   */
+  function getCrewNarrativeParts(crew) {
+    const cards = crew.constellationCards || [];
+    const profileTexts = cards.filter((c) => c.type === 'profile' && c.text && c.text.trim()).map((c) => c.text.trim());
+    const wordsTexts = cards.filter((c) => c.type === 'words' && c.text && c.text.trim()).map((c) => c.text.trim());
+    const photoTitles = cards.filter((c) => c.type === 'photo' && c.title && c.title.trim()).map((c) => c.title.trim());
+    return {
+      personInfo: profileTexts.join('\n\n'),
+      theirWords: wordsTexts.join('\n\n'),
+      photoTitles,
+    };
+  }
+
+  /**
    * サマリーカードのヘックス行に追加するHTML(js/app.js の summaryCardInnerHtml() から呼ばれる)。
-   * 「名前：役割」形式は長くなりうるため、名前部分は.nameでラップしてCSS側(css/style.css)で
-   * 省略記号(…)にする。フルネームはtitle属性(ホバー/長押しで見える)に残す。
    */
   function crewsSummaryHexButtonsHtml() {
     return getEnabledCrews()
-      .map((c) => (
-        `<button class="star-card-summary-crew-btn" data-crew-id="${c.id}" title="${escapeAttr(c.personInfo)}">` +
-        `<span class="emoji">${escapeHtmlLocal(c.avatar || '👤')}</span>` +
-        `<span class="name">${escapeHtmlLocal(c.name || '(無名)')}</span></button>`
-      ))
+      .map((c) => {
+        const narrative = getCrewNarrativeParts(c);
+        return (
+          `<button class="star-card-summary-crew-btn" data-crew-id="${c.id}" title="${escapeAttr(narrative.personInfo)}">` +
+          `<span class="emoji">${escapeHtmlLocal(c.avatar || '👤')}</span>` +
+          `<span class="name">${escapeHtmlLocal(c.name || '(無名)')}</span></button>`
+        );
+      })
       .join('');
   }
 
@@ -476,13 +581,6 @@
   }
   function escapeAttr(str) {
     return escapeHtmlLocal(str).replace(/"/g, '&quot;');
-  }
-
-  /** 【人物情報】の冒頭から表示名を自動生成する(句読点・改行で区切って短く、API不使用) */
-  function deriveName(personInfo) {
-    const firstLine = (personInfo || '').trim().split(/\n/)[0] || '';
-    const firstClause = firstLine.split(/[。、,.]/)[0] || firstLine;
-    return firstClause.trim().slice(0, 22) || '(無名のペルソナ)';
   }
 
   /* ---------------- ロスター / 編集フォーム ---------------- */
@@ -498,13 +596,14 @@
       list.appendChild(empty);
     }
     crews.forEach((crew) => {
+      const narrative = getCrewNarrativeParts(crew);
       const chip = document.createElement('div');
       chip.className = 'crews-chip' + (crew.enabled ? ' on' : '') + (crew.id === editingId ? ' editing' : '');
       chip.innerHTML = `
         <div class="crews-chip-avatar">${escapeHtmlLocal(crew.avatar || '👤')}</div>
         <div class="crews-chip-meta">
           <div class="crews-chip-name">${escapeHtmlLocal(crew.name || '(無名)')}</div>
-          <div class="crews-chip-src">${escapeHtmlLocal((crew.personInfo || '').slice(0, 28))}</div>
+          <div class="crews-chip-src">${escapeHtmlLocal(narrative.personInfo.slice(0, 28))}</div>
         </div>
         <div class="crews-chip-toggle">${crew.enabled ? '✓' : ''}</div>
       `;
@@ -542,10 +641,9 @@
     editingId = null;
     pendingAvatar = AVATAR_PALETTE[0];
     crEls.editorTitle.textContent = '召喚フォーム — 新規';
-    crEls.personInfo.value = '';
-    crEls.theirWords.value = '';
+    crEls.nameInput.value = '';
     crEls.deleteBtn.hidden = true;
-    closeFieldEditor(); // 開いていた大きい編集ポップアップが別ペルソナの内容を映したままにならないように
+    crEls.cstBadge.textContent = '0';
     renderAvatarGrid();
     renderRoster();
   }
@@ -556,52 +654,26 @@
     editingId = id;
     pendingAvatar = crew.avatar || AVATAR_PALETTE[0];
     crEls.editorTitle.textContent = `召喚フォーム — 編集中「${crew.name || '(無名)'}」`;
-    crEls.personInfo.value = crew.personInfo || '';
-    crEls.theirWords.value = crew.theirWords || '';
+    crEls.nameInput.value = crew.name || '';
     crEls.deleteBtn.hidden = false;
-    closeFieldEditor(); // 同上
+    crEls.cstBadge.textContent = String((crew.constellationCards || []).length);
     renderAvatarGrid();
     renderRoster();
   }
 
-  function savePersona() {
-    const personInfo = crEls.personInfo.value.trim();
-    const theirWords = crEls.theirWords.value.trim();
-    if (!personInfo) {
-      setStatus('【人物情報】を入力してください');
-      return;
-    }
-    if (!state.crews) state.crews = [];
-    let crew = editingId ? getCrewById(editingId) : null;
-    if (crew) {
-      crew.personInfo = personInfo;
-      crew.theirWords = theirWords;
-      crew.name = deriveName(personInfo);
-      crew.avatar = pendingAvatar;
-    } else {
-      crew = {
-        id: crypto.randomUUID(),
-        personInfo,
-        theirWords,
-        name: deriveName(personInfo),
-        avatar: pendingAvatar,
-        enabled: true,
-        createdAt: new Date().toISOString(),
-      };
-      state.crews.push(crew);
-      editingId = crew.id;
-    }
-    scheduleAutoSave();
-    loadPersonaIntoEditor(crew.id);
-    renderAllCards(); // サマリーカードのヘックス行へ即座に反映する
-    setStatus(`ペルソナ「${crew.name}」を保存しました`);
-  }
-
-  function deletePersona() {
+  async function deletePersona() {
     if (!editingId) return;
     const crew = getCrewById(editingId);
     if (!crew) return;
-    if (!window.confirm(`「${crew.name}」を削除しますか?(このペルソナが既に生成したカードは残ります)`)) return;
+    const choice = await showChoiceDialog({
+      title: `「${crew.name || '(無名)'}」を削除しますか?`,
+      message: 'このペルソナが既に生成したカードは残ります。',
+      options: [
+        { label: 'このまま残す', value: 'keep', secondary: true },
+        { label: '削除する', value: 'delete', danger: true },
+      ],
+    });
+    if (choice !== 'delete') return;
     state.crews = (state.crews || []).filter((c) => c.id !== editingId);
     scheduleAutoSave();
     startNewPersona();
@@ -609,24 +681,23 @@
     setStatus('ペルソナを削除しました');
   }
 
-  /* ---------------- OCR(カメラでキャプション読み取り、js/camera.js を流用) ----------------
-   * 【人物情報】【その言葉】は長文になりうるため、ボタン横に📷を置いてその場で撮影→読み取り
-   * できるようにする。1回で足りなければ何度でも追記できる(既存の内容の末尾に改行して足す)。 */
+  /* ---------------- OCR(カメラでキャプション読み取る、js/camera.js を流用) ---------------- */
   async function ocrIntoTextarea(textareaEl, btnEl) {
     if (btnEl) btnEl.disabled = true;
     try {
       const result = await openCamera('caption');
       if (!result || result.kind !== 'text' || !result.text.trim()) return;
       // js/camera.jsのOCRはバックグラウンド実行のため、結果が届く頃にはこのパネル自体が
-      // 既に閉じられ、textareaがDOMから外れている可能性がある(2026年9月)。その場合は
-      // 読み取った文字を失わないよう新規テクストカードとして残す。
+      // 既に閉じられ、textareaがDOMから外れている可能性がある。その場合は読み取った文字を
+      // 失わないよう新規テクストカードとして残す。
       if (!textareaEl.isConnected) {
         createTextCard(result.text.trim());
-        setStatus('Crewsのパネルが閉じられていたため、読み取った文字は新しいテクストカードに残しました');
+        setStatus('Constellationのパネルが閉じられていたため、読み取った文字は新しいテクストカードに残しました');
         return;
       }
       const existing = textareaEl.value.trim();
       textareaEl.value = existing ? `${existing}\n${result.text.trim()}` : result.text.trim();
+      textareaEl.dispatchEvent(new Event('input', { bubbles: true }));
     } finally {
       if (btnEl) btnEl.disabled = false;
     }
@@ -651,106 +722,322 @@
     if (crEls) crEls.overlay.classList.remove('open');
   }
 
-  /* ---------------- 大きく開いて編集するポップアップ(2026年9月追加) ----------------
-   * 【人物情報】【その言葉】は作り込むと長文になりやすいが、召喚フォームのコンパクトな
-   * textarea(3〜5行)では窮屈、というユーザー要望を受けて追加した。召喚フォーム側の小さい
-   * textarea(crEls.personInfo/crEls.theirWords)が実データの持ち主であることは変えず、この
-   * ポップアップはあくまで「同じ値を大きく表示・編集するための鏡」として動く。
-   * - ポップアップでの入力(inputイベント)は都度、小さいtextareaへそのまま反映する
-   * - OCRは小さいtextarea自体に対して実行する(既存のocrIntoTextarea()をそのまま使い回し、
-   *   結果が届いた時点でポップアップがまだ同じ項目を表示中であれば、ポップアップ側にも反映する)。
-   *   ポップアップの表示用textareaを直接OCRの書き込み先にしないのは、OCRがバックグラウンドで
-   *   進む間にポップアップを閉じて別の項目を開き直された場合、後から届いた結果が「今表示中の
-   *   別の項目」を巻き込んで上書きしてしまう事故を避けるため。
-   */
-  const FIELD_EDITOR_CONFIG = {
-    personInfo: {
-      label: '【人物情報】— 誰か・どの文献か',
-      placeholder: '例: グスタフソン&ハーポヤ『つぼみの本』に登場する、森のそばで長く暮らしてきた人物。',
-      hint: '',
-    },
-    theirWords: {
-      label: '【その言葉】— 本人の言葉をそのまま引用',
-      placeholder: '本の一節などをそのまま。長ければカメラで複数回読み取って構いません(追記されます)。',
-      hint: '口調・人となりはこの引用そのものから読み取られます。性別や職業を別途指定する欄はありません。',
-    },
-  };
+  /* ==================================================================================
+     Constellation(フルスクリーンオーバーレイ、2026年9月追加)
+     ================================================================================== */
 
-  function fieldEditorSourceTextarea(key) {
-    return key === 'personInfo' ? crEls.personInfo : crEls.theirWords;
-  }
-
-  function buildFieldEditorDom() {
+  function buildConstellationDom() {
     const overlay = document.createElement('div');
-    overlay.className = 'crews-field-editor-overlay';
+    overlay.className = 'cst-overlay';
     overlay.innerHTML = `
-      <div class="crews-field-editor-backdrop"></div>
-      <div class="crews-field-editor-panel">
-        <div class="crews-field-editor-head">
-          <span class="crews-field-editor-label"></span>
-          <button class="crews-field-editor-ocr-btn" type="button">${CAMERA_ICON_SVG}OCR</button>
-          <button class="crews-field-editor-close" title="閉じる">✕</button>
-        </div>
-        <textarea class="crews-field-editor-textarea"></textarea>
-        <p class="crews-field-editor-hint" hidden></p>
+      <div class="cst-topbar">
+        <div class="cst-topbar-avatar"></div>
+        <input class="cst-name-input" placeholder="名前(例: つぼみの番人)">
+        <span class="cst-topbar-label">Constellation</span>
+        <button class="cst-close" title="閉じる">✕</button>
+      </div>
+      <div class="cst-stage">
+        <canvas class="cst-starfield"></canvas>
+        <div class="cst-board"></div>
+      </div>
+      <div class="cst-toolbar">
+        <button class="cst-add-btn" data-add="profile">📇 + プロフィール</button>
+        <button class="cst-add-btn" data-add="words">🗨️ + 言葉</button>
+        <button class="cst-add-btn" data-add="photo">🖼️ + 写真</button>
+        <span class="cst-toolbar-hint"></span>
+      </div>
+      <div class="cst-req-row">
+        <button class="cst-save-btn">ロスターに保存する</button>
+        <span class="cst-req-msg"></span>
       </div>
     `;
     document.body.appendChild(overlay);
 
-    fieldEditorEls = {
+    cstEls = {
       overlay,
-      label: overlay.querySelector('.crews-field-editor-label'),
-      textarea: overlay.querySelector('.crews-field-editor-textarea'),
-      ocrBtn: overlay.querySelector('.crews-field-editor-ocr-btn'),
-      closeBtn: overlay.querySelector('.crews-field-editor-close'),
-      hint: overlay.querySelector('.crews-field-editor-hint'),
+      topbarAvatar: overlay.querySelector('.cst-topbar-avatar'),
+      nameInput: overlay.querySelector('.cst-name-input'),
+      closeBtn: overlay.querySelector('.cst-close'),
+      stage: overlay.querySelector('.cst-stage'),
+      stars: overlay.querySelector('.cst-starfield'),
+      board: overlay.querySelector('.cst-board'),
+      countEl: overlay.querySelector('.cst-toolbar-hint'),
+      saveBtn: overlay.querySelector('.cst-save-btn'),
+      reqMsg: overlay.querySelector('.cst-req-msg'),
     };
 
-    fieldEditorEls.textarea.addEventListener('pointerdown', (e) => e.stopPropagation());
-    fieldEditorEls.textarea.addEventListener('input', () => {
-      if (!fieldEditorKey) return;
-      fieldEditorSourceTextarea(fieldEditorKey).value = fieldEditorEls.textarea.value;
+    cstEls.nameInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+    cstEls.nameInput.addEventListener('input', () => {
+      crEls.nameInput.value = cstEls.nameInput.value; // 召喚フォーム側と一方向同期
     });
-    fieldEditorEls.closeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    fieldEditorEls.closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeFieldEditor(); });
-    overlay.querySelector('.crews-field-editor-backdrop').addEventListener('click', closeFieldEditor);
 
-    fieldEditorEls.ocrBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    fieldEditorEls.ocrBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const keyAtClickTime = fieldEditorKey;
-      if (!keyAtClickTime) return;
-      const sourceTextarea = fieldEditorSourceTextarea(keyAtClickTime);
-      await ocrIntoTextarea(sourceTextarea, fieldEditorEls.ocrBtn);
-      if (fieldEditorKey === keyAtClickTime) {
-        fieldEditorEls.textarea.value = sourceTextarea.value; // ポップアップがまだ同じ項目を表示中なら反映
-      }
+    cstEls.closeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    cstEls.closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeConstellation(); });
+
+    overlay.querySelectorAll('.cst-add-btn').forEach((btn) => {
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        addConstellationCard(btn.dataset.add);
+      });
+    });
+
+    cstEls.saveBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    cstEls.saveBtn.addEventListener('click', (e) => { e.stopPropagation(); commitConstellationSave(); });
+
+    // スワイプで閉じる(モジュール共通デザイン言語)。トップバーの掴みバー部分から。
+    let swipeStartX = null, swipeStartY = null, swipeStartT = 0;
+    cstEls.overlay.querySelector('.cst-topbar').addEventListener('pointerdown', (e) => {
+      if (e.target === cstEls.nameInput) return;
+      swipeStartX = e.clientX; swipeStartY = e.clientY; swipeStartT = performance.now();
+    });
+    cstEls.overlay.addEventListener('pointerup', (e) => {
+      if (swipeStartX === null) return;
+      const dx = e.clientX - swipeStartX, dy = e.clientY - swipeStartY, dt = performance.now() - swipeStartT;
+      swipeStartX = null;
+      if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 500) closeConstellation();
+    });
+
+    window.addEventListener('resize', () => { if (cstEls.overlay.classList.contains('open')) drawConstellationStars(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && cstEls.overlay.classList.contains('open')) closeConstellation();
     });
   }
 
-  function openFieldEditor(key) {
+  function openConstellation() {
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
-    if (!fieldEditorEls) buildFieldEditorDom();
-    fieldEditorKey = key;
-    const cfg = FIELD_EDITOR_CONFIG[key];
-    fieldEditorEls.label.textContent = cfg.label;
-    fieldEditorEls.textarea.placeholder = cfg.placeholder;
-    fieldEditorEls.textarea.value = fieldEditorSourceTextarea(key).value;
-    fieldEditorEls.hint.textContent = cfg.hint;
-    fieldEditorEls.hint.hidden = !cfg.hint;
-    fieldEditorEls.overlay.classList.add('open');
-    setTimeout(() => fieldEditorEls.textarea.focus(), 50);
+    if (!cstEls) buildConstellationDom();
+    const crew = editingId ? getCrewById(editingId) : null;
+    cstCards = crew ? (crew.constellationCards || []).map((c) => ({ ...c })) : cstCards;
+    cstIdSeq = 1;
+    cstEls.nameInput.value = crEls.nameInput.value || '';
+    cstEls.topbarAvatar.textContent = pendingAvatar;
+    renderConstellationBoard();
+    cstEls.overlay.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(drawConstellationStars);
   }
 
-  function closeFieldEditor() {
-    if (fieldEditorEls) fieldEditorEls.overlay.classList.remove('open');
-    fieldEditorKey = null;
+  function closeConstellation() {
+    if (cstEls) cstEls.overlay.classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
+  /** 指定した幅でtextareaを折り返した時のカード全体の高さを概算する(正方形化のための下見積もり)。 */
+  function estimateCstCardHeightForWidth(text, width) {
+    const innerWidth = width - 20 /* カードpadding */ - 12 /* textarea左右padding */;
+    const avgCharPx = 7.4; // フォントサイズ10px、日本語/半角混在を想定した経験的な平均文字幅
+    const charsPerLine = Math.max(3, Math.floor(innerWidth / avgCharPx));
+    const lineHeight = 15.5; // font-size 10px * line-height 1.55
+    let totalLines = 0;
+    (text || '').split('\n').forEach((line) => {
+      totalLines += Math.max(1, Math.ceil((line.length || 1) / charsPerLine));
+    });
+    const headRowHeight = 24;
+    const cardPaddingV = 19;
+    const textareaPaddingV = 10;
+    return headRowHeight + cardPaddingV + textareaPaddingV + totalLines * lineHeight;
+  }
+
+  /** 「幅 ≈ 高さ」になる幅を二分探索で求める(なるべく正方形に近いカードにする)。 */
+  function computeCstSquareWidth(text) {
+    let lo = CST_TEXT_MIN_WIDTH, hi = CST_TEXT_MAX_WIDTH;
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) / 2;
+      const h = estimateCstCardHeightForWidth(text, mid);
+      if (h > mid) lo = mid; else hi = mid;
+    }
+    return Math.round((lo + hi) / 2);
+  }
+
+  /** textareaをスクロール無し・全文表示にするauto-grow。 */
+  function autoGrowCstTextarea(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  }
+
+  function cstCardHtml(card) {
+    const meta = CST_KIND_META[card.type];
+    let width = CST_PHOTO_WIDTH;
+    let body = '';
+    let ocrBtnHtml = '';
+    if (card.type === 'photo') {
+      body = `
+        <div class="cst-card-photo-box">🖼️</div>
+        <input class="cst-card-title-input" value="${escapeAttr(card.title || '')}" placeholder="作品タイトル">
+      `;
+    } else {
+      width = computeCstSquareWidth(card.text || '');
+      body = `<textarea class="cst-card-text" placeholder="${escapeAttr(meta.placeholder)}">${escapeHtmlLocal(card.text || '')}</textarea>`;
+      ocrBtnHtml = `<button class="cst-card-ocr-btn" data-ocr="${card.id}" title="カメラでOCR読み取り">📷</button>`;
+    }
+    return `
+      <div class="cst-card ${card.type}" id="cst-card-${card.id}" style="left:${card.x}px; top:${card.y}px; width:${width}px;">
+        <div class="cst-card-head" data-drag="${card.id}">
+          <span class="cst-card-icon">${meta.icon}</span>
+          <span class="cst-card-kind">${meta.label}</span>
+          ${ocrBtnHtml}
+          <button class="cst-card-del" data-del="${card.id}">✕</button>
+        </div>
+        ${body}
+      </div>
+    `;
+  }
+
+  function updateConstellationRequirement() {
+    const profileCount = cstCards.filter((c) => c.type === 'profile').length;
+    const wordsCount = cstCards.filter((c) => c.type === 'words').length;
+    const photoCount = cstCards.length - profileCount - wordsCount;
+    cstEls.countEl.textContent = `${cstCards.length}枚のカード(プロフィール${profileCount}・言葉${wordsCount}・写真${photoCount})`;
+    const ok = profileCount >= 1 && wordsCount >= 1;
+    cstEls.saveBtn.disabled = !ok;
+    cstEls.reqMsg.classList.toggle('ok', ok);
+    cstEls.reqMsg.textContent = ok
+      ? '保存できます'
+      : `保存にはプロフィール1枚・言葉1枚が必要です(現在 プロフィール${profileCount}・言葉${wordsCount})`;
+    if (crEls && crEls.cstBadge) crEls.cstBadge.textContent = String(cstCards.length);
+  }
+
+  function renderConstellationBoard() {
+    cstEls.board.innerHTML = cstCards.map(cstCardHtml).join('');
+
+    cstEls.board.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        cstCards = cstCards.filter((c) => c.id !== btn.dataset.del);
+        renderConstellationBoard();
+      });
+    });
+    cstEls.board.querySelectorAll('[data-drag]').forEach((head) => {
+      head.addEventListener('pointerdown', onCstCardDragStart);
+    });
+    cstEls.board.querySelectorAll('[data-ocr]').forEach((btn) => {
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const card = cstCards.find((c) => c.id === btn.dataset.ocr);
+        if (!card) return;
+        const ta = btn.closest('.cst-card').querySelector('.cst-card-text');
+        await ocrIntoTextarea(ta, btn);
+      });
+    });
+    cstEls.board.querySelectorAll('.cst-card-text').forEach((ta) => {
+      ta.addEventListener('pointerdown', (e) => e.stopPropagation());
+      ta.addEventListener('input', () => {
+        const cardEl = ta.closest('.cst-card');
+        const card = cstCards.find((c) => 'cst-card-' + c.id === cardEl.id);
+        if (card) {
+          card.text = ta.value;
+          cardEl.style.width = computeCstSquareWidth(card.text) + 'px';
+        }
+        autoGrowCstTextarea(ta);
+      });
+      autoGrowCstTextarea(ta); // 初期表示時にも一度、全文が見えるよう高さを合わせる
+    });
+    cstEls.board.querySelectorAll('.cst-card-title-input').forEach((input) => {
+      input.addEventListener('pointerdown', (e) => e.stopPropagation());
+      input.addEventListener('input', () => {
+        const card = cstCards.find((c) => 'cst-card-' + c.id === input.closest('.cst-card').id);
+        if (card) card.title = input.value;
+      });
+    });
+
+    updateConstellationRequirement();
+    requestAnimationFrame(drawConstellationStars);
+  }
+
+  function onCstCardDragStart(e) {
+    e.preventDefault();
+    const id = e.currentTarget.dataset.drag;
+    cstDragCard = cstCards.find((c) => c.id === id);
+    if (!cstDragCard) return;
+    const stageRect = cstEls.stage.getBoundingClientRect();
+    cstDragOffsetX = e.clientX - stageRect.left - cstDragCard.x;
+    cstDragOffsetY = e.clientY - stageRect.top - cstDragCard.y;
+    playConstellationMoveCardSound();
+    window.addEventListener('pointermove', onCstCardDragMove);
+    window.addEventListener('pointerup', onCstCardDragEnd);
+  }
+  function onCstCardDragMove(e) {
+    if (!cstDragCard) return;
+    const stageRect = cstEls.stage.getBoundingClientRect();
+    const el = document.getElementById('cst-card-' + cstDragCard.id);
+    const w = el ? el.offsetWidth : 150;
+    const h = el ? el.offsetHeight : 80;
+    cstDragCard.x = Math.max(0, Math.min(stageRect.width - w, e.clientX - stageRect.left - cstDragOffsetX));
+    cstDragCard.y = Math.max(0, Math.min(stageRect.height - h, e.clientY - stageRect.top - cstDragOffsetY));
+    if (el) { el.style.left = cstDragCard.x + 'px'; el.style.top = cstDragCard.y + 'px'; }
+  }
+  function onCstCardDragEnd() {
+    cstDragCard = null;
+    window.removeEventListener('pointermove', onCstCardDragMove);
+    window.removeEventListener('pointerup', onCstCardDragEnd);
+  }
+
+  function addConstellationCard(type) {
+    const id = 'n' + (cstIdSeq++);
+    const stageRect = cstEls.stage.getBoundingClientRect();
+    const x = 30 + Math.random() * Math.max(40, stageRect.width - 220);
+    const y = 30 + Math.random() * Math.max(40, stageRect.height - 160);
+    cstCards.push(type === 'photo' ? { id, type, x, y, title: '' } : { id, type, x, y, text: '' });
+    playConstellationAddCardSound();
+    renderConstellationBoard();
+  }
+
+  function commitConstellationSave() {
+    const profileCount = cstCards.filter((c) => c.type === 'profile').length;
+    const wordsCount = cstCards.filter((c) => c.type === 'words').length;
+    if (profileCount < 1 || wordsCount < 1) return; // 保存ボタンはdisabledのはずだが念のため
+    const name = cstEls.nameInput.value.trim() || '(無名)';
+    if (!state.crews) state.crews = [];
+    let crew = editingId ? getCrewById(editingId) : null;
+    if (crew) {
+      crew.name = name;
+      crew.avatar = pendingAvatar;
+      crew.constellationCards = cstCards.map((c) => ({ ...c }));
+    } else {
+      crew = {
+        id: crypto.randomUUID(),
+        name,
+        avatar: pendingAvatar,
+        constellationCards: cstCards.map((c) => ({ ...c })),
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+      state.crews.push(crew);
+      editingId = crew.id;
+    }
+    scheduleAutoSave();
+    closeConstellation();
+    loadPersonaIntoEditor(crew.id);
+    renderAllCards(); // サマリーカードのヘックス行へ即座に反映する
+    setStatus(`ペルソナ「${crew.name}」を保存しました`);
+  }
+
+  function drawConstellationStars() {
+    if (!cstEls) return;
+    const stage = cstEls.stage;
+    const canvas = cstEls.stars;
+    const w = stage.clientWidth, h = stage.clientHeight;
+    if (!w || !h) return;
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    let seed = 42;
+    function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+    const count = Math.round((w * h) / 2600);
+    for (let i = 0; i < count; i++) {
+      const x = rnd() * w, y = rnd() * h, r = rnd() * 1.2 + 0.3;
+      ctx.globalAlpha = rnd() * 0.6 + 0.25;
+      ctx.fillStyle = '#bff6ff';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   /* ---------------- 情報ポップアップ(サマリーカードのヘックスを長押しすると開く) ----------------
-   * ニックネーム(表示名)だけでは元の人物情報を思い出せない、というユーザー要望を受けて追加。
-   * 【人物情報】【その言葉】を全文表示し、それぞれコピーボタンを付ける。生成(=summarizeSession()
-   * の呼び出し)は一切行わない、完全にローカルな閲覧機能。 */
+   * ニックネーム(表示名)だけでは元のConstellationの内容を思い出せない、というユーザー要望を
+   * 受けて追加。プロフィール・言葉の集約テキストを表示し、それぞれコピーボタンを付ける。
+   * 生成(=summarizeSession()の呼び出し)は一切行わない、完全にローカルな閲覧機能。 */
 
   function buildInfoPopupDom() {
     const overlay = document.createElement('div');
@@ -765,17 +1052,23 @@
         </div>
         <div class="crews-info-field">
           <div class="crews-info-label-row">
-            <span class="crews-info-label">【人物情報】</span>
+            <span class="crews-info-label">【プロフィール】</span>
             <button class="crews-info-copy" data-target="person">コピー</button>
           </div>
           <p class="crews-info-text crews-info-text-person"></p>
         </div>
         <div class="crews-info-field">
           <div class="crews-info-label-row">
-            <span class="crews-info-label">【その言葉】</span>
+            <span class="crews-info-label">【言葉】</span>
             <button class="crews-info-copy" data-target="words">コピー</button>
           </div>
           <p class="crews-info-text crews-info-text-words"></p>
+        </div>
+        <div class="crews-info-field">
+          <div class="crews-info-label-row">
+            <span class="crews-info-label">【好きな作品】</span>
+          </div>
+          <p class="crews-info-text crews-info-text-photos"></p>
         </div>
       </div>
     `;
@@ -787,6 +1080,7 @@
       name: overlay.querySelector('.crews-info-name'),
       personText: overlay.querySelector('.crews-info-text-person'),
       wordsText: overlay.querySelector('.crews-info-text-words'),
+      photosText: overlay.querySelector('.crews-info-text-photos'),
     };
 
     overlay.querySelector('.crews-info-close').addEventListener('click', hideCrewInfoPopup);
@@ -848,10 +1142,14 @@
     if (!crew) return;
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
     if (!infoPopupEls) buildInfoPopupDom();
+    const narrative = getCrewNarrativeParts(crew);
     infoPopupEls.avatar.textContent = crew.avatar || '👤';
     infoPopupEls.name.textContent = crew.name || '(無名)';
-    infoPopupEls.personText.textContent = crew.personInfo || '';
-    infoPopupEls.wordsText.textContent = crew.theirWords || '(未入力)';
+    infoPopupEls.personText.textContent = narrative.personInfo || '(未入力)';
+    infoPopupEls.wordsText.textContent = narrative.theirWords || '(未入力)';
+    infoPopupEls.photosText.textContent = narrative.photoTitles.length
+      ? narrative.photoTitles.map((t) => `・${t}`).join('\n')
+      : '(未登録)';
     infoPopupEls.overlay.classList.add('open');
   }
 
@@ -863,8 +1161,10 @@
   // このモジュールはコード("456")を登録するだけでよい。
   registerModuleCode('456', openCrews);
 
-  // js/app.js側からの参照口(要約カードのヘックス描画・生成・長押し閲覧で使う)。
+  // js/app.js側からの参照口(要約カードのヘックス描画・生成・長押し閲覧・なりきり文脈集約で使う)。
   window.getCrewById = getCrewById;
+  window.getCrewNarrativeParts = getCrewNarrativeParts;
+  window.migrateLegacyCrews = migrateLegacyCrews;
   window.crewsSummaryHexButtonsHtml = crewsSummaryHexButtonsHtml;
   window.showCrewInfoPopup = showCrewInfoPopup;
   window.openCrews = openCrews;

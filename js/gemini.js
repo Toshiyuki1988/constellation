@@ -141,7 +141,10 @@ async function summarizeSession({ context, mode, persona, direction, images }) {
     ? 'あなたは今、次の人物になりきって書いてください。あなた自身の言葉ではなく、必ずこの人物の一人称の語りとして書くこと。\n' +
       `【人物情報】\n${persona.personInfo}\n\n` +
       '【その言葉(この人物の語彙・言い回し・ものの見方を、以下の引用から読み取って声を似せること。引用をそのまま繰り返す必要はない)】\n' +
-      `${persona.theirWords}`
+      `${persona.theirWords}` +
+      (persona.photoTitles && persona.photoTitles.length
+        ? '\n\n【好きな作品】\n' + persona.photoTitles.map((t) => `・${t}`).join('\n')
+        : '')
     : mode === 'education'
       ? '小学生・中学生にも分かるように、やさしい言葉と短い文で説明してください。専門用語はできるだけ避け、使う場合は簡単な説明を添えてください。'
       : '学術的な文体で、批評・美術史的な視点を踏まえて記述してください。必要に応じて専門用語を使って構いません。';
