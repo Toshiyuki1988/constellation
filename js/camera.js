@@ -398,8 +398,14 @@ async function capturePhoto() {
   if (!camStream) return;
   camEls.shutterPhoto.disabled = true;
   try {
-    const blob = await captureFrameBlob(camEls.videoPhoto, 3840, 0.88);
+    // フレームの描画(drawImage)は同期処理で、ここで実際に撮影される瞬間が確定する。
+    // 2026年9月、解像度を長辺3840pxまで引き上げたことでJPEGエンコード(toBlob)に掛かる
+    // 時間が体感できるほど増え、「ボタンを押してから音が鳴るまでの間」が開いて
+    // 「つんのめる」ような体感になった(実機報告)。エンコード完了を待たず、フレームが
+    // 確定した直後にシャッター音を鳴らすことで、実際の撮影タイミングと音を一致させる。
+    const canvas = captureFrameToCanvas(camEls.videoPhoto, 3840);
     playShutter();
+    const blob = await canvasToBlob(canvas, 0.88);
     finishCamera({ kind: 'photo', blob });
   } catch (err) {
     console.error(err);
