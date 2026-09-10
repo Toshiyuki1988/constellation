@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260910e">
+<link rel="stylesheet" href="css/style.css?v=20260911a">
 <link rel="stylesheet" href="css/camera.css?v=20260910a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -60,17 +60,19 @@
       <span class="info-ticker-progress" id="infoTickerProgress"></span>
     </div>
     <div class="toolbar-actions">
-      <!-- モバイル通信中はDriveへのアップロードを保留し、Wi-Fi接続時にまとめて行う(2026年9月、
-           通信量節約のためのユーザー要望)。navigator.connectionが使える端末では自動で表示が
-           切り替わるが、iOS Safari等では使えないため、タップで手動切り替えできるようにしてある
-           (js/upload-queue.js参照)。 -->
-      <button id="upload-network-btn" title="モバイル通信中はDriveへのアップロードを保留します。タップでWi-Fi/モバイルを切り替え">📵 モバイル(保留)</button>
-      <!-- Drive未保存(アップロード失敗・Wi-Fi待ち)の写真・動画を、端末の標準の共有シート経由で
-           iPhoneの「写真」アプリへも保存できるようにするボタン(2026年9月追加)。iOS SafariにはWeb
-           ページからユーザー操作なしで写真ライブラリへ書き込むAPIが無いため、共有シートを開いて
-           ユーザー自身に「イメージを保存」を選んでもらう(js/upload-queue.jsのexportPendingUploadsToPhotos()参照)。
+      <!-- Driveへのアップロードは完全手動化した(2026年9月、通信量節約のためのユーザー要望)。
+           以前はnavigator.connectionでの自動判定+ヘッダーのWi-Fi/モバイル切り替えボタンで
+           制御していたが、iOS Safariには自動判定が無いため「最後に手動で切り替えた状態」が
+           localStorageに何日でも残り続け、気づかないままモバイル回線で直接アップロードされ
+           続ける実機事故につながった(3日間で計0.87GB消費)。そのため自動判定・ヘッダーの
+           トグルボタンは撤去し、実際にDriveへ送信するボタン(#drive-upload-btn)は誤って
+           押さない場所として設定モーダル側へ移した(js/upload-queue.js参照)。 -->
+      <!-- Drive未送信の写真・動画・音声を、端末の標準の共有シート経由でiPhoneの「写真」アプリ等
+           へも保存できるようにするボタン(2026年9月追加)。iOS SafariにはWebページから
+           ユーザー操作なしで写真ライブラリへ書き込むAPIが無いため、共有シートを開いてユーザー
+           自身に保存先を選んでもらう(js/upload-queue.jsのexportPendingUploadsToPhotos()参照)。
            Drive上の元ファイル・アップロード待機列には一切触れない、あくまで保険としてのコピー。 -->
-      <button id="export-to-photos-btn" hidden title="Drive未保存の写真・動画を端末の「写真」アプリへも保存します(保険用のコピー)">📤 端末へ保存</button>
+      <button id="export-to-photos-btn" hidden title="Drive未送信の写真・動画・音声を端末の「写真」アプリ等へも保存します(保険用のコピー)">📤 端末へ保存</button>
       <!-- グループビューイングモード(コメントカード機能の一部、2026年9月追加)。展覧会で
            撮影を始める時にONにすると、取り込まれた写真・記録に対してCrewsたちが1分に1回
            ランダムにコメントする(js/app.jsのgroupViewingTick()参照)。 -->
@@ -270,6 +272,16 @@
         <button id="settings-cancel-btn" class="secondary" hidden>キャンセル</button>
         <button id="settings-save-btn">保存</button>
       </div>
+      <hr class="modal-divider">
+      <!-- Driveへの手動アップロード(2026年9月、完全手動化)。誤って押さないよう、常設の
+           ヘッダーではなくこの設定モーダルの中に置いている。端末(IndexedDB)には撮影のたびに
+           自動で保存されるので、このボタンを押すまでDriveへは一切送信されない。 -->
+      <label class="settings-drive-upload-label">Driveへのアップロード</label>
+      <p class="modal-desc">端末に保存済みでDriveへまだ送っていない写真・動画・音声を、まとめてアップロードします。Wi-Fi接続時に押してください。</p>
+      <div class="modal-actions">
+        <button id="drive-upload-btn" disabled>☁ Driveへ送信</button>
+      </div>
+      <p id="drive-upload-status" class="modal-desc" hidden></p>
     </div>
   </div>
 
@@ -280,15 +292,15 @@
 
   <script src="js/config.js?v=20260905f"></script>
   <script src="js/auth.js?v=20260905f"></script>
-  <script src="js/drive.js?v=20260911a"></script>
-  <script src="js/upload-queue.js?v=20260911d"></script>
+  <script src="js/drive.js?v=20260911b"></script>
+  <script src="js/upload-queue.js?v=20260911e"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911d"></script>
   <script src="js/camera.js?v=20260910e"></script>
   <script src="js/sound.js?v=20260911e"></script>
   <script src="js/canvas.js?v=20260909b"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260911l"></script>
+  <script src="js/app.js?v=20260911m"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260905f"></script>

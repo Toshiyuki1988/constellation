@@ -47,7 +47,6 @@ const FIRST_YEAR = 2025;
 const els = {};
 
 document.addEventListener('DOMContentLoaded', () => {
-  els.uploadNetworkBtn = document.getElementById('upload-network-btn');
   els.settingsBtn = document.getElementById('settings-btn');
   els.settingsModal = document.getElementById('settings-modal');
   els.settingsClientId = document.getElementById('settings-client-id');
@@ -97,11 +96,13 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsSaveBtn.addEventListener('click', handleSettingsSave);
   els.settingsCancelBtn.addEventListener('click', closeSettings);
 
-  els.uploadNetworkBtn.addEventListener('click', toggleUploadsAllowed); // js/upload-queue.js
-  initUploadNetworkDetection(); // js/upload-queue.js(対応端末では以後自動でボタン表示が追従する)
+  // Driveへの手動アップロード(2026年9月、完全手動化。設定モーダル内に置き、誤操作を防ぐ)。
+  els.driveUploadBtn = document.getElementById('drive-upload-btn');
+  els.driveUploadStatus = document.getElementById('drive-upload-status');
+  if (els.driveUploadBtn) els.driveUploadBtn.addEventListener('click', handleDriveUploadBtnClick);
   els.exportToPhotosBtn = document.getElementById('export-to-photos-btn');
   if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', handleExportToPhotos);
-  updateUploadNetworkButton();
+  updateDriveUploadButton();
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
@@ -419,26 +420,75 @@ function updateStatusProgress(opts) {
 }
 
 /**
- * ヘッダーのWi-Fi/モバイル切り替えボタン(js/upload-queue.js)の表示を今の状態に合わせる。
- * isUploadAllowedNow()の呼び出し元切り替え時・待機列の増減時にその都度呼ばれる。
+ * 設定モーダル内の「☁ Driveへ送信」ボタン(js/upload-queue.js)の表示を今の状態に合わせる。
+ * 待機列の増減時にその都度呼ばれる。**2026年9月、Driveアップロードの完全手動化に伴い刷新**:
+ * 通信種別の表示は撤去し、待機件数だけを見せる。送信中(driveUploadInFlight)は件数表示を
+ * 上書きせず、handleDriveUploadBtnClick()が管理する「■ 停止(残りN件)」の表示を優先する。
  */
-function updateUploadNetworkButton() {
-  if (!els.uploadNetworkBtn) return;
-  const allowed = isUploadAllowedNow();
-  els.uploadNetworkBtn.classList.toggle('upload-network-btn--allowed', allowed);
+let driveUploadInFlight = false;
+
+function updateDriveUploadButton() {
+  if (!els.driveUploadBtn) return;
+  if (driveUploadInFlight) {
+    uploadQueueCount().then((count) => {
+      els.driveUploadBtn.textContent = `■ 停止(残り${count}件)`;
+    });
+    return;
+  }
   uploadQueueCount().then((count) => {
-    if (allowed) {
-      els.uploadNetworkBtn.textContent = count > 0 ? `📶 Wi-Fi(残り${count}件送信中)` : '📶 Wi-Fi';
-    } else {
-      els.uploadNetworkBtn.textContent = count > 0 ? `📵 モバイル(保留${count}件)` : '📵 モバイル(保留)';
-    }
+    els.driveUploadBtn.textContent = count > 0 ? `☁ Driveへ送信(${count}件)` : '☁ Driveへ送信';
+    els.driveUploadBtn.disabled = count === 0;
   });
   updateExportToPhotosButton();
 }
 
+function setDriveUploadStatus(text, isError) {
+  if (!els.driveUploadStatus) return;
+  els.driveUploadStatus.hidden = false;
+  els.driveUploadStatus.textContent = text;
+  els.driveUploadStatus.classList.toggle('modal-error', Boolean(isError));
+}
+
 /**
- * Drive未保存の写真・動画を端末の「写真」アプリへ保存するボタン(js/upload-queue.js)の表示更新。
- * 対象(画像・動画)が1件も無い間は、押しても意味が無いため非表示にしておく。
+ * 設定モーダルの「☁ Driveへ送信」ボタンのクリックハンドラ。押した時だけDriveへ実際に
+ * 送信する(2026年9月、通信種別の自動判定・自動アップロードを完全撤去した結果、この
+ * ボタンが唯一のDrive送信経路になった)。
+ * **モバイル回線のまま誤って押してしまった場合の保険(2026年9月追加)**: 送信中はボタン自体が
+ * 「■ 停止」に変わり、押すとcancelDriveUpload()(js/upload-queue.js)がAbortController経由で
+ * 進行中のfetch()を即座に中断する。中断されたファイルは待機列に残るので、後で改めて送信できる。
+ */
+async function handleDriveUploadBtnClick() {
+  if (!els.driveUploadBtn) return;
+  if (driveUploadInFlight) {
+    cancelDriveUpload(); // js/upload-queue.js
+    setDriveUploadStatus('停止しています…');
+    return;
+  }
+  driveUploadInFlight = true;
+  updateDriveUploadButton();
+  setDriveUploadStatus('送信中…');
+  try {
+    const { attempted, remaining, cancelled } = await drainUploadQueue(); // js/upload-queue.js
+    if (cancelled) {
+      setDriveUploadStatus(`停止しました(残り${remaining}件、いつでも再開できます)`);
+    } else if (attempted === 0) {
+      setDriveUploadStatus('送るものはありません');
+    } else if (remaining === 0) {
+      setDriveUploadStatus(`${attempted}件をDriveへ送信しました`);
+    } else if (remaining > 0) {
+      setDriveUploadStatus(`一部失敗しました(残り${remaining}件、もう一度お試しください)`, true);
+    } else {
+      setDriveUploadStatus('送信中にエラーが発生しました', true);
+    }
+  } finally {
+    driveUploadInFlight = false;
+    updateDriveUploadButton();
+  }
+}
+
+/**
+ * Drive未送信の写真・動画・音声を端末側(写真アプリ等)へ保存するボタン(js/upload-queue.js)の
+ * 表示更新。対象が1件も無い間は、押しても意味が無いため非表示にしておく。
  */
 function updateExportToPhotosButton() {
   if (!els.exportToPhotosBtn) return;
@@ -451,15 +501,51 @@ function updateExportToPhotosButton() {
 async function handleExportToPhotos() {
   const result = await exportPendingUploadsToPhotos(); // js/upload-queue.js
   if (result === 'shared') {
-    setStatus('共有シートから「写真」アプリなどへ保存してください', { important: true });
+    setStatus('共有シートから保存先を選んでください', { important: true });
   } else if (result === 'empty') {
-    setStatus('Drive未保存の写真・動画はありません');
+    setStatus('Drive未送信の写真・動画・音声はありません');
   } else if (result === 'unsupported') {
     setStatus('この端末・ブラウザは共有機能に対応していません', { important: true });
   } else if (result === 'error') {
     setStatus('端末への共有に失敗しました', { important: true });
   }
   // 'cancelled'(ユーザーが共有シートを閉じただけ)は何も表示しない
+}
+
+/**
+ * 写真カード左上の状態バッジ2種(「☁ Drive未送信」「📵 端末未保存」)の表示を更新する。
+ * 2026年9月、Driveアップロードの手動化に合わせて、CSSの::afterによる単一バッジから、
+ * 互いに独立してon/offできる実要素の2バッジ構成に作り直した(js/app.jsのrenderCard()で
+ * .star-card-status-badges内に両方の<span>を常に用意しておき、ここでtext/hiddenだけ操る)。
+ * 呼び出しどころ: renderCard()初期表示時、Drive送信の成功/失敗/中断時、端末への保存成功時、
+ * restoreUploadQueueOnLoad()で状態を補正した時。
+ */
+const DEVICE_BADGE_MEDIA_TYPES = ['image', 'video', 'audio'];
+
+function updateCardStatusBadges(el, card) {
+  const driveBadge = el.querySelector('.star-card-badge--drive');
+  const deviceBadge = el.querySelector('.star-card-badge--device');
+  if (driveBadge) {
+    if (card.imageFileId) {
+      driveBadge.hidden = true;
+    } else if (card.uploadFailed) {
+      driveBadge.hidden = false;
+      driveBadge.textContent = '⚠ Drive未送信(失敗)';
+      driveBadge.classList.add('star-card-badge--urgent');
+    } else if (card.uploadPending) {
+      driveBadge.hidden = false;
+      driveBadge.textContent = '⏳ Drive送信中…';
+      driveBadge.classList.remove('star-card-badge--urgent');
+    } else {
+      driveBadge.hidden = false;
+      driveBadge.textContent = '☁ Drive未送信';
+      driveBadge.classList.remove('star-card-badge--urgent');
+    }
+  }
+  if (deviceBadge) {
+    const exportable = DEVICE_BADGE_MEDIA_TYPES.includes(card.mediaType);
+    deviceBadge.hidden = !exportable || Boolean(card.deviceSaved);
+  }
 }
 
 /**
@@ -623,8 +709,8 @@ async function onSignedIn() {
     // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
     // (API通信は発生しない、ローカルの日付比較のみ)。
     setInterval(refreshInfoTicker, 30 * 60 * 1000);
-    // 前回終了時にモバイル通信でアップロード待ちのまま残っていたファイルを拾い直す
-    // (js/upload-queue.js)。Wi-Fi中ならそのまま送信を再開する。
+    // 前回終了時にDrive未送信のまま残っていたファイルの表示状態を拾い直す(js/upload-queue.js)。
+    // **自動送信はしない**(2026年9月、完全手動化。実際の送信は設定モーダルの「☁ Driveへ送信」を押した時だけ)。
     await restoreUploadQueueOnLoad();
     maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
     maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
@@ -1202,7 +1288,11 @@ function renderCard(card) {
          </div>`
       : '';
     el.innerHTML = `
-      ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>`}
+      ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>
+      <div class="star-card-status-badges">
+        <span class="star-card-badge star-card-badge--drive" hidden></span>
+        <span class="star-card-badge star-card-badge--device" hidden>📵 端末未保存</span>
+      </div>`}
       ${crewHeadHtml}
       ${memoFieldHtml(card, hasMemo)}
       ${EDIT_GUIDE_HANDLES_HTML}
@@ -1363,6 +1453,7 @@ function renderCard(card) {
   if (card.uploadPending) el.classList.add('star-card--upload-pending');
   if (card.uploadFailed) el.classList.add('star-card--upload-failed');
   if (card.uploadQueued) el.classList.add('star-card--upload-queued');
+  if (!isTextCard) updateCardStatusBadges(el, card);
 
   // セッションカードはメモが空のままなら、以前どおりユーザーが手動で決めた高さを保つ
   // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。
@@ -3729,12 +3820,12 @@ function removeCardFromState(card, el) {
   }
   // アップロード待機列(IndexedDB)にも実データが残っている場合があるため、カードの削除に
   // 合わせて破棄する。**2026年9月の不具合修正**: 以前はここで待機列を一切触っておらず、
-  // 「⚠Drive未保存」カードを削除しても待機列の実データ(Blob)だけが孤児として残り続け、
-  // ヘッダーの「モバイル保留N件」「端末へ保存N件」の件数がいつまでも減らなかった。カードが
+  // 「⚠Drive未送信」カードを削除しても待機列の実データ(Blob)だけが孤児として残り続け、
+  // 設定モーダルの「Driveへ送信N件」「端末へ保存N件」の件数がいつまでも減らなかった。カードが
   // 待機列に載っていたかどうかに関わらず常に試みる(載っていなければ何も起きない、安全な no-op)。
   if (typeof uploadQueueDelete === 'function') {
     uploadQueueDelete(card.id)
-      .then(() => { if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton(); })
+      .then(() => { if (typeof updateDriveUploadButton === 'function') updateDriveUploadButton(); })
       .catch(() => {});
   }
   scheduleAutoSave();
@@ -3967,7 +4058,7 @@ async function handleCardExtract(card, el) {
   if (card.mediaType !== 'image') return;
   if (!card.imageFileId) {
     if (card.uploadQueued) {
-      setStatus('モバイル通信中のためアップロード待ちです。Wi-Fi接続後に試してください');
+      setStatus('Driveへまだ送信していません。設定の「☁ Driveへ送信」を押してから試してください');
     } else if (card.uploadPending) {
       setStatus('アップロード中です。少し待ってから試してください');
     } else {
@@ -4422,28 +4513,22 @@ function generateThumbnail(blob, maxSize = 240, quality = 0.6) {
 }
 
 /**
- * Drive へのアップロードとカード生成の共通処理。file-input・アプリ内蔵カメラ・クリップボード
- * 貼り付けの各経路から使う。
- * 画像はローカルで一瞬で作れるサムネイルだけを待ってすぐカードを表示し、Driveへのフル
- * サイズアップロードはバックグラウンドで進める(=Ctrl+Vや撮影直後の「ワンクッション」を
- * 無くすための最適化)。アップロード完了時にuploadCardFileInBackground()がimageFileIdを
- * 差し込む。動画・音声はローカルサムネイルが無いため、この最適化の恩恵は薄いが、同じ
- * 経路に揃えて実装をシンプルに保っている。
- * **2026年9月追加**: モバイル通信中は、この時点でアップロードを始めず(通信量節約のため)、
- * js/upload-queue.jsのIndexedDB待機列へBlobを保存するだけに留める。Wi-Fi接続時にまとめて
- * アップロードされる(`card.uploadQueued`で見分けがつくようにし、UI上も控えめに表示する)。
- * **2026年9月追加(再発防止)**: 「アップロード失敗のたびに元データが消えていた」不具合の
- * 修正を経て、Wi-Fi中の即時アップロードにも同じ脆弱性(=IndexedDBを経由せずメモリ上のBlobに
- * しか実体が無いため、アップロード中にタブが閉じられる/iOS Safariがバックグラウンドタブの
- * プロセスを終了させる等で完全に失われる)が残っていることが判明した。そのため**通信種別に
- * 関わらず、常にまずIndexedDBの待機列へ保存してから**アップロードを試みるよう統一した。
- * Wi-Fi中は保存直後にdrainUploadQueue()を呼んで体感速度を維持しつつ、万一中断されても
- * 待機列に残るため次回起動時に必ず再試行できる。
+ * カード生成とIndexedDBへの保存だけを行う共通処理。file-input・アプリ内蔵カメラ・
+ * クリップボード貼り付けの各経路から使う。
+ * 画像はローカルで一瞬で作れるサムネイルだけを待ってすぐカードを表示する。動画・音声は
+ * ローカルサムネイルが無いため、この最適化の恩恵は薄いが、同じ経路に揃えて実装をシンプルに
+ * 保っている。
+ * **2026年9月、Driveアップロードを完全手動化**: 以前はモバイル通信中だけ待機列に留め、
+ * Wi-Fiと判定された瞬間に自動アップロードしていたが、iOS Safariには通信種別の自動判定が
+ * 無いため、この判定は実質「最後に手動で切り替えた状態」がlocalStorageに何日も残り続ける
+ * だけの仕組みで、気づかないままモバイル回線で直接アップロードされ続ける事故につながった
+ * (3日間で計0.87GB消費)。この反省を受け、**撮影直後には一切Driveへ送信せず、常に
+ * IndexedDBの待機列へ保存するだけ**に統一した。実際の送信は、ユーザーが設定モーダルの
+ * 「☁ Driveへ送信」ボタンを押した時だけ行われる(js/upload-queue.jsのdrainUploadQueue())。
  */
 async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) {
   const thumbDataUrl = mediaType === 'image' ? await generateThumbnail(blob) : null;
   const spawnPos = (x === undefined || y === undefined) ? newCardSpawnPos() : null;
-  const shouldQueue = !isUploadAllowedNow();
 
   const card = {
     id: crypto.randomUUID(),
@@ -4456,51 +4541,56 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
     mediaType,
     imageFileId: null,
     thumbDataUrl,
-    uploadPending: true,
-    uploadQueued: shouldQueue,
+    uploadPending: false,
+    uploadQueued: true, // Driveへはまだ送信していない(常にこの状態で作成、手動送信を待つ)
+    uploadFailed: false,
+    deviceSaved: false, // 端末の「写真」アプリ等へまだコピーしていない
     sessionId: activeSessionId(),
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
   renderCard(card);
   redrawAsterismLines();
-  saveImmediately(); // アップロード完了前にタブを閉じても、カードの存在自体は確実に残るように(デバウンスを待たない)
+  saveImmediately(); // IndexedDBへの保存前にタブを閉じても、カードの存在自体は確実に残るように(デバウンスを待たない)
 
-  // 通信種別に関わらず、まずIndexedDBへ保存する(2026年9月、Wi-Fi中の即時アップロードが
-  // 中断された場合に復元不能になる不具合の再発防止)。
   const persisted = await persistToUploadQueue(card, blob, filename);
-  if (shouldQueue) {
-    if (persisted) {
-      setStatus('追加しました。モバイル通信中のためWi-Fi接続時にアップロードします');
-    } else {
-      // IndexedDBが使えない等の理由で待機列に保存できなかった場合は、データを失わないよう
-      // その場でアップロードする(通信量節約より、写真を失わないことを優先する)。
-      card.uploadQueued = false;
-      const el = cardElById(card.id);
-      if (el) el.classList.remove('star-card--upload-queued');
-      setStatus('追加しました。アップロード中…', { busy: true });
-      uploadCardFileInBackground(card, blob, filename);
-    }
+  if (persisted) {
+    setStatus('追加しました(端末に保存。Driveへは未送信)');
   } else {
-    setStatus('追加しました。アップロード中…', { busy: true });
-    if (persisted) {
-      drainUploadQueue(); // 待機列経由で処理させる(中断されても次回起動時に再試行できる)
-    } else {
-      uploadCardFileInBackground(card, blob, filename);
+    // IndexedDBが使えない等の理由で待機列に保存できなかった場合は、データを失わないよう
+    // その場でアップロードする(通信量節約より、写真を失わないことを優先する)。
+    card.uploadQueued = false;
+    const el = cardElById(card.id);
+    if (el) {
+      el.classList.remove('star-card--upload-queued');
+      updateCardStatusBadges(el, card);
     }
+    setStatus('追加しました。アップロード中…', { busy: true });
+    uploadCardFileInBackground(card, blob, filename);
   }
   return card;
 }
 
-/** createCardFromCapture()が即座に表示したカードの実体を、裏でDriveへアップロードする。
- *  js/upload-queue.jsの待機列ドレイン時にも(Wi-Fi接続時)同じ関数を使い回す。
+/** カードの実体を、裏でDriveへアップロードする。js/upload-queue.jsの待機列ドレイン時
+ *  (「☁ Driveへ送信」ボタン押下時)にも同じ関数を使い回す。
+ *  @param {AbortSignal} [signal] ドレイン中の「■ 停止」で中断できるようにするためのシグナル
+ *    (js/upload-queue.jsのcancelDriveUpload()参照)。単発呼び出し(IndexedDB保存に失敗した
+ *    場合のその場アップロード)では渡されない。
  *  @returns {Promise<boolean>} 成功したか。js/upload-queue.jsのuploadQueuedEntry()が、
  *    IndexedDB上の待機中データを削除してよいかどうかの判断に使う(2026年9月、失敗時にも
  *    無条件で削除していたため、アップロード失敗のたびに元データが消えてしまうバグがあった)。 */
-async function uploadCardFileInBackground(card, blob, filename) {
+async function uploadCardFileInBackground(card, blob, filename, signal) {
+  card.uploadQueued = false;
+  card.uploadPending = true;
+  const startEl = cardElById(card.id);
+  if (startEl) {
+    startEl.classList.remove('star-card--upload-queued');
+    startEl.classList.add('star-card--upload-pending');
+    updateCardStatusBadges(startEl, card);
+  }
   try {
     const folderId = await resolveSessionMediaFolderId(card.sessionId);
-    const fileId = await uploadFile(folderId, blob, filename);
+    const fileId = await uploadFile(folderId, blob, filename, signal);
     card.imageFileId = fileId;
     card.uploadPending = false;
     card.uploadQueued = false;
@@ -4509,25 +4599,40 @@ async function uploadCardFileInBackground(card, blob, filename) {
     if (el) {
       el.classList.remove('star-card--upload-pending', 'star-card--upload-queued', 'star-card--upload-failed');
       observeMediaForLazyLoad(el, card);
+      updateCardStatusBadges(el, card);
     }
     scheduleAutoSave();
     return true;
   } catch (err) {
+    const el = cardElById(card.id);
+    if (err && err.name === 'AbortError') {
+      // 「■ 停止」によるユーザーの意図的な中断。失敗扱いにはせず、待機列に残したまま
+      // 静かに「Drive未送信」の状態へ戻す(次に送信ボタンを押した時に再挑戦される)。
+      debugLog(`アップロード停止(card ${card.id})`);
+      card.uploadPending = false;
+      card.uploadQueued = true;
+      if (el) {
+        el.classList.remove('star-card--upload-pending');
+        el.classList.add('star-card--upload-queued');
+        updateCardStatusBadges(el, card);
+      }
+      return false;
+    }
     console.error(err);
     debugLog(`アップロード失敗(card ${card.id}): ${err && err.message ? err.message : err}`);
     card.uploadPending = false;
     card.uploadQueued = false;
     card.uploadFailed = true;
-    const el = cardElById(card.id);
     if (el) {
       el.classList.remove('star-card--upload-pending', 'star-card--upload-queued');
       el.classList.add('star-card--upload-failed');
+      updateCardStatusBadges(el, card);
     }
     setStatus('アップロードに失敗しました(カードは残りますがDriveには保存されていません)', { important: true });
     scheduleAutoSave();
     return false;
   } finally {
-    if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
+    if (typeof updateDriveUploadButton === 'function') updateDriveUploadButton();
   }
 }
 

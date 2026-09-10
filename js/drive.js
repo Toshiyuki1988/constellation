@@ -149,8 +149,11 @@ async function saveData(folderId, fileId, data) {
   return saved.id;
 }
 
-/** ファイル(画像・動画・音声)をフォルダにアップロードし、そのファイルIDを返す */
-async function uploadFile(folderId, blob, filename) {
+/** ファイル(画像・動画・音声)をフォルダにアップロードし、そのファイルIDを返す。
+ *  @param {AbortSignal} [signal] 渡すと、進行中のアップロードを外部から中断できる
+ *    (js/upload-queue.jsのcancelDriveUpload()、モバイル回線のまま誤って送信ボタンを
+ *    押してしまった場合に、通信量を無駄にしないよう即座に止められるようにするため)。 */
+async function uploadFile(folderId, blob, filename, signal) {
   const token = await ensureAccessToken();
   const metadata = { name: filename, parents: [folderId] };
   const form = new FormData();
@@ -161,6 +164,7 @@ async function uploadFile(folderId, blob, filename) {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form,
+    signal,
   });
   if (!res.ok) throw new Error(`Drive upload error ${res.status}: ${await res.text()}`);
   const created = await res.json();

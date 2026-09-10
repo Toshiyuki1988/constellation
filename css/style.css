@@ -127,13 +127,6 @@ html, body {
 
 .toolbar button:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* モバイル通信中はDriveへのアップロードを保留する切り替えボタン(js/upload-queue.js、2026年9月追加)。
-   既定(モバイル/保留中)は通常のツールバーボタンと同じ見た目、Wi-Fi中(アップロード許可)だけ
-   緑系に切り替えて一目で分かるようにする。 */
-#upload-network-btn.upload-network-btn--allowed {
-  background: #2e7d32;
-}
-
 /* グループビューイングモード切り替えボタン(js/app.jsのtoggleGroupViewing()、2026年9月追加)。
    ON中はCrewsの水色(cyan)に切り替えて、動いていることが一目で分かるようにする。 */
 #group-viewing-btn.group-viewing-btn--active {
@@ -712,25 +705,12 @@ html, body {
   outline-offset: -1px;
 }
 
-/* モバイル通信中でDriveへのアップロードを意図的に保留している状態(js/upload-queue.js、
-   2026年9月追加)。「失敗」とは違い正常な待機なので、rust(赤系)は使わず控えめな青系にする。 */
+/* Driveへ未送信のまま待機している状態(js/upload-queue.js、2026年9月にDriveアップロードを
+   完全手動化した際に「Wi-Fi待ち」から意味を変更)。手動で「☁ Driveへ送信」を押すまでの
+   通常の待機なので、rust(赤系)は使わず控えめな青系にする。 */
 .star-card--upload-queued .star-card-media {
   outline: 1px dashed #3b6fa0;
   outline-offset: -1px;
-}
-.star-card--upload-queued::after {
-  content: '📵 Wi-Fi待ち';
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 6;
-  font-family: var(--mono);
-  font-size: 9px;
-  color: #fff;
-  background: #3b6fa0;
-  padding: 2px 6px;
-  border-radius: 3px;
-  pointer-events: none;
 }
 
 /* Driveへのアップロードが失敗し、この端末を離れると写真の実体が失われる状態を分かるようにする */
@@ -738,19 +718,42 @@ html, body {
   outline: 1px dashed var(--rust);
   outline-offset: -1px;
 }
-.star-card--upload-failed::after {
-  content: '⚠ Drive未保存';
+
+/* カード左上の状態バッジ2種(2026年9月追加): 「端末へ保存したか」「Driveへ送信したか」を
+   互いに独立して示す。片方だけ済んでいる状態もあり得るため(例: 端末へは保存済みだが
+   Driveへはまだ、など)、CSSのcontentによる単一の::afterではなく実要素として2つ重ねられる
+   ようにした。テキスト・表示/非表示はjs/app.jsのupdateCardStatusBadges()がcard.imageFileId /
+   card.uploadFailed / card.uploadPending / card.deviceSaved を見て都度更新する。 */
+.star-card-status-badges {
   position: absolute;
   top: 6px;
   left: 6px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.star-card-badge {
   font-family: var(--mono);
   font-size: 9px;
   color: #fff;
-  background: var(--rust);
+  background: #3b6fa0;
   padding: 2px 6px;
-  border-radius: 999px;
-  pointer-events: none;
-  z-index: 5;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* Drive送信が失敗した時の強調色(赤系)。単なる「まだ送っていない」待機とは区別する */
+.star-card-badge--urgent {
+  background: var(--rust);
+}
+
+/* 「端末未保存」バッジはDriveバッジと見分けやすいよう別の色にする(紫系) */
+.star-card-badge--device {
+  background: #6a4fa0;
 }
 
 .star-card-media {
@@ -1800,6 +1803,23 @@ html, body {
   background: var(--rust);
   border: 1px solid var(--rust);
   color: #fff;
+}
+
+/* 設定モーダル内の区切り線・「Driveへのアップロード」セクション見出し(2026年9月追加、
+   Driveへの手動送信ボタンを誤操作の少ない設定モーダルへ移設した際に追加)。 */
+.modal-divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 18px 0;
+}
+
+.settings-drive-upload-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: 6px;
 }
 
 /* ---------- Extract範囲選択オーバーレイ(自由形状でなぞって範囲を選ぶ、2026年9月追加) ----------

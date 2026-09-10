@@ -1,44 +1,43 @@
-// Driveへのアップロードを、モバイル通信中は保留してWi-Fi接続時にまとめて行うための待機列。
-// 「現地でサクサク写真とキャプションを取り込みたい一方、モバイル通信量は節約したい」という
-// ユーザー要望(2026年9月)への対応。**「Driveはバックアップなのでアプリ側から元画像を
-// いじらない」という既存方針(js/drive.js参照)とは矛盾しない**: あくまで「いつアップロードするか」
-// のタイミングだけを制御するもので、アップロードした後のファイルには一切触れない(削除・上書き
-// はしない、これまで通り)。ユーザー自身、「ドライブバックアップ思想と逆行するが、通信量節約が
-// 優先」と明言している。
+// Driveへのアップロードを完全に手動化するための待機列。
+// 「現地でサクサク写真とキャプションを取り込みたい一方、モバイル通信量は使いたくない」という
+// ユーザー要望への対応。**「Driveはバックアップなのでアプリ側から元画像をいじらない」という
+// 既存方針(js/drive.js参照)とは矛盾しない**: あくまで「いつアップロードするか」のタイミング
+// だけを制御するもので、アップロードした後のファイルには一切触れない(削除・上書きはしない、
+// これまで通り)。
 //
-// 保留中の実データ(Blob)はメモリ上ではなくIndexedDBへ保存する。メモリだけに置くと、Wi-Fiに
-// 辿り着く前にタブが再読み込みされたり、iOS Safariがバックグラウンドタブのプロセスを
-// 終了させたりした場合に、その日撮った写真がまるごと失われてしまうため。
+// **2026年9月、設計を全面手動化**: 以前はnavigator.connection(Network Information API)や
+// ヘッダーのWi-Fi/モバイル切り替えボタンで「今アップロードして良いか」を判定し、Wi-Fiと
+// 判定された瞬間に自動でドレインする方式だった。しかしiOS Safariにはnavigator.connectionが
+// 無いため、この判定は実質「ユーザーが最後に手動で切り替えた状態」が**localStorageに何日でも
+// 残り続けるだけ**の仕組みで、一度でもWi-Fi側にした状態のまま現地(モバイル回線)に行くと、
+// 気づかないままモバイル回線で直接アップロードされ続ける事故につながった(2026年9月、実機で
+// 3日間・計0.87GBのモバイル通信を消費したことが判明)。
 //
-// 通信種別の判定: navigator.connection(Network Information API)はAndroid Chrome系では
-// 概ね使えるが、iOS Safariには2026年9月時点で実装が無い。自動判定できない端末では、
-// ヘッダーのボタン(js/app.jsのupdateUploadNetworkButton()側で描画)でユーザー自身が
-// 「Wi-Fi/モバイル」を手動切り替えする運用にフォールバックする(自動判定が効く環境では、
-// 変化を検知するたびに自動でこの状態を更新する。手動操作は自動判定が無い/効かない環境の
-// ためのものだが、いつでも上書きできる)。初回・判定不能時は「保留」を既定にする
-// (通信量節約を優先するというユーザー方針を、判定できない場合でも安全側に倒すため)。
+// この反省を受け、通信種別の自動判定・自動ドレインは完全に撤去し、**Driveへのアップロードは
+// 常にユーザーが設定モーダル内の「☁ Driveへ送信」ボタンを押した時だけ**行う設計にした。それ以外の
+// 経路(撮影直後・アプリ起動時・通信状態の変化など)では一切Driveへ送信しない。ボタンをヘッダーの
+// 常設位置ではなく設定モーダルの中に置いているのも、誤って押してしまう事故を減らすため。
+//
+// 撮影データ自体は、ボタンを押すまでの間ずっとIndexedDBへ保存される(メモリだけに置くと、
+// タブが再読み込みされたり、iOS Safariがバックグラウンドタブのプロセスを終了させたりした
+// 場合に、その日撮った写真がまるごと失われてしまうため)。さらに、この待機列にある間に
+// 「📤 端末へ保存」ボタンで端末の「写真」アプリ(または音声ならファイルアプリ等)へも
+// コピーしておける(exportPendingUploadsToPhotos()、下記参照)。
+//
+// **2026年9月、途中停止に対応**: モバイル回線のままうっかり「☁ Driveへ送信」を押してしまった
+// 場合に備え、送信中は同じボタンが「■ 停止」に切り替わり(js/app.jsのhandleDriveUploadBtnClick())、
+// 押すとAbortController経由で進行中のfetch()自体を即座に中断できるようにした(cancelDriveUpload())。
+// 中断されたエントリは待機列に残したまま(uploadFailedにはしない)、いつでも再送信できる。
 
 const UPLOAD_QUEUE_DB_NAME = 'constellation-upload-queue';
 const UPLOAD_QUEUE_STORE = 'pending';
-const UPLOAD_ALLOWED_STORAGE_KEY = 'constellation-uploads-allowed';
 const UPLOAD_QUEUE_CONCURRENCY = 2;
 
 let uploadQueueDbPromise = null;
-let uploadsAllowedNow = readStoredUploadsAllowed();
 let uploadQueueDraining = false;
-
-function readStoredUploadsAllowed() {
-  try {
-    const raw = localStorage.getItem(UPLOAD_ALLOWED_STORAGE_KEY);
-    if (raw === 'true') return true;
-    if (raw === 'false') return false;
-  } catch (err) { /* localStorageが使えない環境では無視 */ }
-  return false;
-}
-
-function persistUploadsAllowed(value) {
-  try { localStorage.setItem(UPLOAD_ALLOWED_STORAGE_KEY, String(value)); } catch (err) { /* 無視 */ }
-}
+// 進行中のDrive送信を中断するためのAbortController。ドレイン中(uploadQueueDraining)だけ
+// 存在し、cancelDriveUpload()が呼ばれるとabort()され、進行中のfetch()を即座に打ち切る。
+let uploadAbortController = null;
 
 /* ---------------- IndexedDB(保留中のBlobの永続化) ---------------- */
 
@@ -93,40 +92,6 @@ function uploadQueueCount() {
   })).catch(() => 0);
 }
 
-/* ---------------- 通信種別の判定・切り替え ---------------- */
-
-function isUploadAllowedNow() {
-  return uploadsAllowedNow;
-}
-
-function setUploadsAllowed(value) {
-  const changed = uploadsAllowedNow !== value;
-  uploadsAllowedNow = value;
-  persistUploadsAllowed(value);
-  if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
-  if (changed && value) drainUploadQueue();
-}
-
-/** ヘッダーのボタンから呼ぶ手動切り替え */
-function toggleUploadsAllowed() {
-  setUploadsAllowed(!uploadsAllowedNow);
-}
-
-/** DOMContentLoaded時にjs/app.jsから1回呼ぶ。navigator.connectionが使えない端末
- *  (iOS Safari等)では何もせず、ヘッダーの手動トグルだけに委ねる。 */
-function initUploadNetworkDetection() {
-  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-  if (!conn) return;
-  const applyFromConnection = () => {
-    if (typeof conn.type === 'undefined') return; // typeを持たない実装(effectiveTypeのみ等)は対象外
-    if (conn.type === 'wifi' || conn.type === 'ethernet') setUploadsAllowed(true);
-    else if (conn.type === 'cellular') setUploadsAllowed(false);
-    // 'none'/'unknown'等は判断材料にせず、直前の状態を維持する
-  };
-  conn.addEventListener('change', applyFromConnection);
-  applyFromConnection();
-}
-
 /* ---------------- キューへの出し入れ ---------------- */
 
 /** 待機列へ保存する。成功すればtrue(呼び出し元は何もアップロードしない)、IndexedDBが
@@ -142,7 +107,7 @@ async function persistToUploadQueue(card, blob, filename) {
       mediaType: card.mediaType,
       createdAt: Date.now(),
     });
-    if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
+    if (typeof updateDriveUploadButton === 'function') updateDriveUploadButton();
     return true;
   } catch (err) {
     console.error('アップロード待機列への保存に失敗', err);
@@ -158,15 +123,14 @@ async function persistToUploadQueue(card, blob, filename) {
  *   関わらず無条件でuploadQueueDelete()していたため、アクセストークン切れ等で一時的に
  *   アップロードが失敗しただけでも、待機中の実データ(Blob)がIndexedDBから消えてしまい、
  *   現地で撮った写真が二度と復元できなくなる事故があった。失敗時は消さずに残し、次回の
- *   drainUploadQueue()呼び出し(再度Wi-Fiボタンを押す、アプリを開き直す等)で再試行できる
- *   ようにする。
+ *   「☁ Driveへ送信」ボタン押下で再試行できるようにする。
  */
 // カードがまだ見つからない場合に、それが「本当に削除された」のか「作成直後でオートセーブ
 // (デバウンス)がまだDriveに反映されていないだけ」なのかを区別できないため、この猶予時間内は
 // 待機列から消さずに次回のドレインで再確認する(2026年9月、精査で発見)。
 const UPLOAD_QUEUE_ORPHAN_GRACE_MS = 10 * 60 * 1000; // 10分
 
-async function uploadQueuedEntry(entry) {
+async function uploadQueuedEntry(entry, signal) {
   const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
   if (!card) {
     if (Date.now() - (entry.createdAt || 0) < UPLOAD_QUEUE_ORPHAN_GRACE_MS) {
@@ -178,80 +142,115 @@ async function uploadQueuedEntry(entry) {
     await uploadQueueDelete(entry.cardId).catch(() => {});
     return true;
   }
-  const ok = await uploadCardFileInBackground(card, entry.blob, entry.filename);
+  const ok = await uploadCardFileInBackground(card, entry.blob, entry.filename, signal);
   if (ok) await uploadQueueDelete(entry.cardId).catch(() => {});
   return ok;
 }
 
-/** Wi-Fi中(isUploadAllowedNow()がtrue)の間だけ、待機列を少しずつアップロードしていく。
- *  ドレイン中にモバイルへ戻った場合はそこで打ち切り、残りは次にWi-Fiになった時に再開する。
- *  失敗したエントリは待機列に残り続けるため、1周しても1件も減らなければ(=全滅)、同じ
- *  失敗(トークン切れ等)を無限に繰り返さないようそこで打ち切る。次にWi-Fiボタンを押し直す・
- *  アプリを開き直す等、改めてdrainUploadQueue()が呼ばれたタイミングで再挑戦される。 */
+/** 設定モーダルの「☁ Driveへ送信」ボタンを押した時だけ呼ばれる、待機列の一括アップロード。
+ *  **通信種別の自動判定は行わない**(2026年9月に撤去)。ユーザーが明示的に押した時にだけ、
+ *  今ある分を全部送ろうとする。失敗したエントリは待機列に残り続けるため、1周しても1件も
+ *  減らなければ(=全滅)、同じ失敗(トークン切れ等)を無限に繰り返さないようそこで打ち切る。
+ *  もう一度ボタンを押せば再挑戦できる。
+ *  **途中停止(2026年9月追加)**: モバイル回線のままうっかり押してしまった時のため、
+ *  cancelDriveUpload()が呼ばれたらAbortControllerで進行中のfetch()自体を中断し、
+ *  そのバッチが終わり次第すぐループを抜ける({cancelled:true}を返す)。中断された
+ *  エントリはuploadCardFileInBackground()側で「失敗」ではなく「待機列に残ったまま」に
+ *  戻すので、後でもう一度押せば続きから再開できる。 */
 async function drainUploadQueue() {
-  if (uploadQueueDraining) return;
-  if (!isUploadAllowedNow()) return;
+  if (uploadQueueDraining) return { attempted: 0, remaining: 0, cancelled: false };
   uploadQueueDraining = true;
+  uploadAbortController = new AbortController();
+  const signal = uploadAbortController.signal;
   try {
     let entries = await uploadQueueGetAll();
-    if (typeof debugLog === 'function') debugLog(`アップロード待機列を処理開始(${entries.length}件)`);
-    while (entries.length > 0 && isUploadAllowedNow()) {
+    const startCount = entries.length;
+    if (typeof debugLog === 'function') debugLog(`Driveへ送信を開始(${entries.length}件)`);
+    while (entries.length > 0) {
+      if (signal.aborted) {
+        if (typeof debugLog === 'function') debugLog(`Driveへの送信: ユーザーにより停止(残り${entries.length}件)`);
+        return { attempted: startCount, remaining: entries.length, cancelled: true };
+      }
       const batch = entries.slice(0, UPLOAD_QUEUE_CONCURRENCY);
-      await Promise.all(batch.map(uploadQueuedEntry));
-      if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
+      await Promise.all(batch.map((e) => uploadQueuedEntry(e, signal)));
+      if (typeof updateDriveUploadButton === 'function') updateDriveUploadButton();
       const nextEntries = await uploadQueueGetAll();
+      if (signal.aborted) {
+        if (typeof debugLog === 'function') debugLog(`Driveへの送信: ユーザーにより停止(残り${nextEntries.length}件)`);
+        return { attempted: startCount, remaining: nextEntries.length, cancelled: true };
+      }
       if (nextEntries.length >= entries.length) {
         // 進捗なし(全滅)。無限リトライを避けて打ち切る(個々の失敗理由はuploadCardFileInBackground()側でdebugLog済み)。
-        if (typeof debugLog === 'function') debugLog(`アップロード待機列: 進捗なし(残り${nextEntries.length}件)のため打ち切り`);
-        break;
+        if (typeof debugLog === 'function') debugLog(`Driveへの送信: 進捗なし(残り${nextEntries.length}件)のため打ち切り`);
+        return { attempted: startCount, remaining: nextEntries.length, cancelled: false };
       }
       entries = nextEntries;
     }
+    return { attempted: startCount, remaining: 0, cancelled: false };
   } catch (err) {
     console.error('アップロード待機列の処理に失敗', err);
     if (typeof debugLog === 'function') debugLog(`アップロード待機列の処理に失敗: ${err && err.message ? err.message : err}`);
+    return { attempted: 0, remaining: -1, cancelled: false };
   } finally {
     uploadQueueDraining = false;
+    uploadAbortController = null;
   }
 }
 
-/* ---------------- 端末の「写真」アプリへのコピー保存(2026年9月追加) ---------------- */
-//
-// 「アプリ(Drive)だけにデータを預けるのは怖い」というユーザー要望への対応。撮影のたびに
-// 毎回二重保存するのではなく、まだDriveに保存できていない(=アップロード失敗中・Wi-Fi待ち中で
-// IndexedDBの待機列にしか実データが無い)写真・動画だけを対象に、ユーザーが好きなタイミングで
-// まとめて端末の「写真」アプリへも逃がせるようにする。
-//
-// iOS SafariにはWebページからユーザー操作なしで写真ライブラリへ書き込むAPIが存在しないため、
-// Web Share API(navigator.share)で共有シートを開き、ユーザー自身に「イメージを保存」を選んで
-// もらう方式にした。これはIndexedDBの待機列やDrive上のデータには一切触れない、あくまで保険用の
-// コピーを増やすだけの機能(Driveへのアップロード成功/失敗判定・待機列からの削除ロジックとは独立)。
-
-// 写真アプリへ保存する意味があるのは画像・動画のみ(音声はカメラロールの対象外なので除く)。
-const PHOTO_EXPORTABLE_MEDIA_TYPES = ['image', 'video'];
-
-function isPhotoExportableEntry(entry) {
-  return PHOTO_EXPORTABLE_MEDIA_TYPES.includes(entry.mediaType);
+/** 設定モーダルのボタンが「■ 停止」に切り替わっている間に押された時に呼ぶ。進行中の
+ *  fetch()を即座に中断する(バッチの残りメンバーがあれば、それらも同じsignalで中断される)。
+ *  ドレインが動いていない時に呼んでも何も起きない(安全なno-op)。 */
+function cancelDriveUpload() {
+  if (uploadAbortController) uploadAbortController.abort();
 }
 
-/** ヘッダーのボタン表示更新用。画像・動画に絞った待機件数を返す。 */
+/* ---------------- 端末の「写真」アプリ等へのコピー保存(2026年9月追加) ---------------- */
+//
+// 「アプリ(Drive)だけにデータを預けるのは怖い」というユーザー要望への対応。撮影のたびに
+// 毎回二重保存するのではなく、まだDriveに送っていない(=待機列にしか実データが無い)写真・
+// 動画・音声だけを対象に、ユーザーが好きなタイミングでまとめて端末側(写真アプリ・ファイル
+// アプリ等)へも逃がせるようにする。
+//
+// iOS SafariにはWebページからユーザー操作なしで写真ライブラリへ書き込むAPIが存在しないため、
+// Web Share API(navigator.share)で共有シートを開き、ユーザー自身に保存先(写真/ファイル等)を
+// 選んでもらう方式にした。これはIndexedDBの待機列やDrive上のデータには一切触れない、あくまで
+// 保険用のコピーを増やすだけの機能(Driveへのアップロード成功/失敗判定・待機列からの削除ロジック
+// とは独立)。
+//
+// **2026年9月、音声も対象に追加**: 当初は画像・動画のみだったが、「写真アプリに保存」という
+// 名目に引きずられて音声カードが対象から漏れていた。音声も現地でしか録れない一次データである
+// 点は写真・動画と変わらないため、共有シート経由(保存先はファイルアプリ等になる)で対象に含めた。
+const DEVICE_EXPORTABLE_MEDIA_TYPES = ['image', 'video', 'audio'];
+
+function isDeviceExportableEntry(entry) {
+  return DEVICE_EXPORTABLE_MEDIA_TYPES.includes(entry.mediaType);
+}
+
+/** ヘッダーのボタン表示更新用。端末保存の対象になる待機件数を返す。 */
 async function uploadQueuePhotoExportableCount() {
   try {
     const entries = await uploadQueueGetAll();
-    return entries.filter(isPhotoExportableEntry).length;
+    return entries.filter(isDeviceExportableEntry).length;
   } catch (err) {
     return 0;
   }
 }
 
+function exportableBlobType(entry) {
+  if (entry.blob.type) return entry.blob.type;
+  if (entry.mediaType === 'video') return 'video/mp4';
+  if (entry.mediaType === 'audio') return 'audio/webm';
+  return 'image/jpeg';
+}
+
 /**
- * Drive未保存の写真・動画を、端末標準の共有シート経由で「写真」アプリへ保存する。
+ * Drive未送信の写真・動画・音声を、端末標準の共有シート経由で保存する。
  * @returns {Promise<'shared'|'cancelled'|'unsupported'|'empty'|'error'>}
  */
 async function exportPendingUploadsToPhotos() {
   let entries;
   try {
-    entries = (await uploadQueueGetAll()).filter(isPhotoExportableEntry);
+    entries = (await uploadQueueGetAll()).filter(isDeviceExportableEntry);
   } catch (err) {
     console.error('待機列の読み込みに失敗', err);
     return 'error';
@@ -262,13 +261,25 @@ async function exportPendingUploadsToPhotos() {
 
   const files = entries.map((entry, i) => {
     const name = entry.filename || `constellation-${entry.cardId || i}`;
-    return new File([entry.blob], name, { type: entry.blob.type || (entry.mediaType === 'video' ? 'video/mp4' : 'image/jpeg') });
+    return new File([entry.blob], name, { type: exportableBlobType(entry) });
   });
 
   if (!navigator.canShare({ files })) return 'unsupported';
 
   try {
-    await navigator.share({ files, title: 'CONSTELLATION - Drive未保存の写真・動画' });
+    await navigator.share({ files, title: 'CONSTELLATION - Drive未送信の写真・動画・音声' });
+    // 共有シートの操作自体が成功で戻ってきた時点で「端末側へ保存できたはず」とみなし
+    // (Web Share APIは個々のファイルで保存先を選んだかまでは教えてくれないため、既存の
+    // 「保険用コピー」という位置づけ通りベストエフォートで扱う)、対象カードにdeviceSavedを
+    // 立てて「📵 端末未保存」バッジを消す。待機列・Driveアップロード状態には一切触れない。
+    entries.forEach((entry) => {
+      const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
+      if (!card) return;
+      card.deviceSaved = true;
+      const el = typeof cardElById === 'function' ? cardElById(card.id) : null;
+      if (el && typeof updateCardStatusBadges === 'function') updateCardStatusBadges(el, card);
+    });
+    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
     return 'shared';
   } catch (err) {
     if (err && err.name === 'AbortError') return 'cancelled'; // ユーザーが共有シートを閉じただけ
@@ -280,13 +291,10 @@ async function exportPendingUploadsToPhotos() {
 
 /**
  * 再読み込み直後、js/app.jsのonSignedIn()から1回呼ぶ。前回終了時に待機列へ残っていたぶんを
- * 拾い直し、Wi-Fi中ならそのままドレインを始める。card.uploadQueuedが立っているのに実データが
- * 見つからない(別端末で作られた・ブラウザのストレージが消去された等)場合は、詰まったままに
- * せず「アップロード失敗」扱いにして、少なくともユーザーが気づけるようにする。
- * **2026年9月追加**: Wi-Fi中の即時アップロード(card.uploadQueuedはfalseのまま待機列だけを
- * 経由する)が完了前に中断された場合、実データは待機列に残っているのに表示が「アップロード
- * 中」のまま古くなってしまうため、待機列に実データが見つかれば表示を「待機中」に補正する
- * (実際の再送はこの関数の末尾でisUploadAllowedNow()ならdrainUploadQueue()が行う)。
+ * 表示上だけ拾い直す(**自動アップロードは一切行わない**、2026年9月に撤去)。
+ * card.uploadQueuedが立っているのに実データが見つからない(別端末で作られた・ブラウザの
+ * ストレージが消去された等)場合は、詰まったままにせず「アップロード失敗」扱いにして、
+ * 少なくともユーザーが気づけるようにする。
  */
 async function restoreUploadQueueOnLoad() {
   let entries;
@@ -306,13 +314,16 @@ async function restoreUploadQueueOnLoad() {
       if (el) {
         el.classList.remove('star-card--upload-pending', 'star-card--upload-queued');
         el.classList.add('star-card--upload-failed');
+        if (typeof updateCardStatusBadges === 'function') updateCardStatusBadges(el, card);
       }
     } else if (!card.uploadQueued && card.uploadPending && queuedCardIds.has(card.id)) {
       card.uploadQueued = true;
       const el = typeof cardElById === 'function' ? cardElById(card.id) : null;
-      if (el) el.classList.add('star-card--upload-queued');
+      if (el) {
+        el.classList.add('star-card--upload-queued');
+        if (typeof updateCardStatusBadges === 'function') updateCardStatusBadges(el, card);
+      }
     }
   });
-  if (typeof updateUploadNetworkButton === 'function') updateUploadNetworkButton();
-  if (isUploadAllowedNow()) drainUploadQueue();
+  if (typeof updateDriveUploadButton === 'function') updateDriveUploadButton();
 }
