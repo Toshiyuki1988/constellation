@@ -510,6 +510,12 @@ async function handleExportToPhotos() {
     setStatus('端末への共有に失敗しました', { important: true });
   }
   // 'cancelled'(ユーザーが共有シートを閉じただけ)は何も表示しない
+  // **2026年9月の不具合修正**: 以前はここでボタンの表示を更新しておらず、
+  // exportPendingUploadsToPhotos()内でcard.deviceSavedを立てても、たまたま他の操作で
+  // updateDriveUploadButton()(内部でupdateExportToPhotosButton()も呼ぶ)が走るまで
+  // 「📤 端末へ保存(1件)」の件数表示が減らないままだった(リロードしても直らないように見える
+  // 実機報告があった)。共有直後に必ず件数表示を更新する。
+  updateExportToPhotosButton();
 }
 
 /**
@@ -1211,25 +1217,30 @@ function showMemoOverlay(card) {
   if (hasMedia) {
     const mediaEl = document.createElement('div');
     mediaEl.className = 'star-card-memo-overlay-media';
+    // **2026年9月追加**: Driveへまだ送信していない(imageFileIdが無い)間も、待機列
+    // (IndexedDB)に元データが残っていれば(uploadQueued)それを直接使う。カード本体の
+    // loadFullMedia()と同じ理由(Driveアップロードの完全手動化で、送信ボタンを押すまでの
+    // 間ズームしても荒いまま、という実機報告があった)。
+    const fullMediaUrlPromise = card.imageFileId
+      ? getFileBlobUrlCached(card.imageFileId)
+      : (card.uploadQueued && typeof getQueuedEntryBlob === 'function'
+        ? getQueuedEntryBlob(card.id).then((blob) => (blob ? URL.createObjectURL(blob) : null))
+        : Promise.resolve(null));
     if (card.mediaType === 'image') {
       const img = document.createElement('img');
       img.alt = '';
       img.src = card.thumbDataUrl || '';
       mediaEl.appendChild(img);
-      if (card.imageFileId) {
-        getFileBlobUrlCached(card.imageFileId).then((url) => { img.src = url; }).catch(() => {});
-      }
+      fullMediaUrlPromise.then((url) => { if (url) img.src = url; }).catch(() => {});
     } else if (card.mediaType === 'video') {
       mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込み中…</div>';
-      if (card.imageFileId) {
-        getFileBlobUrlCached(card.imageFileId).then((url) => {
-          mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
-        }).catch(() => {
-          mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込みに失敗しました</div>';
-        });
-      } else {
-        mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込めません</div>';
-      }
+      fullMediaUrlPromise.then((url) => {
+        mediaEl.innerHTML = url
+          ? `<video src="${url}" controls playsinline></video>`
+          : '<div class="star-card-memo-overlay-media-loading">読み込めません</div>';
+      }).catch(() => {
+        mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込みに失敗しました</div>';
+      });
     }
     modal.appendChild(mediaEl);
   }
@@ -1479,16 +1490,23 @@ function renderCard(card) {
     wireChatCard(card, el);
   }
 
-  if (!isSessionCard && (card.imageFileId || card.thumbDataUrl)) {
+  // uploadQueuedもここに含める(2026年9月追加): 動画・音声カードはthumbDataUrlを持たないため、
+  // 以前の条件(imageFileId || thumbDataUrl)だと、Drive送信前は本体自体をobserveMediaForLazyLoad()
+  // に登録する機会が無く、待機列にある元データへのフォールバックが届かなかった。
+  if (!isSessionCard && (card.imageFileId || card.thumbDataUrl || card.uploadQueued)) {
     const mediaEl = el.querySelector('.star-card-media');
     // 概観時はまず軽量サムネイル(あれば)を即表示し、実際にカードが画面内に来たときだけ
     // Driveへ本画像/動画/音声を取りに行く(OneNoteのサムネイル運用と同じ考え方)。
     if (mediaType === 'image' && card.thumbDataUrl) {
       mediaEl.innerHTML = `<img src="${card.thumbDataUrl}" alt="">`;
     }
-    // Driveアップロードがバックグラウンドで進行中でまだimageFileIdが無い場合、本体取得は
-    // アップロード完了時(uploadCardFileInBackground)に改めてobserveMediaForLazyLoad()を呼ぶ。
-    if (card.imageFileId) observeMediaForLazyLoad(el, card);
+    // **2026年9月追加**: Driveへまだ送信していない(imageFileIdが無い)間も、待機列
+    // (IndexedDB)に元データがまるごと残っているカード(uploadQueued)は、loadFullMedia()側で
+    // それをフォールバックとして使えるため、ここでも監視対象に含める。以前はimageFileIdの
+    // 有無だけで判定していたため、Driveアップロードの完全手動化(2026年9月)以降、送信ボタンを
+    // 押すまでの間(数時間〜数日になりうる)ズームしても本画像に切り替わらずサムネイルのまま
+    // 荒い、という実機報告があった。
+    if (card.imageFileId || card.uploadQueued) observeMediaForLazyLoad(el, card);
   }
   if (card.uploadPending) el.classList.add('star-card--upload-pending');
   if (card.uploadFailed) el.classList.add('star-card--upload-failed');
@@ -3672,38 +3690,63 @@ const mediaLoadFailCount = new WeakMap();
  * 一日使っていると写真がいつまでもぼやけたサムネイルのまま)。原因の多くはOAuthトークンの
  * 失効タイミングなど一時的なものと考えられるため、失敗時は少し待ってから再度Observerへ
  * 登録し直し、画面内に入り直したタイミングで自然にリトライさせる(最大3回まで)。
+ * **2026年9月追加(Driveアップロード完全手動化に伴う修正)**: `card.imageFileId`がまだ無い
+ * (=Driveへ送信していない)間、以前は本画像への切り替え手段が無く、ズームしてもサムネイル
+ * (240px)のまま固定されていた。以前の「Wi-Fiになり次第自動送信」の頃はこの空白期間が
+ * 短かったため実害が目立たなかったが、送信が完全手動になったことで**数時間〜数日この状態が
+ * 続きうる**ようになり、「送信ボタンを押すまで自分の撮った写真がキャンバス上でずっと荒いまま」
+ * という実機報告があった。実際には元データ(高解像度)はDriveへ送るまでもなくIndexedDBの
+ * アップロード待機列に既にまるごと存在しているため、`card.imageFileId`が無い間は
+ * `getQueuedEntryBlob()`(js/upload-queue.js)でそれを直接使う(ネットワーク不要、待機列に
+ * 既にあるものを読むだけなので即座に切り替わる)。Driveへ送信済みになった後は、従来通り
+ * Drive経由の取得(`getFileBlobUrlCached()`)を使う。
  */
 function loadFullMedia(el, card) {
   const mediaEl = el.querySelector('.star-card-media');
-  if (!mediaEl || !card.imageFileId) return;
+  if (!mediaEl) return;
   const mediaType = card.mediaType || 'image';
-  getFileBlobUrlCached(card.imageFileId)
-    .then((url) => {
-      mediaLoadFailCount.delete(el);
-      if (mediaType === 'video') {
-        mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
-      } else if (mediaType === 'audio') {
-        mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
-      } else {
-        // 以前はbackground-imageで表示していたが、実機で「本画像に切り替わったはずなのに
-        // 小さい文字がぼやけたまま」という報告があった(2026年9月)。ズームでキャンバス全体を
-        // transform: scale()している構成上、background-imageはその祖先スケールに応じて
-        // モバイルブラウザ側で描画解像度が頭打ちになりやすい(GPU合成レイヤーのラスタ解像度が
-        // 実際のズーム倍率まで追従しない既知の傾向)。<img>要素(デコード済みの実ピクセルを
-        // 直接持つ)に置き換えることで、ズームインした時により高い解像度でサンプリングされる
-        // ことを期待する変更。
-        mediaEl.innerHTML = `<img src="${url}" alt="">`;
-      }
-    })
-    .catch((err) => {
-      const failCount = (mediaLoadFailCount.get(el) || 0) + 1;
-      mediaLoadFailCount.set(el, failCount);
-      console.warn(`本画像の取得に失敗(${failCount}回目、サムネイルのまま表示を続けます)`, err);
-      debugLog(`本画像の取得に失敗(${failCount}回目): ${err.message}`); // スマホでもデバッグパネル(🐞)から追える
-      if (failCount <= 3) {
-        setTimeout(() => observeMediaForLazyLoad(el, card), 3000);
-      }
-    });
+
+  const applyUrl = (url) => {
+    mediaLoadFailCount.delete(el);
+    if (mediaType === 'video') {
+      mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
+    } else if (mediaType === 'audio') {
+      mediaEl.innerHTML = `<audio src="${url}" controls></audio>`;
+    } else {
+      // 以前はbackground-imageで表示していたが、実機で「本画像に切り替わったはずなのに
+      // 小さい文字がぼやけたまま」という報告があった(2026年9月)。ズームでキャンバス全体を
+      // transform: scale()している構成上、background-imageはその祖先スケールに応じて
+      // モバイルブラウザ側で描画解像度が頭打ちになりやすい(GPU合成レイヤーのラスタ解像度が
+      // 実際のズーム倍率まで追従しない既知の傾向)。<img>要素(デコード済みの実ピクセルを
+      // 直接持つ)に置き換えることで、ズームインした時により高い解像度でサンプリングされる
+      // ことを期待する変更。
+      mediaEl.innerHTML = `<img src="${url}" alt="">`;
+    }
+  };
+
+  if (card.imageFileId) {
+    getFileBlobUrlCached(card.imageFileId)
+      .then(applyUrl)
+      .catch((err) => {
+        const failCount = (mediaLoadFailCount.get(el) || 0) + 1;
+        mediaLoadFailCount.set(el, failCount);
+        console.warn(`本画像の取得に失敗(${failCount}回目、サムネイルのまま表示を続けます)`, err);
+        debugLog(`本画像の取得に失敗(${failCount}回目): ${err.message}`); // スマホでもデバッグパネル(🐞)から追える
+        if (failCount <= 3) {
+          setTimeout(() => observeMediaForLazyLoad(el, card), 3000);
+        }
+      });
+    return;
+  }
+
+  if (card.uploadQueued && typeof getQueuedEntryBlob === 'function') {
+    getQueuedEntryBlob(card.id)
+      .then((blob) => {
+        if (!blob) return; // 待機列に実データが見つからない(異常系)。サムネイルのままにする
+        applyUrl(URL.createObjectURL(blob));
+      })
+      .catch(() => {});
+  }
 }
 
 /**

@@ -83,6 +83,24 @@ function uploadQueueGetAll() {
   }));
 }
 
+/**
+ * まだDriveへ送信していない(card.imageFileIdが無い)カードのズーム時、本画像として使う
+ * ための実データを1件だけ取得する(2026年9月追加)。**Driveアップロードの完全手動化により、
+ * 送信ボタンを押すまでcard.imageFileIdが無い期間が(以前の「Wi-Fiになり次第自動送信」と
+ * 違って)数時間〜数日と長くなり得るようになった**。その間ズームしても本画像に切り替わらず
+ * サムネイルのまま荒いという実機報告があったが、根本的には解像度の高い元データはこの
+ * 待機列(IndexedDB)に既にまるごと存在しており、わざわざDriveへ送るまで取りに行けないのは
+ * 不要な制約だった。js/app.jsのloadFullMedia()が、card.imageFileIdが無い間はこちらを
+ * フォールバックとして使う。 */
+function getQueuedEntryBlob(cardId) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(UPLOAD_QUEUE_STORE, 'readonly');
+    const req = tx.objectStore(UPLOAD_QUEUE_STORE).get(cardId);
+    req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+    req.onerror = () => reject(req.error);
+  })).catch(() => null);
+}
+
 function uploadQueueCount() {
   return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
     const tx = db.transaction(UPLOAD_QUEUE_STORE, 'readonly');
@@ -226,11 +244,22 @@ function isDeviceExportableEntry(entry) {
   return DEVICE_EXPORTABLE_MEDIA_TYPES.includes(entry.mediaType);
 }
 
-/** ヘッダーのボタン表示更新用。端末保存の対象になる待機件数を返す。 */
+/** まだ端末(写真アプリ等)へコピーしていないか(2026年9月追加)。**重大な表示バグの修正**:
+ *  以前はこのチェックが無く、「📤 端末へ保存」ボタンの件数もexportPendingUploadsToPhotos()の
+ *  対象も、Drive未送信の待機列に残っているかどうかだけで決めていた。Drive送信とは無関係な
+ *  「端末へは既に保存済み」という状態(card.deviceSaved)を全く見ていなかったため、共有シートで
+ *  端末保存に成功した直後でも、Driveへまだ送信していない限りボタンの件数が「(1件)」のまま
+ *  減らないという実機報告があった(リロードしても変わらない、という状態異常に見える不具合)。 */
+function isNotYetDeviceSaved(entry) {
+  const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
+  return !card || !card.deviceSaved;
+}
+
+/** ヘッダーのボタン表示更新用。端末保存がまだの待機件数を返す。 */
 async function uploadQueuePhotoExportableCount() {
   try {
     const entries = await uploadQueueGetAll();
-    return entries.filter(isDeviceExportableEntry).length;
+    return entries.filter(isDeviceExportableEntry).filter(isNotYetDeviceSaved).length;
   } catch (err) {
     return 0;
   }
@@ -250,7 +279,9 @@ function exportableBlobType(entry) {
 async function exportPendingUploadsToPhotos() {
   let entries;
   try {
-    entries = (await uploadQueueGetAll()).filter(isDeviceExportableEntry);
+    // 既にdeviceSaved済みのものは除く(2026年9月追加。含めたままだと、まだDriveへ送信して
+    // いない間はボタンを押すたびに同じ写真を毎回また共有シートに乗せて重複保存させてしまう)。
+    entries = (await uploadQueueGetAll()).filter(isDeviceExportableEntry).filter(isNotYetDeviceSaved);
   } catch (err) {
     console.error('待機列の読み込みに失敗', err);
     return 'error';
