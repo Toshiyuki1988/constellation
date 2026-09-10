@@ -904,6 +904,59 @@ html, body {
 }
 .star-card-memo-overlay-body a { color: #2e7d32; text-decoration: underline; }
 
+/* 写真・動画カードの場合、高画質の本体を左に並べて見られるようにする(2026年9月追加)。
+   モーダル自体を横に広げ、左に画像/動画、右にテキストの2カラムにする。スマホ幅では
+   横に並べる余地が無いため縦積みに切り替える。 */
+.star-card-memo-overlay-modal--with-media {
+  max-width: 920px;
+  width: 95%;
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+.star-card-memo-overlay-modal--with-media .star-card-memo-overlay-media {
+  flex: 1 1 48%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border-radius: 4px;
+  overflow: hidden;
+  max-height: 80vh;
+  aspect-ratio: 4 / 3;
+}
+.star-card-memo-overlay-media img,
+.star-card-memo-overlay-media video {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  display: block;
+}
+.star-card-memo-overlay-media-loading {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.star-card-memo-overlay-modal--with-media .star-card-memo-overlay-text {
+  flex: 1 1 52%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.star-card-memo-overlay-modal--with-media .star-card-memo-overlay-body {
+  flex: 1;
+}
+@media (max-width: 700px) {
+  .star-card-memo-overlay-modal--with-media {
+    flex-direction: column;
+  }
+  .star-card-memo-overlay-modal--with-media .star-card-memo-overlay-media {
+    max-height: 45vh;
+    width: 100%;
+  }
+}
+
 /* ---------- セッションカード(入れ子セッションへのポータル) ---------- */
 
 .star-card--session {

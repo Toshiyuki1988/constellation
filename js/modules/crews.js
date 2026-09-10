@@ -320,14 +320,24 @@
       .cst-close:hover { background: rgba(85, 230, 247, 0.25); }
 
       .cst-stage {
-        position: relative; flex: 1; min-height: 0; overflow: hidden;
+        position: relative; flex: 1; min-height: 0;
+        /* 2026年9月: overflow:hiddenだと、他の端末(PCの広い画面等)で作ったカードが画面外に
+           置かれた場合、スマホの狭い画面ではその部分に永久に到達できなくなる不具合があった。
+           ミニキャンバスエンジン(独自のパン/ズーム)は作らない方針のため、ブラウザ標準の
+           スクロールで「画面移動」を実現する(cst-boardのサイズはJS側resizeCstBoardToFitCards()
+           がカードの実際の配置に合わせて広げる)。 */
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
         background:
           radial-gradient(ellipse at 30% 20%, rgba(85, 230, 247, 0.10), transparent 55%),
           radial-gradient(ellipse at 80% 80%, rgba(85, 230, 247, 0.06), transparent 50%),
           #05080a;
       }
       .cst-starfield { position: absolute; inset: 0; opacity: 0.9; pointer-events: none; }
-      .cst-board { position: relative; z-index: 1; width: 100%; height: 100%; }
+      /* width/heightはJS側resizeCstBoardToFitCards()がカードの実際の配置に合わせて
+         inline styleで都度設定する(最低でもステージの可視領域いっぱいになるようクランプ)。 */
+      .cst-board { position: relative; z-index: 1; min-width: 100%; min-height: 100%; }
 
       .cst-card {
         position: absolute; cursor: grab;
@@ -1004,6 +1014,7 @@
     }
 
     updateConstellationRequirement();
+    resizeCstBoardToFitCards(); // カードの実際の配置に合わせてboardを広げ、スマホでも全カードへスクロールで到達できるようにする
     requestAnimationFrame(drawConstellationStars);
   }
 
@@ -1027,14 +1038,45 @@
     renderConstellationBoard();
   }
 
+  // cst-boardの最低サイズ(2026年9月追加)。デバイスの実画面サイズに関わらず、どの端末で
+  // 開いてもカードを置ける「作業領域」の広さを一定に保つための仮想的な下限(以前のデフォルト
+  // 挙動=ステージの可視領域いっぱいと同程度になるよう、よくある展開サイズを目安にした)。
+  const CST_BOARD_MIN_WIDTH = 900;
+  const CST_BOARD_MIN_HEIGHT = 640;
+  const CST_BOARD_PADDING = 60;
+
+  /**
+   * cst-boardの実サイズを、実際に置かれているカードの右端・下端(+余白)に合わせて広げる。
+   * **2026年9月追加、スマホで一部のカードが画面外に置かれ二度と到達できない不具合の修正**:
+   * 以前は.cst-boardが常にステージの可視領域と同じ100%幅・高さで、PCなど広い画面で作った
+   * カードをスマホの狭い画面で開くと、画面外(=スクロールもできないためどこにも無い扱い)に
+   * なってしまっていた。カードの実際の配置に合わせてboard自体を広げ、ステージ側は
+   * overflow:autoでネイティブスクロールするだけにすることで、独自のパン/ズームエンジンを
+   * 作らずに「画面移動」を実現している。
+   */
+  function resizeCstBoardToFitCards() {
+    if (!cstEls || !cstEls.board || !cstEls.stage) return;
+    let maxRight = 0;
+    let maxBottom = 0;
+    cstEls.board.querySelectorAll('.cst-card').forEach((el) => {
+      maxRight = Math.max(maxRight, el.offsetLeft + el.offsetWidth);
+      maxBottom = Math.max(maxBottom, el.offsetTop + el.offsetHeight);
+    });
+    const stageRect = cstEls.stage.getBoundingClientRect();
+    cstEls.board.style.width = `${Math.max(CST_BOARD_MIN_WIDTH, stageRect.width, maxRight + CST_BOARD_PADDING)}px`;
+    cstEls.board.style.height = `${Math.max(CST_BOARD_MIN_HEIGHT, stageRect.height, maxBottom + CST_BOARD_PADDING)}px`;
+  }
+
   function onCstCardDragStart(e) {
     e.preventDefault();
     const id = e.currentTarget.dataset.drag;
     cstDragCard = cstCards.find((c) => c.id === id);
     if (!cstDragCard) return;
     const stageRect = cstEls.stage.getBoundingClientRect();
-    cstDragOffsetX = e.clientX - stageRect.left - cstDragCard.x;
-    cstDragOffsetY = e.clientY - stageRect.top - cstDragCard.y;
+    // ステージがスクロールしている場合、e.clientXはあくまで画面上の座標なので、
+    // cst-board基準の座標へ戻すにはscrollLeft/scrollTop分を足し戻す必要がある。
+    cstDragOffsetX = e.clientX - stageRect.left + cstEls.stage.scrollLeft - cstDragCard.x;
+    cstDragOffsetY = e.clientY - stageRect.top + cstEls.stage.scrollTop - cstDragCard.y;
     playConstellationMoveCardSound();
     window.addEventListener('pointermove', onCstCardDragMove);
     window.addEventListener('pointerup', onCstCardDragEnd);
@@ -1045,21 +1087,27 @@
     const el = document.getElementById('cst-card-' + cstDragCard.id);
     const w = el ? el.offsetWidth : 150;
     const h = el ? el.offsetHeight : 80;
-    cstDragCard.x = Math.max(0, Math.min(stageRect.width - w, e.clientX - stageRect.left - cstDragOffsetX));
-    cstDragCard.y = Math.max(0, Math.min(stageRect.height - h, e.clientY - stageRect.top - cstDragOffsetY));
+    // クランプ先はステージの可視領域ではなく、boardの実サイズ(スクロールで到達できる全域)。
+    const boardW = cstEls.board.offsetWidth;
+    const boardH = cstEls.board.offsetHeight;
+    cstDragCard.x = Math.max(0, Math.min(boardW - w, e.clientX - stageRect.left + cstEls.stage.scrollLeft - cstDragOffsetX));
+    cstDragCard.y = Math.max(0, Math.min(boardH - h, e.clientY - stageRect.top + cstEls.stage.scrollTop - cstDragOffsetY));
     if (el) { el.style.left = cstDragCard.x + 'px'; el.style.top = cstDragCard.y + 'px'; }
   }
   function onCstCardDragEnd() {
     cstDragCard = null;
     window.removeEventListener('pointermove', onCstCardDragMove);
     window.removeEventListener('pointerup', onCstCardDragEnd);
+    resizeCstBoardToFitCards();
   }
 
   function addConstellationCard(type) {
     const id = 'n' + (cstIdSeq++);
+    // 新規カードは「今スクロールして見えている範囲」に出す(スクロール位置を考慮しないと、
+    // 画面の外=board全体のどこか遠くに追加されてしまい、追加した直後なのに見えない)。
     const stageRect = cstEls.stage.getBoundingClientRect();
-    const x = 30 + Math.random() * Math.max(40, stageRect.width - 220);
-    const y = 30 + Math.random() * Math.max(40, stageRect.height - 160);
+    const x = 30 + cstEls.stage.scrollLeft + Math.random() * Math.max(40, stageRect.width - 220);
+    const y = 30 + cstEls.stage.scrollTop + Math.random() * Math.max(40, stageRect.height - 160);
     cstCards.push(type === 'photo' ? { id, type, x, y, title: '' } : { id, type, x, y, text: '' });
     if (type === 'photo') cstActivePhotoCardId = id; // 追加直後はすぐ貼り付け/選択できるよう自動でアクティブにする
     playConstellationAddCardSound();

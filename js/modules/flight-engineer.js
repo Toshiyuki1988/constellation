@@ -519,10 +519,24 @@
     showCommandPanelAt(left, top + h + 12);
   }
 
+  // 「統合」の対象になる写真の種別(2026年9月追加)。ユーザー要望は「1つの写真と1つの
+  // テキストを選択時」と明示的に「写真」限定だったため、動画は対象に含めない
+  // (Summonなど他の写真限定機能と同じ絞り方)。
+  const MERGE_PHOTO_MEDIA_TYPES = ['image'];
+
+  function mergeTargets(cards) {
+    if (cards.length !== 2) return null;
+    const photo = cards.find((c) => MERGE_PHOTO_MEDIA_TYPES.includes(c.mediaType));
+    const text = cards.find((c) => c.mediaType === 'text');
+    if (!photo || !text || photo === text) return null;
+    return { photo, text };
+  }
+
   function showCommandPanelAt(left, top) {
     if (panelEl) panelEl.remove();
     const cards = Array.from(selection).map(getCardById).filter(Boolean);
     const soloSession = cards.length === 1 && cards[0].mediaType === 'session';
+    const mergeable = Boolean(mergeTargets(cards));
 
     panelEl = document.createElement('div');
     panelEl.className = 'fe-panel';
@@ -535,6 +549,7 @@
       <div class="fe-panel-actions">
         <button class="fe-btn" data-fe-action="stow">⇲ 新規セッションに格納</button>
         <button class="fe-btn" data-fe-action="tidy" ${cards.length < 2 ? 'disabled' : ''}>≋ その場で整理</button>
+        <button class="fe-btn" data-fe-action="merge" ${mergeable ? '' : 'disabled'}>🖇 テキストを写真へ統合</button>
         <button class="fe-btn fe-btn--danger" data-fe-action="disband" ${soloSession ? '' : 'disabled'}>⌁ セッションを解体</button>
         <button class="fe-btn fe-btn--ghost" data-fe-action="cancel">✕ キャンセル</button>
       </div>
@@ -542,6 +557,7 @@
     panelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     panelEl.querySelector('[data-fe-action="stow"]').addEventListener('click', doStow);
     panelEl.querySelector('[data-fe-action="tidy"]').addEventListener('click', doTidy);
+    panelEl.querySelector('[data-fe-action="merge"]').addEventListener('click', doMerge);
     panelEl.querySelector('[data-fe-action="disband"]').addEventListener('click', doDisband);
     panelEl.querySelector('[data-fe-action="cancel"]').addEventListener('click', clearSelectionAndPanel);
     els.viewport.appendChild(panelEl);
@@ -799,6 +815,58 @@
     scheduleAutoSave();
     playFlightEngineerTidySound();
     setStatus(`${selCards.length}枚を整列しました`);
+  }
+
+  /* ---------------- 実行: テキストを写真へ統合(履歴に残らない) ---------------- */
+
+  /**
+   * 1枚の写真+1枚のテキストを選択している時だけ有効になるコマンド(2026年9月追加)。
+   * テキストカードの本文を写真カードのキャプション(メモ欄)へ追記し、テキストカード自体は
+   * 削除する。文字は写真側のメモへ移るだけで内容は失われないため、格納・解体のような
+   * 履歴(Undo)は持たせていない(「整理」と同じ扱い)。テキストカード自体を消す操作なので、
+   * 押し間違いの取り返しがつくよう実行前に一度だけ確認する。
+   */
+  function doMerge() {
+    const cards = Array.from(selection).map(getCardById).filter(Boolean);
+    const targets = mergeTargets(cards);
+    if (!targets) return;
+    const { photo, text } = targets;
+
+    const addition = (text.memo || '').trim();
+    if (!addition) {
+      // テキストカードが空なら統合する内容が無い。確認なしでそのままテキストカードだけ消す。
+      const textEl = cardElById(text.id);
+      if (textEl) removeCardFromState(text, textEl);
+      clearSelectionAndPanel();
+      setStatus('空のテキストカードを削除しました(統合する内容がありませんでした)');
+      return;
+    }
+    if (!window.confirm(`このテキストを写真のキャプションへ統合しますか?\nテキストカード自体は削除されます(内容は写真のメモへ移ります)。\n\n${addition}`)) {
+      return;
+    }
+
+    photo.memo = photo.memo && photo.memo.trim() ? `${photo.memo}\n${addition}` : addition;
+
+    const photoEl = cardElById(photo.id);
+    if (photoEl) {
+      const memoEl = photoEl.querySelector('.star-card-memo');
+      const memoViewEl = photoEl.querySelector('.star-card-memo-view');
+      if (memoEl) memoEl.value = photo.memo;
+      if (memoViewEl) {
+        memoViewEl.innerHTML = linkifyMemoHtml(photo.memo);
+        memoViewEl.hidden = !photo.memo.trim();
+      }
+      if (typeof syncCardHeight === 'function') syncCardHeight(photoEl);
+      if (typeof updateMemoExpandState === 'function') updateMemoExpandState(photoEl);
+    }
+
+    const textEl = cardElById(text.id);
+    if (textEl) removeCardFromState(text, textEl); // ASTR接続・アップロード待機列の後始末も込み
+
+    clearSelectionAndPanel();
+    scheduleAutoSave();
+    playFlightEngineerStowSound(); // 「吸い込まれる」質感の音を流用(テキストが写真へ取り込まれるイメージ)
+    setStatus('テキストを写真のキャプションへ統合しました');
   }
 
   /* ---------------- 編集履歴(格納/解体のみ、最大10件、constellation-data.jsonへ永続化) ---------------- */

@@ -1188,16 +1188,54 @@ function updateMemoExpandState(el) {
   expandBtn.hidden = !overflowing;
 }
 
+/** ⛶ポップアップで高画質の本体も並べて見たい対象(2026年9月追加)。「キャプションの元に
+ *  なった写真そのものを見比べながら全文を読みたい」というユーザー要望への対応。音声には
+ *  見た目が無く、ストリートビューは既に大きなパノラマとして別枠(iframe)で持っているため対象外。 */
+const MEMO_OVERLAY_MEDIA_TYPES = ['image', 'video'];
+
 /**
  * 「⛶ 全文を見る」ポップアップ(2026年9月、キャプションのぞき見プレビューの案Bとして採用)。
  * settings-modal等と同じ.modal-overlay/.modalの不透明な意匠をそのまま流用する
  * (Crewsの拡大ポップアップと違い、ここではグラスモーフィズムは不要というユーザー判断)。
+ * **2026年9月追加**: 写真・動画カードでは、本文の左に高画質の本体も並べて表示する。
+ * サムネイル(即表示)→本画像/動画(取得でき次第差し替え)という、カード本体の表示と
+ * 同じ「まず低解像度、届いたら差し替え」の考え方をそのまま流用している。
  */
 function showMemoOverlay(card) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay visible';
+  const hasMedia = MEMO_OVERLAY_MEDIA_TYPES.includes(card.mediaType);
   const modal = document.createElement('div');
-  modal.className = 'modal star-card-memo-overlay-modal';
+  modal.className = 'modal star-card-memo-overlay-modal' + (hasMedia ? ' star-card-memo-overlay-modal--with-media' : '');
+
+  if (hasMedia) {
+    const mediaEl = document.createElement('div');
+    mediaEl.className = 'star-card-memo-overlay-media';
+    if (card.mediaType === 'image') {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.src = card.thumbDataUrl || '';
+      mediaEl.appendChild(img);
+      if (card.imageFileId) {
+        getFileBlobUrlCached(card.imageFileId).then((url) => { img.src = url; }).catch(() => {});
+      }
+    } else if (card.mediaType === 'video') {
+      mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込み中…</div>';
+      if (card.imageFileId) {
+        getFileBlobUrlCached(card.imageFileId).then((url) => {
+          mediaEl.innerHTML = `<video src="${url}" controls playsinline></video>`;
+        }).catch(() => {
+          mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込みに失敗しました</div>';
+        });
+      } else {
+        mediaEl.innerHTML = '<div class="star-card-memo-overlay-media-loading">読み込めません</div>';
+      }
+    }
+    modal.appendChild(mediaEl);
+  }
+
+  const textCol = document.createElement('div');
+  textCol.className = 'star-card-memo-overlay-text';
   const heading = document.createElement('h2');
   heading.textContent = 'キャプション全文';
   const body = document.createElement('div');
@@ -1211,9 +1249,11 @@ function showMemoOverlay(card) {
   closeBtn.textContent = '閉じる';
   closeBtn.addEventListener('click', () => overlay.remove());
   actions.appendChild(closeBtn);
-  modal.appendChild(heading);
-  modal.appendChild(body);
-  modal.appendChild(actions);
+  textCol.appendChild(heading);
+  textCol.appendChild(body);
+  textCol.appendChild(actions);
+  modal.appendChild(textCol);
+
   overlay.appendChild(modal);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   document.body.appendChild(overlay);
@@ -2504,18 +2544,32 @@ function personaStyleInstruction(p) {
 }
 
 /** 1人ぶんの発言をGeminiに生成させる(直前までの会話ログ全文を文脈として渡す)。 */
+/**
+ * **2026年9月修正**: 「質問文に対しても独り言っぽい」という実機報告があった。原因は、
+ * 質問(`[質問] ...`)もただの発言と同列に長い会話ログへ埋め込んでいるだけで、
+ * 「今まさに答えるべき問い」として明示していなかったこと。プロンプトが「直前までの発言を
+ * 踏まえて構いません」としか言っていないため、Geminiが質問を単なる文脈の一部として読み流し、
+ * それぞれの立場から自由に一言つぶやくだけ(相互に無関係な独り言の並び)になりやすかった。
+ * 対応: 会話ログの中で直近の質問(末尾から遡って最初に見つかった`type:'question'`)を
+ * 別枠で取り出し、「まずその質問に直接答えること」をプロンプトで明示的に指示する。
+ * 質問がまだ無い(通常のつぶやき合いの段階)場合は、従来通りの「賛成・反論・補足」の指示のみ。
+ */
 async function fetchChatReply(card, speaker, messages, imageParts) {
   const sessionContext = collectSessionTextContext(card.sessionId, []);
   const transcriptText = messages
     .map((m) => (m.type === 'question' ? `[質問] ${m.text}` : `[${m.name}] ${m.text}`))
     .join('\n');
   const styleInstruction = personaStyleInstruction(speaker);
+  const lastQuestion = [...messages].reverse().find((m) => m.type === 'question');
+  const responseInstruction = lastQuestion
+    ? `直近の質問「${lastQuestion.text}」に対して、まずあなた自身の答え・考えを直接述べてください。他の参加者の発言を踏まえて賛成・反論・補足を加えても構いませんが、質問への回答から外れた独り言にはしないでください。`
+    : '直前までの発言を踏まえて構いません(賛成・反論・補足など)。';
   const prompt =
     `以下はある美術展覧会・セッションの記録です:\n${sessionContext}\n\n` +
     'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。ここまでの発言:\n' +
     `${transcriptText || '(まだ発言はありません)'}\n\n` +
     `あなたは次の話者「${speaker.name}」です。${styleInstruction}\n` +
-    '直前までの発言を踏まえて構いません(賛成・反論・補足など)。前置き・名乗りは書かず、1〜2文の短い一言だけを返してください。';
+    `${responseInstruction} 前置き・名乗りは書かず、1〜2文の短い一言だけを返してください。`;
   const raw = await askGemini({ prompt, images: imageParts });
   return raw.trim();
 }
