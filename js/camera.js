@@ -423,6 +423,7 @@ function resetCamZoom(target) {
   camZoomScale = 1;
   camZoomNative = false;
   camZoomCaps = null;
+  camZoomApplyLatestValue = null; // 前のトラック宛ての送信中リクエストがあっても、これ以上追従させない
   if (target && target.videoEl) target.videoEl.style.transform = '';
   if (target && target.badgeEl) target.badgeEl.hidden = true;
 }
@@ -437,6 +438,38 @@ function updateZoomBadge(badgeEl) {
   badgeEl.textContent = `${camZoomScale.toFixed(1)}x${camZoomNative ? '' : ' (デジタル)'}`;
 }
 
+// ネイティブズーム(track.applyConstraints)の連投を防ぐ状態(setCamZoom()参照)。
+// ピンチ中はpointermoveが1秒間に何十回も発火するが、applyConstraints()はカメラハードウェアの
+// 再設定を伴う重い処理で、実機では1回あたり数百ms〜かかることがある。愚直に毎回呼ぶと、
+// 指を動かし終えてからもキューに溜まった大量のリクエストを律儀に順番にさばき続け、
+// 「バッジの数字はすぐ動くのに、実際のズームは十数秒遅れてついてくる」不具合になっていた
+// (2026年9月、実機報告)。常に「今送信中の1件」だけを許し、その間に来た新しい値は
+// 送信中のリクエストが終わった時点でまとめて最新値だけを送る(古い値は送らない)ことで、
+// ハードウェアの処理速度に自然に追従させる。
+let camZoomApplyPending = false;
+let camZoomApplyLatestValue = null;
+
+function applyNativeZoomThrottled(track, value) {
+  camZoomApplyLatestValue = value;
+  if (camZoomApplyPending) return; // 既に1件送信中。完了時に最新値を見て続ける
+  camZoomApplyPending = true;
+  const sendNext = () => {
+    const v = camZoomApplyLatestValue;
+    track.applyConstraints({ advanced: [{ zoom: v }] })
+      .catch((err) => {
+        camDebugLog(`ズームapplyConstraints失敗: ${err && err.message ? err.message : err}`);
+      })
+      .finally(() => {
+        if (camZoomApplyLatestValue !== v) {
+          sendNext(); // 送信中にさらに新しい値が来ていたら、続けて最新値だけを送る
+        } else {
+          camZoomApplyPending = false;
+        }
+      });
+  };
+  sendNext();
+}
+
 function setCamZoom(scale, videoEl, badgeEl) {
   const max = maxZoomForCurrentTrack();
   camZoomScale = Math.max(1, Math.min(max, scale));
@@ -446,18 +479,14 @@ function setCamZoom(scale, videoEl, badgeEl) {
     camZoomNative = true;
     videoEl.style.transform = '';
     const track = camStream && camStream.getVideoTracks()[0];
-    if (track) {
-      track.applyConstraints({ advanced: [{ zoom: camZoomScale }] }).catch((err) => {
-        camDebugLog(`ズームapplyConstraints失敗: ${err && err.message ? err.message : err}`);
-      });
-    }
+    if (track) applyNativeZoomThrottled(track, camZoomScale);
   } else {
     // 非対応端末向けのフォールバック: プレビューをCSSで拡大して見せ、実際の撮影時にも
     // captureFrameToCanvas()で同じ倍率だけクロップ範囲を狭める(WYSIWYGを保つ)。
     camZoomNative = false;
     videoEl.style.transform = `scale(${camZoomScale})`;
   }
-  updateZoomBadge(badgeEl);
+  updateZoomBadge(badgeEl); // バッジは常に即座に最新の指の位置を反映する(ハードウェア追従待ちはしない)
 }
 
 /** 現在の撮影に使うべきデジタルズーム倍率(ネイティブズーム中は1、それ以外はcamZoomScale) */
