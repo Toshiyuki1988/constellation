@@ -85,7 +85,7 @@
   let cstEls = null;
   let cstCards = [];
   let cstIdSeq = 1;
-  let cstDragCard = null, cstDragOffsetX = 0, cstDragOffsetY = 0;
+  let cstDragCard = null, cstDragOffsetX = 0, cstDragOffsetY = 0, cstDragPointerId = null;
   let cstActivePhotoCardId = null; // 直前にクリックした写真カード。Ctrl+V貼り付け先の決定に使う
 
   /* ---------------- DOM / CSS をこのファイルだけで自己完結させて注入する ---------------- */
@@ -1069,9 +1069,11 @@
 
   function onCstCardDragStart(e) {
     e.preventDefault();
+    if (cstDragCard) return; // 既に別の指(pointerId)でカードをドラッグ中なら、2本目は無視する
     const id = e.currentTarget.dataset.drag;
     cstDragCard = cstCards.find((c) => c.id === id);
     if (!cstDragCard) return;
+    cstDragPointerId = e.pointerId;
     const stageRect = cstEls.stage.getBoundingClientRect();
     // ステージがスクロールしている場合、e.clientXはあくまで画面上の座標なので、
     // cst-board基準の座標へ戻すにはscrollLeft/scrollTop分を足し戻す必要がある。
@@ -1082,7 +1084,7 @@
     window.addEventListener('pointerup', onCstCardDragEnd);
   }
   function onCstCardDragMove(e) {
-    if (!cstDragCard) return;
+    if (!cstDragCard || e.pointerId !== cstDragPointerId) return;
     const stageRect = cstEls.stage.getBoundingClientRect();
     const el = document.getElementById('cst-card-' + cstDragCard.id);
     const w = el ? el.offsetWidth : 150;
@@ -1094,8 +1096,10 @@
     cstDragCard.y = Math.max(0, Math.min(boardH - h, e.clientY - stageRect.top + cstEls.stage.scrollTop - cstDragOffsetY));
     if (el) { el.style.left = cstDragCard.x + 'px'; el.style.top = cstDragCard.y + 'px'; }
   }
-  function onCstCardDragEnd() {
+  function onCstCardDragEnd(e) {
+    if (e && e.pointerId !== cstDragPointerId) return;
     cstDragCard = null;
+    cstDragPointerId = null;
     window.removeEventListener('pointermove', onCstCardDragMove);
     window.removeEventListener('pointerup', onCstCardDragEnd);
     resizeCstBoardToFitCards();

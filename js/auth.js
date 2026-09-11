@@ -5,6 +5,7 @@
 let tokenClient = null;
 let accessToken = null;
 let tokenExpiresAt = 0;
+let pendingTokenPromise = null;
 
 /**
  * @param {(token: string) => void} onSignedIn サインイン成功時に呼ばれる
@@ -71,7 +72,13 @@ function ensureAccessToken() {
   const stillValid = accessToken && Date.now() < tokenExpiresAt - 60_000;
   if (stillValid) return Promise.resolve(accessToken);
 
-  return new Promise((resolve, reject) => {
+  // 写真の並列フェッチ・アップロードキューなど、複数箇所から同時に呼ばれうる。
+  // tokenClient.callback は単一のミュータブル変数のため、進行中の再取得があれば
+  // 新しいリクエストは投げずに同じPromiseへ相乗りする(でないと先に呼ばれた側の
+  // resolve/rejectが後続の callback 上書きで失われ、永久にハングする)。
+  if (pendingTokenPromise) return pendingTokenPromise;
+
+  pendingTokenPromise = new Promise((resolve, reject) => {
     tokenClient.callback = (response) => {
       if (response.error) {
         reject(new Error(`OAuth再取得に失敗: ${response.error}`));
@@ -83,5 +90,9 @@ function ensureAccessToken() {
     };
     // 既に同意済みなら通常ダイアログなしで再取得できる
     tokenClient.requestAccessToken({ prompt: '' });
+  }).finally(() => {
+    pendingTokenPromise = null;
   });
+
+  return pendingTokenPromise;
 }

@@ -1007,6 +1007,7 @@
 
   function onViewportPointerDown(event) {
     if (!feActive) return;
+    if (marqueeDrag || cardTapTrack) return; // 既に別の指(pointerId)で矩形選択/単体タップ判定中なら、2本目は無視する
     if (event.shiftKey) return; // Shift中は通常操作(パン/カード移動)に譲る
     if (event.target.closest('.fe-bar, .fe-panel, .fe-history-panel, .fe-preview-overlay')) return;
     if (event.target.closest('.star-card-handle, .star-card-hex, button, textarea, input, a')) return;

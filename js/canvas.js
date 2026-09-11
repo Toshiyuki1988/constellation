@@ -418,7 +418,10 @@ function attachCardGestures(el) {
       card.x = parseFloat(el.dataset.x) || 0;
       card.y = parseFloat(el.dataset.y) || 0;
     }
-    interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
+    // Flight Engineer起動中は背景パンをそのモジュールが占有しているため、ここで無条件に
+    // 有効化すると(PCでShiftキー併用時にカード移動/ASTR接続の終了経路をここも通るため)
+    // 矩形選択モードなのにパンが復活してしまう。そちらがアクティブな間はパンを有効化しない。
+    interact(viewportEl).draggable({ enabled: !(window.isFlightEngineerActive && window.isFlightEngineerActive()) }).gesturable({ enabled: true });
     stopAutoPan();
     scheduleAutoSave();
   }
@@ -574,7 +577,10 @@ function attachCardGestures(el) {
         if (!handleResize || event.pointerId !== handleResize.pointerId) return;
         commitHandleResize();
         handleResize = null;
-        interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
+        // Flight Engineer起動中は背景パンをそのモジュールが占有しているため、ここで無条件に
+    // 有効化すると(PCでShiftキー併用時にカード移動/ASTR接続の終了経路をここも通るため)
+    // 矩形選択モードなのにパンが復活してしまう。そちらがアクティブな間はパンを有効化しない。
+    interact(viewportEl).draggable({ enabled: !(window.isFlightEngineerActive && window.isFlightEngineerActive()) }).gesturable({ enabled: true });
       });
     });
   });
@@ -650,7 +656,10 @@ function attachAstrGesture(el) {
     }
     setTarget(null);
     stopAutoPan();
-    interact(viewportEl).draggable({ enabled: true }).gesturable({ enabled: true });
+    // Flight Engineer起動中は背景パンをそのモジュールが占有しているため、ここで無条件に
+    // 有効化すると(PCでShiftキー併用時にカード移動/ASTR接続の終了経路をここも通るため)
+    // 矩形選択モードなのにパンが復活してしまう。そちらがアクティブな間はパンを有効化しない。
+    interact(viewportEl).draggable({ enabled: !(window.isFlightEngineerActive && window.isFlightEngineerActive()) }).gesturable({ enabled: true });
   }
 
   hexEl.addEventListener('pointerdown', (event) => {

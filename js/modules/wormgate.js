@@ -382,6 +382,7 @@
   let pointerDownRotation = 0;
   let pointerDownChipIndex = null;
   let tickAccum = 0;
+  let activePointerId = null;
 
   function pointerAngle(clientX, clientY) {
     const rect = wgEls.track.getBoundingClientRect();
@@ -392,8 +393,10 @@
 
   function onTrackPointerDown(e) {
     if (!photos.length) return;
+    if (pointerActive) return; // 既に別の指(pointerId)で操作中なら、2本目は無視する
     soundAudioCtx();
     pointerActive = true;
+    activePointerId = e.pointerId;
     hasDragged = false;
     tickAccum = 0;
     pointerDownClient = { x: e.clientX, y: e.clientY };
@@ -405,7 +408,7 @@
   }
 
   function onTrackPointerMove(e) {
-    if (!pointerActive) return;
+    if (!pointerActive || e.pointerId !== activePointerId) return;
     const moved = Math.hypot(e.clientX - pointerDownClient.x, e.clientY - pointerDownClient.y);
     if (!hasDragged && moved < DRAG_START_TOLERANCE_PX) return;
     if (!hasDragged) {
@@ -423,9 +426,10 @@
     }
   }
 
-  function onTrackPointerEnd() {
-    if (!pointerActive) return;
+  function onTrackPointerEnd(e) {
+    if (!pointerActive || (e && e.pointerId !== activePointerId)) return;
     pointerActive = false;
+    activePointerId = null;
     wgEls.track.classList.remove('grabbing');
     if (hasDragged) {
       animateRotationTo(angleTo(activeIndex), 260, refreshActiveFullImage);

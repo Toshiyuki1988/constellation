@@ -4679,9 +4679,10 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
 async function uploadCardFileInBackground(card, blob, filename, signal) {
   card.uploadQueued = false;
   card.uploadPending = true;
+  card.uploadFailed = false; // 再送信を始めた時点で、前回失敗の赤バッジを一旦消す(送信中に紛らわしいため)
   const startEl = cardElById(card.id);
   if (startEl) {
-    startEl.classList.remove('star-card--upload-queued');
+    startEl.classList.remove('star-card--upload-queued', 'star-card--upload-failed');
     startEl.classList.add('star-card--upload-pending');
     updateCardStatusBadges(startEl, card);
   }
@@ -4698,7 +4699,12 @@ async function uploadCardFileInBackground(card, blob, filename, signal) {
       observeMediaForLazyLoad(el, card);
       updateCardStatusBadges(el, card);
     }
-    scheduleAutoSave();
+    // アップロード成功直後、js/upload-queue.jsのuploadQueuedEntry()がIndexedDB上の
+    // 実データを即座に削除する。scheduleAutoSave()のデバウンス(1.2秒)が終わる前に
+    // タブが閉じられると、imageFileIdがDrive上のJSONへ反映されないまま実データだけ
+    // 消え、そのカードがDrive上のファイルへ二度とたどり着けなくなるため、デバウンスを
+    // 待たず即座に保存する。
+    saveImmediately();
     return true;
   } catch (err) {
     const el = cardElById(card.id);
