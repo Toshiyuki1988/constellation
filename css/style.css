@@ -877,7 +877,7 @@ html, body {
    (js/app.jsのshowMemoOverlay())で読む設計にした。 */
 .star-card-memo-shell { position: relative; }
 .star-card-memo-view--peek {
-  max-height: 62px;
+  max-height: 71px; /* 3行分表示(2026年9月、2行分の62pxから拡大) */
   overflow: hidden;
   position: relative;
 }

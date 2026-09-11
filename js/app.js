@@ -1342,7 +1342,7 @@ function renderCard(card) {
       ${isTextCard ? '' : `<div class="star-card-media star-card-media-${mediaType}"></div>
       <div class="star-card-status-badges">
         <span class="star-card-badge star-card-badge--drive" hidden></span>
-        <span class="star-card-badge star-card-badge--device" hidden>📵 端末未保存</span>
+        <span class="star-card-badge star-card-badge--device" hidden title="タップで端末保存済みにする(この表示を消す)">📵 端末未保存</span>
       </div>`}
       ${crewHeadHtml}
       ${memoFieldHtml(card, hasMemo)}
@@ -1360,6 +1360,24 @@ function renderCard(card) {
     memoExpandBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       showMemoOverlay(card);
+    });
+  }
+
+  // 「📵 端末未保存」バッジは、iPhoneで撮影後すぐ端末に残っている写真や、Googleフォト等
+  // からドラッグ&ドロップで取り込んだ写真など「そもそも端末へ改めて保存する必要が無い」
+  // ケースでも一律に表示され続けてしまう。タップで手動的に「端末保存済み」扱いにして
+  // 消せるようにした(2026年9月追加)。
+  const deviceBadgeEl = el.querySelector('.star-card-badge--device');
+  if (deviceBadgeEl) {
+    deviceBadgeEl.style.pointerEvents = 'auto';
+    deviceBadgeEl.style.cursor = 'pointer';
+    deviceBadgeEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    deviceBadgeEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      card.deviceSaved = true;
+      updateCardStatusBadges(el, card);
+      scheduleAutoSave();
+      setStatus('「端末未保存」の表示を消しました');
     });
   }
 
@@ -4153,10 +4171,8 @@ async function handleCardCaption(card, el) {
  */
 async function handleCardExtract(card, el) {
   if (card.mediaType !== 'image') return;
-  if (!card.imageFileId) {
-    if (card.uploadQueued) {
-      setStatus('Driveへまだ送信していません。設定の「☁ Driveへ送信」を押してから試してください');
-    } else if (card.uploadPending) {
+  if (!card.imageFileId && !card.uploadQueued) {
+    if (card.uploadPending) {
       setStatus('アップロード中です。少し待ってから試してください');
     } else {
       setStatus('画像が読み込めないため抽出できません');
@@ -4167,8 +4183,16 @@ async function handleCardExtract(card, el) {
   setStatus('画像を読み込み中…', { busy: true });
   let originalBlob;
   try {
-    const blobUrl = await getFileBlobUrlCached(card.imageFileId);
-    originalBlob = await (await fetch(blobUrl)).blob();
+    // Drive未送信(uploadQueued)でも、高解像度の元データは待機列(IndexedDB)に既に
+    // まるごと存在している。loadFullMedia()と同じフォールバックで、Driveへ送信するまで
+    // Extractが一切使えない状態を避ける(2026年9月修正)。
+    if (!card.imageFileId && card.uploadQueued && typeof getQueuedEntryBlob === 'function') {
+      originalBlob = await getQueuedEntryBlob(card.id);
+      if (!originalBlob) throw new Error('端末に保存された元データが見つかりませんでした');
+    } else {
+      const blobUrl = await getFileBlobUrlCached(card.imageFileId);
+      originalBlob = await (await fetch(blobUrl)).blob();
+    }
   } catch (err) {
     console.error(err);
     setStatus(`画像の読み込みに失敗しました: ${err.message}`, { important: true });
@@ -4221,15 +4245,24 @@ async function handleCardExtract(card, el) {
 
   if (choice === 'discard') {
     const oldFileId = card.imageFileId;
+    const wasQueued = Boolean(card.uploadQueued);
     card.mediaType = 'text';
     card.memo = text;
     card.imageFileId = null;
     delete card.thumbDataUrl;
     delete card.uploadPending;
     delete card.uploadFailed;
+    // **card.uploadQueuedは意図的にそのまま残す**: まだDriveへ一度も送っていない元データは
+    // 待機列(IndexedDB)にしか実体が無い。「アプリ側からオリジナルの画像データを消す機能は
+    // 一切作らない」という絶対条件はDrive上のファイルだけでなくこの待機列の実データにも
+    // 適用されるべきと考え、テクストカードへ切り替わった後も通常通りバックグラウンドで
+    // Driveへアップロードされるに任せる(結果としてテクストカードにimageFileIdが付くだけの
+    // 見た目に影響しない副作用だが、データを守ることを優先した)。
     blobUrlCache.delete(oldFileId);
     rerenderCardInPlace(card, el);
-    setStatus('テクストカードに変換しました(Drive上の元画像は残しています)');
+    setStatus(wasQueued
+      ? 'テクストカードに変換しました(元の写真データは引き続きDriveへ送信されます)'
+      : 'テクストカードに変換しました(Drive上の元画像は残しています)');
     scheduleAutoSave();
   } else {
     // 元の写真カードには触れず、抽出した文字だけを新しいテクストカードとして出す
@@ -4409,15 +4442,21 @@ function getCardById(id) {
 }
 
 async function handleImageSelected(event) {
-  const file = event.target.files[0];
+  const files = Array.from(event.target.files || []);
   event.target.value = '';
-  if (!file) return;
+  if (files.length === 0) return;
 
-  await createCardFromCapture({
-    blob: file,
-    filename: `${Date.now()}-${file.name}`,
-    mediaType: 'image',
-  });
+  // 端末の「写真」アプリ等から複数枚まとめて選んだ場合、1枚ずつ順番にカード化する
+  // (handleViewportDrop()の複数ドロップ処理と同じ考え方)。位置はcreateCardFromCapture()内の
+  // newCardSpawnPos()が呼び出すたびランダムにずらすため、重ならず自然に散らばる。
+  for (const file of files) {
+    await createCardFromCapture({
+      blob: file,
+      filename: `${Date.now()}-${file.name}`,
+      mediaType: 'image',
+    });
+  }
+  if (files.length > 1) setStatus(`${files.length}枚追加しました`);
 }
 
 /**
