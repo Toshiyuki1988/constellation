@@ -439,6 +439,23 @@ html, body {
 }
 @keyframes ocr-pip-spin { to { transform: rotate(360deg); } }
 
+/* 読み取りが電波不良等でいつまでも終わらない場合の中止手段(2026年9月追加)。
+   親の#ocr-pipはpointer-events:noneだが、このボタンだけ個別に有効化する。 */
+#ocr-pip-cancel {
+  pointer-events: auto;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+#ocr-pip-cancel:active { background: rgba(255, 255, 255, 0.32); }
+
 /* ---------- テキスト選択時の「Googleで検索」ポップアップ(js/app.jsのinitTextSearchPopup()、
    2026年9月追加) ----------
    キャンバス全体でcontextmenuをpreventDefault()しているため(js/canvas.js)、カード内の

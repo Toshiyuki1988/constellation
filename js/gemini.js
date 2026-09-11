@@ -8,14 +8,43 @@
 
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 
+// 展覧会場は電波状況が悪いことがあり、fetch()自体には既定でタイムアウトが無いため、
+// 圏外/極端な低速回線だと応答がいつまでも返らず、呼び出し元(OCRのPiP表示等)が
+// 「読み取り中…」のまま永久に固まって見える不具合があった(2026年9月、実機報告)。
+// 一定時間で必ずエラーとして諦め、呼び出し元がユーザーに知らせて再試行できるようにする。
+const GEMINI_TIMEOUT_MS = 30000;
+
+/**
+ * 外部から渡されたsignal(ユーザーによる明示キャンセル用)と、内部のタイムアウトを
+ * 1つのAbortSignalへ合成する。どちらが理由でabortしたかは、fetch失敗時に
+ * `signal.aborted`(外部signal)を見て判別する。
+ */
+function withTimeoutSignal(externalSignal, ms) {
+  const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener('abort', onExternalAbort);
+  }
+  const timer = setTimeout(() => controller.abort(), ms);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
+
 /**
  * @param {{prompt: string, imageBase64?: string, mimeType?: string,
- *   images?: {base64: string, mimeType?: string}[], tools?: object[]}} params
+ *   images?: {base64: string, mimeType?: string}[], tools?: object[], signal?: AbortSignal}} params
  *   imageBase64/mimeTypeは画像1枚だけの場合の簡易指定。複数枚送りたい場合はimagesを使う
  *   (両方指定した場合はimageBase64側が先に追加される)。
+ *   signal: 呼び出し元が明示的にキャンセルしたい場合に渡す(例: OCRのPiP表示の✕ボタン)。
  * @returns {Promise<string>} 生成されたテキスト
  */
-async function askGemini({ prompt, imageBase64, mimeType, images, tools }) {
+async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal }) {
   const parts = [{ text: prompt }];
   if (imageBase64) {
     parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } });
@@ -27,21 +56,41 @@ async function askGemini({ prompt, imageBase64, mimeType, images, tools }) {
   const body = { contents: [{ parts }] };
   if (tools) body.tools = tools;
 
-  const res = await fetch(`${GEMINI_API}/models/${CONFIG.GEMINI_MODEL}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': CONFIG.GEMINI_API_KEY,
-    },
-    body: JSON.stringify(body),
-  });
+  const { signal: fetchSignal, cleanup } = withTimeoutSignal(signal, GEMINI_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${GEMINI_API}/models/${CONFIG.GEMINI_MODEL}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': CONFIG.GEMINI_API_KEY,
+      },
+      body: JSON.stringify(body),
+      signal: fetchSignal,
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      const wasUserCancel = Boolean(signal && signal.aborted);
+      const e = new Error(
+        wasUserCancel
+          ? 'キャンセルされました'
+          : `Gemini APIの応答がありません(${GEMINI_TIMEOUT_MS / 1000}秒でタイムアウトしました)。電波状況をご確認のうえもう一度お試しください`
+      );
+      e.cancelled = wasUserCancel;
+      e.timedOut = !wasUserCancel;
+      throw e;
+    }
+    throw err;
+  } finally {
+    cleanup();
+  }
   if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') ?? '';
 }
 
 /** 画像内のキャプション文字(作品名・作者名など)をOCR的に抽出する */
-async function ocrImage(blob) {
+async function ocrImage(blob, { signal } = {}) {
   const imageBase64 = await blobToBase64(blob);
   const raw = await askGemini({
     prompt:
@@ -51,6 +100,7 @@ async function ocrImage(blob) {
       'テキストが見当たらない場合は「(テキストなし)」とだけ返してください。',
     imageBase64,
     mimeType: blob.type,
+    signal,
   });
   return raw.trim();
 }

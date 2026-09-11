@@ -39,6 +39,15 @@ let currentTiltLayer = null;
 let currentTiltPulse = null;
 let orientationEnabled = false;
 
+// ピンチズーム(2026年9月追加)。track.getCapabilities().zoomが公開されている端末では
+// 実際のセンサー/光学ズームをapplyConstraints()で制御し(camZoomNative=true)、非対応の
+// 端末(iOS Safari等、実機ではほぼこちら)ではCSSのtransform:scaleでプレビューを拡大し、
+// 撮影時のクロップ範囲も同じ倍率だけ狭める「デジタルズーム」にフォールバックする。
+let camZoomScale = 1;
+let camZoomNative = false;
+let camZoomCaps = null; // {min, max, step} | null
+const CAM_ZOOM_DIGITAL_MAX = 4;
+
 let camMediaRecorder = null;
 let camRecordedChunks = [];
 let camRecordTimerId = null;
@@ -72,6 +81,7 @@ function ensureCameraDom() {
     tiltLayerPhoto: document.getElementById('tilt-layer-photo'),
     alignPulsePhoto: document.getElementById('align-pulse-photo'),
     focusLayerPhoto: document.getElementById('focus-layer-photo'),
+    zoomBadgePhoto: document.getElementById('zoom-badge-photo'),
     shutterPhoto: document.getElementById('camera-shutter-photo'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
@@ -80,6 +90,7 @@ function ensureCameraDom() {
     tiltLayerCaption: document.getElementById('tilt-layer-caption'),
     alignPulseCaption: document.getElementById('align-pulse-caption'),
     focusLayerCaption: document.getElementById('focus-layer-caption'),
+    zoomBadgeCaption: document.getElementById('zoom-badge-caption'),
     capBtn: document.getElementById('camera-cap-btn'),
     freezeWrap: document.getElementById('caption-freeze-wrap'),
     selectLayer: document.getElementById('caption-select-layer'),
@@ -92,6 +103,7 @@ function ensureCameraDom() {
     videoVideo: document.getElementById('camera-video-video'),
     videoDot: document.getElementById('video-rec-dot'),
     videoTime: document.getElementById('video-time'),
+    zoomBadgeVideo: document.getElementById('zoom-badge-video'),
     videoRecBtn: document.getElementById('camera-video-rec-btn'),
 
     audioWavePath: document.getElementById('audio-wave-path'),
@@ -104,6 +116,7 @@ function ensureCameraDom() {
 
 function wireCameraEvents() {
   camEls.closeBtn.addEventListener('click', closeCamera);
+  wireDesktopTrackpadZoomGuard();
 
   camEls.shutterPhoto.addEventListener('click', capturePhoto);
   camEls.capBtn.addEventListener('click', captureForSelection);
@@ -128,6 +141,10 @@ function wireCameraEvents() {
 
   wireTapFocus(camEls.photoScreen, camEls.focusLayerPhoto, () => camEls.videoPhoto);
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
+
+  wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
+  wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
+  wirePinchZoom(camEls.videoScreen, camEls.videoVideo, camEls.zoomBadgeVideo);
 }
 
 function isRecording() {
@@ -144,6 +161,7 @@ async function switchCameraMode(mode) {
     camMode = mode;
     updateScreenVisibility();
     clearCameraError();
+    resetCamZoom(activeZoomEls(mode));
 
     try {
       await acquireStreamForMode(mode);
@@ -220,6 +238,8 @@ async function maximizeVideoTrackResolution(stream) {
     return;
   }
   camDebugLog(`カメラ対応幅: width.max=${caps.width && caps.width.max} height.max=${caps.height && caps.height.max}`);
+  logCameraControlCapabilities(caps);
+  camZoomCaps = caps.zoom || null; // ピンチズームで実際のセンサー/光学ズームを使えるかどうか(js/camera.jsのsetCamZoom()参照)
   if (!caps.width || !caps.width.max || !caps.height || !caps.height.max) return;
   if (before && caps.width.max <= before.width && caps.height.max <= before.height) return; // 既に上限に達している
   try {
@@ -229,6 +249,24 @@ async function maximizeVideoTrackResolution(stream) {
   } catch (err) {
     camDebugLog(`applyConstraints失敗: ${err && err.message ? err.message : err}`);
   }
+}
+
+/**
+ * 段階ズーム・手動フォーカス・ホワイトバランスをどこまで作り込めるかは、この端末・ブラウザの
+ * MediaStreamTrack Capabilities(Image Capture拡張)が何を公開しているか次第で、対応状況が
+ * 機種ごとに大きく異なる(特にこのプロジェクトの主要環境であるiOS Safariは対応が薄いと
+ * 見られる)。実装に着手する前に、まず実機で何が実際に使えるかをここでログに残す
+ * (2026年9月追加)。?debug付きURLの🐞パネルで確認する。
+ */
+function logCameraControlCapabilities(caps) {
+  const fields = [
+    'zoom', 'focusMode', 'focusDistance', 'whiteBalanceMode', 'colorTemperature',
+    'torch', 'exposureMode', 'exposureCompensation', 'exposureTime', 'iso', 'brightness', 'contrast',
+  ];
+  const summary = fields
+    .map((f) => `${f}=${caps[f] !== undefined ? JSON.stringify(caps[f]) : '(非対応)'}`)
+    .join(' / ');
+  camDebugLog(`カメラ機能調査: ${summary}`);
 }
 
 function stopCameraStream() {
@@ -362,14 +400,178 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
   });
 }
 
+/* ---------------- ピンチズーム(2026年9月追加) ----------------
+ * 2本指のピンチ距離の変化率をcamZoomScaleへ反映する。#camera-overlay/.cam-screenに
+ * touch-action:noneを付けてあるため(css/camera.css)、ブラウザ標準のページ全体の
+ * ピンチズームとは競合しない(以前はこれが無く、ピンチすると画面ごとズームされ
+ * シャッターボタンが見切れる不具合があった)。 */
+
+function maxZoomForCurrentTrack() {
+  return (camZoomCaps && camZoomCaps.max) ? camZoomCaps.max : CAM_ZOOM_DIGITAL_MAX;
+}
+
+/** 現在のモードのvideo要素・ズーム倍率表示バッジを返す(resetCamZoom()から使う) */
+function activeZoomEls(mode) {
+  if (mode === 'photo') return { videoEl: camEls.videoPhoto, badgeEl: camEls.zoomBadgePhoto };
+  if (mode === 'caption') return { videoEl: camEls.videoCaption, badgeEl: camEls.zoomBadgeCaption };
+  if (mode === 'video') return { videoEl: camEls.videoVideo, badgeEl: camEls.zoomBadgeVideo };
+  return null;
+}
+
+/** モード切り替えのたびにズーム状態を1倍へ戻す(新しいストリームごとに仕切り直す) */
+function resetCamZoom(target) {
+  camZoomScale = 1;
+  camZoomNative = false;
+  camZoomCaps = null;
+  if (target && target.videoEl) target.videoEl.style.transform = '';
+  if (target && target.badgeEl) target.badgeEl.hidden = true;
+}
+
+function updateZoomBadge(badgeEl) {
+  if (!badgeEl) return;
+  if (camZoomScale <= 1.02) {
+    badgeEl.hidden = true;
+    return;
+  }
+  badgeEl.hidden = false;
+  badgeEl.textContent = `${camZoomScale.toFixed(1)}x${camZoomNative ? '' : ' (デジタル)'}`;
+}
+
+function setCamZoom(scale, videoEl, badgeEl) {
+  const max = maxZoomForCurrentTrack();
+  camZoomScale = Math.max(1, Math.min(max, scale));
+  if (camZoomCaps && camZoomCaps.max) {
+    // ネイティブ制御が使える端末では実際のセンサー/光学ズームを動かす。videoWidth/videoHeightは
+    // ブラウザ側が既にズーム後のフレームを返すため、captureFrameToCanvas側の追加クロップは不要。
+    camZoomNative = true;
+    videoEl.style.transform = '';
+    const track = camStream && camStream.getVideoTracks()[0];
+    if (track) {
+      track.applyConstraints({ advanced: [{ zoom: camZoomScale }] }).catch((err) => {
+        camDebugLog(`ズームapplyConstraints失敗: ${err && err.message ? err.message : err}`);
+      });
+    }
+  } else {
+    // 非対応端末向けのフォールバック: プレビューをCSSで拡大して見せ、実際の撮影時にも
+    // captureFrameToCanvas()で同じ倍率だけクロップ範囲を狭める(WYSIWYGを保つ)。
+    camZoomNative = false;
+    videoEl.style.transform = `scale(${camZoomScale})`;
+  }
+  updateZoomBadge(badgeEl);
+}
+
+/** 現在の撮影に使うべきデジタルズーム倍率(ネイティブズーム中は1、それ以外はcamZoomScale) */
+function currentDigitalZoomForCapture() {
+  return camZoomNative ? 1 : camZoomScale;
+}
+
+function wirePinchZoom(screenEl, videoEl, badgeEl) {
+  const pointers = new Map();
+  let pinchStartDist = null;
+  let pinchStartScale = 1;
+
+  function pinchDistance() {
+    const pts = Array.from(pointers.values());
+    if (pts.length < 2) return null;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+
+  screenEl.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, .cam-select-layer')) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      pinchStartDist = pinchDistance();
+      pinchStartScale = camZoomScale;
+    }
+  });
+  screenEl.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2 && pinchStartDist) {
+      const d = pinchDistance();
+      if (d) setCamZoom(pinchStartScale * (d / pinchStartDist), videoEl, badgeEl);
+    }
+  });
+  const releasePointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchStartDist = null;
+  };
+  screenEl.addEventListener('pointerup', releasePointer);
+  screenEl.addEventListener('pointercancel', releasePointer);
+}
+
+/**
+ * トラックパッドでのピンチ(PCでの動作確認時)は指でのタッチではなくホイールイベント
+ * (Chrome/Edge: ctrlKey付きのwheel)またはWebKit独自のgestureイベント(Safari)として
+ * 発火するため、touch-action: none(タッチ操作のみが対象)では防げず、ブラウザ標準の
+ * ページ全体の拡大(Ctrl+スクロールズームと同じ仕組み)がそのまま起きてしまう
+ * (2026年9月、PCでの実機確認時に再発報告)。カメラオーバーレイを開いている間だけ、
+ * これらのイベントを止める。
+ */
+function wireDesktopTrackpadZoomGuard() {
+  const stopIfZoomGesture = (e) => {
+    if (e.ctrlKey) e.preventDefault();
+  };
+  camEls.overlay.addEventListener('wheel', stopIfZoomGesture, { passive: false });
+  camEls.overlay.addEventListener('gesturestart', (e) => e.preventDefault());
+  camEls.overlay.addEventListener('gesturechange', (e) => e.preventDefault());
+}
+
 /* ---------------- 撮影(canvasへフレーム描画してBlob化) ---------------- */
 
-function captureFrameToCanvas(videoEl, maxEdge) {
+/**
+ * プレビューの<video>はCSSで object-fit: cover になっており(css/camera.css)、
+ * 画面のアスペクト比とカメラの生センサー比が違う端末では、はみ出た部分が
+ * 画面上では見えないよう自動的に切り取られて表示されている。以前はここで
+ * videoEl.videoWidth/videoHeightの生フレーム全体をそのまま撮影していたため、
+ * 「画面で見ていた構図より実際の写真の方が一回り大きく写り込む」(2026年9月、
+ * 実機報告)という、プレビューと撮影結果が一致しない不具合があった。
+ * 画面上の実際の表示矩形を基準に、CSSのcover同様の中央クロップをここでも行うことで、
+ * プレビューで見た構図と撮影結果を一致させる。
+ */
+function computeCoverCropRect(containerW, containerH, srcW, srcH) {
+  const containerRatio = containerW / containerH;
+  const srcRatio = srcW / srcH;
+  let cropW = srcW;
+  let cropH = srcH;
+  if (srcRatio > containerRatio) {
+    cropW = srcH * containerRatio; // 横方向が余るので左右を切り詰める
+  } else {
+    cropH = srcW / containerRatio; // 縦方向が余るので上下を切り詰める
+  }
+  return { sx: (srcW - cropW) / 2, sy: (srcH - cropH) / 2, sw: cropW, sh: cropH };
+}
+
+/**
+ * @param {number} [digitalZoom] ネイティブズームが使えない端末でのピンチズーム倍率
+ *   (js/camera.jsのsetCamZoom()参照)。1より大きい場合、cover相当のクロップ矩形を
+ *   さらに中心から同じ倍率だけ狭め、プレビューで見た拡大結果と撮影結果を一致させる。
+ */
+function captureFrameToCanvas(videoEl, maxEdge, digitalZoom = 1) {
   const vw = videoEl.videoWidth;
   const vh = videoEl.videoHeight;
   if (!vw || !vh) throw new Error('カメラ映像の準備ができていません');
-  let w = vw;
-  let h = vh;
+
+  // videoEl自体はピンチズーム中CSSのtransform:scaleが掛かっており、そのgetBoundingClientRect()は
+  // 拡大後のサイズを返してしまう(cover計算が二重にズームされて狂う)ため、transformの影響を
+  // 受けない親要素(.cam-screen、常に画面いっぱい)を基準にする。
+  const containerEl = videoEl.parentElement || videoEl;
+  const rect = containerEl.getBoundingClientRect();
+  let { sx, sy, sw, sh } = (rect.width > 0 && rect.height > 0)
+    ? computeCoverCropRect(rect.width, rect.height, vw, vh)
+    : { sx: 0, sy: 0, sw: vw, sh: vh };
+
+  if (digitalZoom > 1) {
+    const zw = sw / digitalZoom;
+    const zh = sh / digitalZoom;
+    sx += (sw - zw) / 2;
+    sy += (sh - zh) / 2;
+    sw = zw;
+    sh = zh;
+  }
+
+  let w = sw;
+  let h = sh;
   const longest = Math.max(w, h);
   if (longest > maxEdge) {
     const s = maxEdge / longest;
@@ -379,7 +581,7 @@ function captureFrameToCanvas(videoEl, maxEdge) {
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
-  canvas.getContext('2d').drawImage(videoEl, 0, 0, w, h);
+  canvas.getContext('2d').drawImage(videoEl, sx, sy, sw, sh, 0, 0, w, h);
   return canvas;
 }
 
@@ -403,7 +605,7 @@ async function capturePhoto() {
     // 時間が体感できるほど増え、「ボタンを押してから音が鳴るまでの間」が開いて
     // 「つんのめる」ような体感になった(実機報告)。エンコード完了を待たず、フレームが
     // 確定した直後にシャッター音を鳴らすことで、実際の撮影タイミングと音を一致させる。
-    const canvas = captureFrameToCanvas(camEls.videoPhoto, 3840);
+    const canvas = captureFrameToCanvas(camEls.videoPhoto, 3840, currentDigitalZoomForCapture());
     playShutter();
     const blob = await canvasToBlob(canvas, 0.88);
     finishCamera({ kind: 'photo', blob });
@@ -454,7 +656,7 @@ async function captureForSelection() {
   if (!camStream) return;
   camEls.capBtn.disabled = true;
   try {
-    const canvas = captureFrameToCanvas(camEls.videoCaption, 2400);
+    const canvas = captureFrameToCanvas(camEls.videoCaption, 2400, currentDigitalZoomForCapture());
     playShutter();
     enterSelectionMode(canvas);
   } catch (err) {
@@ -611,9 +813,14 @@ async function handleSelectionRun() {
  * 一切変更せずに済む。 */
 
 let ocrPipJobCount = 0;
+const ocrActiveControllers = new Set(); // 進行中のOCR呼び出しのAbortController(PiPの✕ボタンで全件キャンセルする)
 
 function ocrPipEls() {
-  return { pip: document.getElementById('ocr-pip'), text: document.getElementById('ocr-pip-text') };
+  return {
+    pip: document.getElementById('ocr-pip'),
+    text: document.getElementById('ocr-pip-text'),
+    cancelBtn: document.getElementById('ocr-pip-cancel'),
+  };
 }
 
 function updateOcrPip() {
@@ -622,6 +829,18 @@ function updateOcrPip() {
   pip.hidden = ocrPipJobCount <= 0;
   text.textContent = ocrPipJobCount > 1 ? `読み取り中…(${ocrPipJobCount}件)` : '読み取り中…';
 }
+
+/** 電波状況が悪い等でGeminiの応答がいつまでも返らない場合に、ユーザー自身が
+ *  中止できるようにする(2026年9月追加。以前はタイムアウトも中止手段も無く、
+ *  「読み取り中…」のまま永久に固まって見える不具合があった)。 */
+function wireOcrPipCancelButton() {
+  const { cancelBtn } = ocrPipEls();
+  if (!cancelBtn) return;
+  cancelBtn.addEventListener('click', () => {
+    ocrActiveControllers.forEach((c) => c.abort());
+  });
+}
+wireOcrPipCancelButton();
 
 /** カメラのUIだけを片付け(ストリーム停止・オーバーレイを閉じる)、このcaption呼び出し専用の
  *  resolveを切り離して返す。切り離した後は次のopenCamera()呼び出しと完全に独立して扱える。 */
@@ -638,8 +857,10 @@ function detachCameraForBackgroundOcr() {
  *  安全に合流する)。 */
 function runOcrInBackground(blob, resolve) {
   ocrPipJobCount++;
+  const controller = new AbortController();
+  ocrActiveControllers.add(controller);
   updateOcrPip();
-  ocrImage(blob)
+  ocrImage(blob, { signal: controller.signal })
     .then((text) => {
       camDebugLog(`OCR結果: ${JSON.stringify(text)}`);
       if (!text || text.includes('(テキストなし)')) {
@@ -653,10 +874,15 @@ function runOcrInBackground(blob, resolve) {
     .catch((err) => {
       console.error(err);
       camDebugLog('OCRエラー: ' + err.message);
-      if (typeof setStatus === 'function') setStatus(`読み取りに失敗しました: ${err.message}`, { important: true });
+      if (err && err.cancelled) {
+        if (typeof setStatus === 'function') setStatus('読み取りを中止しました');
+      } else {
+        if (typeof setStatus === 'function') setStatus(`読み取りに失敗しました: ${err.message}`, { important: true });
+      }
       resolve(null);
     })
     .finally(() => {
+      ocrActiveControllers.delete(controller);
       ocrPipJobCount--;
       updateOcrPip();
     });
