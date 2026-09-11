@@ -61,11 +61,41 @@ let camWaveRAF = null;
 /** @param {'photo'|'caption'|'video'|'audio'} initialMode */
 function openCamera(initialMode) {
   ensureCameraDom();
+  bindCameraViewportSync();
+  syncCameraOverlayToVisualViewport();
   return new Promise((resolve) => {
     resolveCamera = resolve;
     camEls.overlay.classList.add('open');
     switchCameraMode(initialMode || 'photo');
   });
+}
+
+/* ---------------- visualViewportに基づく実サイズ同期(2026年9月追加) ----------------
+ * CSSのdvh/dvwだけ(#camera-overlay、css/camera.css)による対応では、実機で「ブラウザの
+ * ヘッダー・ボトムバー分、プレビューで見えている範囲より実際の写真の方が上下に広く写る」
+ * 不具合が解消しなかった。position:fixed要素に対してdvh/dvwがアドレスバー・ボトムバーの
+ * 表示状態をどこまで正確に反映するかはブラウザの実装に委ねられる部分が残るため、より確実な
+ * 手段として、ブラウザが「今まさに実際に見えている範囲」を直接教えてくれるwindow.visualViewport
+ * (Safari/Chrome双方で対応)を使い、#camera-overlayの実サイズ・位置をJSから直接同値に
+ * 同期する。これにより、js/camera.jsのcomputeCoverCropRect()が読むgetBoundingClientRect()の
+ * 値も、常に「ユーザーが実際に見ている範囲」と一致するようになる(CSSのdvh/dvwは
+ * visualViewport非対応の環境向けのフォールバックとして残す)。 */
+let camViewportSyncBound = false;
+
+function syncCameraOverlayToVisualViewport() {
+  if (!camEls || !window.visualViewport) return;
+  const vv = window.visualViewport;
+  camEls.overlay.style.width = `${vv.width}px`;
+  camEls.overlay.style.height = `${vv.height}px`;
+  camEls.overlay.style.left = `${vv.offsetLeft}px`;
+  camEls.overlay.style.top = `${vv.offsetTop}px`;
+}
+
+function bindCameraViewportSync() {
+  if (camViewportSyncBound || !window.visualViewport) return;
+  camViewportSyncBound = true;
+  window.visualViewport.addEventListener('resize', syncCameraOverlayToVisualViewport);
+  window.visualViewport.addEventListener('scroll', syncCameraOverlayToVisualViewport);
 }
 
 function ensureCameraDom() {
