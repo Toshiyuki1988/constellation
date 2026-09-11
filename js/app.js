@@ -4702,7 +4702,28 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
       updateCardStatusBadges(el, card);
     }
     setStatus('追加しました。アップロード中…', { busy: true });
-    uploadCardFileInBackground(card, blob, filename);
+    const uploaded = await uploadCardFileInBackground(card, blob, filename);
+    if (!uploaded) {
+      // **2026年9月修正**: 以前はここで失敗すると、そのカードは待機列(IndexedDB)に一度も
+      // 載らないまま`card.uploadFailed = true`だけが残り、「☁ Driveへ送信」ボタンは待機列の
+      // 中身しか見ないため、このカードを二度と拾えない(=手動での再送信手段が無い)dead endに
+      // なっていた。ここでBlobがまだメモリ上に残っているうちに、もう一度だけ待機列への保存を
+      // 試みることで、後から「☁ Driveへ送信」ボタンで再挑戦できる状態に戻す(写真を失わないことを
+      // 最優先する既存方針の徹底)。
+      const retried = await persistToUploadQueue(card, blob, filename);
+      if (retried) {
+        card.uploadQueued = true;
+        card.uploadFailed = false;
+        const retryEl = cardElById(card.id);
+        if (retryEl) {
+          retryEl.classList.remove('star-card--upload-failed');
+          retryEl.classList.add('star-card--upload-queued');
+          updateCardStatusBadges(retryEl, card);
+        }
+        setStatus('送信に失敗しましたが端末に保存しました。設定の「☁ Driveへ送信」から再送信できます', { important: true });
+        scheduleAutoSave();
+      }
+    }
   }
   return card;
 }
