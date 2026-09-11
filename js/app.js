@@ -132,6 +132,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   els.toolUpload.addEventListener('click', () => els.imageInput.click());
   els.imageInput.addEventListener('change', handleImageSelected);
+  els.retryUploadInput = document.getElementById('retry-upload-input');
+  if (els.retryUploadInput) els.retryUploadInput.addEventListener('change', handleRetryUploadSelected);
   els.toolCamera.addEventListener('click', () => handleOpenCamera('photo'));
   els.toolText.addEventListener('click', handleOpenTextTool);
   els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
@@ -536,16 +538,22 @@ function updateCardStatusBadges(el, card) {
       driveBadge.hidden = true;
     } else if (card.uploadFailed) {
       driveBadge.hidden = false;
-      driveBadge.textContent = '⚠ Drive未送信(失敗)';
+      driveBadge.textContent = '⚠ Drive未送信(失敗・タップで再試行)';
       driveBadge.classList.add('star-card-badge--urgent');
+      driveBadge.style.cursor = 'pointer';
+      driveBadge.title = '同じ写真・動画・音声を選び直して、もう一度送信できるようにします';
     } else if (card.uploadPending) {
       driveBadge.hidden = false;
       driveBadge.textContent = '⏳ Drive送信中…';
       driveBadge.classList.remove('star-card-badge--urgent');
+      driveBadge.style.cursor = '';
+      driveBadge.title = '';
     } else {
       driveBadge.hidden = false;
       driveBadge.textContent = '☁ Drive未送信';
       driveBadge.classList.remove('star-card-badge--urgent');
+      driveBadge.style.cursor = '';
+      driveBadge.title = '';
     }
   }
   if (deviceBadge) {
@@ -1378,6 +1386,20 @@ function renderCard(card) {
       updateCardStatusBadges(el, card);
       scheduleAutoSave();
       setStatus('「端末未保存」の表示を消しました');
+    });
+  }
+
+  // 「⚠ Drive未送信(失敗)」バッジをタップすると、同じファイルを選び直して待機列へ
+  // 入れ直せる(openRetryUploadPicker()、2026年9月追加)。失敗していない間はタップしても
+  // 何も起きない(通常のDrive未送信/送信中は、設定の「☁ Driveへ送信」から通常通り送れるため)。
+  const driveBadgeEl = el.querySelector('.star-card-badge--drive');
+  if (driveBadgeEl) {
+    driveBadgeEl.style.pointerEvents = 'auto';
+    driveBadgeEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    driveBadgeEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!card.uploadFailed) return;
+      openRetryUploadPicker(card);
     });
   }
 
@@ -4457,6 +4479,59 @@ async function handleImageSelected(event) {
     });
   }
   if (files.length > 1) setStatus(`${files.length}枚追加しました`);
+}
+
+/**
+ * 「⚠ Drive未送信(失敗)」バッジからの手動リカバリ(2026年9月追加)。
+ * このカードが失敗した経緯によっては、待機列(IndexedDB)に実データが一切残っていない
+ * (=このアプリ側からはもう二度と送信できない)ことがある。特に、以前は即時アップロードの
+ * フォールバックが失敗すると待機列に一度も載らずdead endになるバグがあった(2026年9月修正)ため、
+ * その修正より前に失敗したカードは、既に端末を再読み込みしていればメモリ上のBlobも失われ、
+ * アプリ側にはもう元データが残っていない。
+ * その場合でも、写真・動画・音声はもともと端末(iPhoneの「写真」アプリ等)からこのアプリへ
+ * コピーして取り込んだだけなので、**元の実体は端末側にまだ残っている**。このバッジをタップして
+ * 同じファイルを選び直してもらうことで、カードの位置やメモ・ASTR接続はそのままに、実データだけ
+ * 待機列へ入れ直し、通常の「☁ Driveへ送信」から送信できる状態に復帰させる。
+ */
+let retryUploadCardId = null;
+
+function openRetryUploadPicker(card) {
+  if (!els.retryUploadInput) return;
+  retryUploadCardId = card.id;
+  els.retryUploadInput.accept = `${card.mediaType}/*`;
+  els.retryUploadInput.click();
+}
+
+async function handleRetryUploadSelected(event) {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  const cardId = retryUploadCardId;
+  retryUploadCardId = null;
+  if (!file || !cardId) return;
+
+  const card = getCardById(cardId);
+  if (!card) {
+    setStatus('対象のカードが見つかりませんでした', { important: true });
+    return;
+  }
+
+  const filename = `${Date.now()}-${file.name}`;
+  const persisted = await persistToUploadQueue(card, file, filename);
+  if (!persisted) {
+    setStatus('端末への保存に失敗しました。もう一度お試しください', { important: true });
+    return;
+  }
+  card.uploadQueued = true;
+  card.uploadFailed = false;
+  card.uploadPending = false;
+  const el = cardElById(card.id);
+  if (el) {
+    el.classList.remove('star-card--upload-failed', 'star-card--upload-pending');
+    el.classList.add('star-card--upload-queued');
+    updateCardStatusBadges(el, card);
+  }
+  scheduleAutoSave();
+  setStatus('端末に保存しました。設定の「☁ Driveへ送信」から送信できます');
 }
 
 /**
