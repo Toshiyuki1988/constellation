@@ -165,6 +165,16 @@ async function uploadQueuedEntry(entry, signal) {
   return ok;
 }
 
+/** アップロード状況一覧(js/app.jsのopenUploadStatusList()、2026年9月追加)の「この1件を
+ *  送信」ボタン用。待機列全体をドレインせず、指定した1件だけをuploadQueuedEntry()に通す
+ *  (成功/失敗時の待機列からの削除ルールも自動的に揃う)。 */
+async function uploadSingleQueuedEntry(cardId) {
+  const entries = await uploadQueueGetAll();
+  const entry = entries.find((e) => e.cardId === cardId);
+  if (!entry) return false;
+  return uploadQueuedEntry(entry);
+}
+
 /** 設定モーダルの「☁ Driveへ送信」ボタンを押した時だけ呼ばれる、待機列の一括アップロード。
  *  **通信種別の自動判定は行わない**(2026年9月に撤去)。ユーザーが明示的に押した時にだけ、
  *  今ある分を全部送ろうとする。失敗したエントリは待機列に残り続けるため、1周しても1件も

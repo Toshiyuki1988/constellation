@@ -103,6 +103,8 @@ document.addEventListener('DOMContentLoaded', () => {
   els.exportToPhotosBtn = document.getElementById('export-to-photos-btn');
   if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', handleExportToPhotos);
   updateDriveUploadButton();
+  const uploadStatusBtn = document.getElementById('upload-status-btn');
+  if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', openUploadStatusList);
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
@@ -4532,6 +4534,208 @@ async function handleRetryUploadSelected(event) {
   }
   scheduleAutoSave();
   setStatus('端末に保存しました。設定の「☁ Driveへ送信」から送信できます');
+}
+
+/* ---------------- アップロード状況一覧(2026年9月追加) ----------------
+ * 「端末⇔このブラウザの待機列(IndexedDB)⇔Drive」の3者の状態が、カードに付いた
+ * card.uploadQueued/uploadFailed/uploadPendingといったフラグの表示だけでは分かりにくい
+ * (実機で、フラグ上は「送信待ち」のはずなのに実データが既に無い、という食い違いが
+ * 起きたことがある)という実機報告を受けて追加した診断用一覧。写真・動画・音声カードごとに、
+ * ①Drive側の状態(フラグ由来)、②この端末の待機列に実データがあるか(IndexedDBを直接確認)、
+ * ③画像なら解像度、を並べて表示し、1件ずつ個別に送信/選び直しができるようにする。 */
+
+const UPLOAD_STATUS_MEDIA_TYPES = ['image', 'video', 'audio'];
+
+function formatBytesKBorMB(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+
+/** dataURL文字列またはBlobから、実際にデコードして幅×高さを求める(サーバー不要、
+ *  ローカルで完結)。取得できなければnull。 */
+function computeImageDimensions(source) {
+  return new Promise((resolve) => {
+    const isBlob = source instanceof Blob;
+    const url = isBlob ? URL.createObjectURL(source) : source;
+    const img = new Image();
+    const finish = (result) => {
+      if (isBlob) URL.revokeObjectURL(url);
+      resolve(result);
+    };
+    img.onload = () => finish({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => finish(null);
+    img.src = url;
+  });
+}
+
+/** 一覧の1行を組み立てる。entry(待機列のIndexedDBエントリ)が無ければ、この端末には
+ *  もう実データが残っていない(Driveに送信済みでない限り、送信手段が「選び直す」しか無い)。 */
+async function buildUploadStatusRowEl(card, entry) {
+  const row = document.createElement('div');
+  row.className = 'upload-status-row';
+
+  const thumb = document.createElement('div');
+  thumb.className = 'upload-status-thumb';
+  if (card.thumbDataUrl) {
+    thumb.innerHTML = `<img src="${card.thumbDataUrl}" alt="">`;
+  } else {
+    thumb.textContent = card.mediaType === 'video' ? '🎬' : card.mediaType === 'audio' ? '🎙' : '🖼';
+  }
+
+  const body = document.createElement('div');
+  body.className = 'upload-status-body';
+
+  const title = document.createElement('div');
+  title.className = 'upload-status-title';
+  title.textContent = (card.memo || '').trim().slice(0, 24) || '(無題)';
+
+  const driveLine = document.createElement('div');
+  driveLine.className = 'upload-status-line';
+  if (card.imageFileId) {
+    driveLine.textContent = '🟢 Drive: 保存済み(元解像度)';
+  } else if (card.uploadPending) {
+    driveLine.textContent = '⏳ Drive: 送信中…';
+  } else if (card.uploadFailed) {
+    driveLine.textContent = '🔴 Drive: 未送信(失敗)';
+  } else {
+    driveLine.textContent = '🔵 Drive: 未送信';
+  }
+
+  const localLine = document.createElement('div');
+  localLine.className = 'upload-status-line';
+  if (entry && entry.blob) {
+    localLine.textContent = `🟢 端末: あり(${formatBytesKBorMB(entry.blob.size)})`;
+  } else if (card.imageFileId) {
+    localLine.textContent = '⬜ 端末: なし(Drive送信済みのため不要)';
+  } else {
+    localLine.textContent = '🔴 端末: なし(高画質データが見つかりません)';
+  }
+
+  const resLine = document.createElement('div');
+  resLine.className = 'upload-status-line';
+  resLine.textContent = '解像度: 計測中…';
+
+  body.appendChild(title);
+  body.appendChild(driveLine);
+  body.appendChild(localLine);
+  if (card.mediaType === 'image') body.appendChild(resLine);
+
+  const actionWrap = document.createElement('div');
+  actionWrap.className = 'upload-status-action';
+  if (card.imageFileId) {
+    actionWrap.textContent = '済';
+  } else if (card.uploadPending) {
+    const btn = document.createElement('button');
+    btn.className = 'secondary';
+    btn.disabled = true;
+    btn.textContent = '送信中…';
+    actionWrap.appendChild(btn);
+  } else if (entry && entry.blob) {
+    const btn = document.createElement('button');
+    btn.textContent = 'この1件を送信';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = '送信中…';
+      const ok = await uploadSingleQueuedEntry(card.id);
+      setStatus(ok ? '送信しました' : '送信に失敗しました。もう一度お試しください', { important: !ok });
+      const list = row.closest('.upload-status-list');
+      if (list) renderUploadStatusList(list);
+    });
+    actionWrap.appendChild(btn);
+  } else {
+    const btn = document.createElement('button');
+    btn.className = 'secondary';
+    btn.textContent = '🔁 選び直す';
+    btn.addEventListener('click', () => {
+      openRetryUploadPicker(card);
+      setStatus('ファイルを選び終えたら、「↻ 更新」で最新状態を確認できます');
+    });
+    actionWrap.appendChild(btn);
+  }
+
+  row.appendChild(thumb);
+  row.appendChild(body);
+  row.appendChild(actionWrap);
+
+  if (card.mediaType === 'image') {
+    let dims = null;
+    let label = '解像度: データがありません';
+    if (entry && entry.blob) {
+      dims = await computeImageDimensions(entry.blob);
+      label = dims ? `解像度(端末内の元データ): ${dims.width}×${dims.height}` : '解像度: 取得できませんでした';
+    } else if (card.thumbDataUrl) {
+      dims = await computeImageDimensions(card.thumbDataUrl);
+      label = dims ? `解像度(サムネイルのみ): ${dims.width}×${dims.height}` : '解像度: 取得できませんでした';
+    }
+    resLine.textContent = label;
+  }
+
+  return row;
+}
+
+/** 「詰まっているもの」が上に来るよう並べ替える: ①端末にもDriveにも実データが無い
+ *  (最優先で気づいてほしい) → ②失敗 → ③送信待ち → ④送信済み。 */
+async function renderUploadStatusList(list) {
+  let queueEntries = [];
+  try { queueEntries = await uploadQueueGetAll(); } catch (err) { /* 取得できなければ空のまま扱う */ }
+  const queueByCardId = new Map(queueEntries.map((e) => [e.cardId, e]));
+
+  const cards = state.cards.filter((c) => UPLOAD_STATUS_MEDIA_TYPES.includes(c.mediaType));
+  const rank = (c) => {
+    if (!c.imageFileId && !queueByCardId.has(c.id)) return 0;
+    if (c.uploadFailed) return 1;
+    if (!c.imageFileId) return 2;
+    return 3;
+  };
+  const sorted = cards.slice().sort((a, b) => rank(a) - rank(b));
+
+  list.innerHTML = '';
+  if (sorted.length === 0) {
+    list.innerHTML = '<p class="upload-status-empty">写真・動画・音声カードがありません。</p>';
+    return;
+  }
+  for (const card of sorted) {
+    const rowEl = await buildUploadStatusRowEl(card, queueByCardId.get(card.id));
+    list.appendChild(rowEl);
+  }
+}
+
+/** 設定モーダルの「📋 アップロード状況を見る」ボタン。既存のopenCommentHistory()と
+ *  同じ.modal-overlay/.modalを流用する。 */
+async function openUploadStatusList() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay visible';
+  const modal = document.createElement('div');
+  modal.className = 'modal upload-status-modal';
+  const heading = document.createElement('h2');
+  heading.textContent = 'アップロード状況';
+  const desc = document.createElement('p');
+  desc.className = 'modal-desc';
+  desc.textContent = '写真・動画・音声カードごとに、Drive・この端末のどちらにデータがあるか、画像なら解像度も確認できます。詰まっているものが上に表示されます。';
+  const list = document.createElement('div');
+  list.className = 'upload-status-list';
+  list.textContent = '読み込み中…';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const refreshBtn = document.createElement('button');
+  refreshBtn.className = 'secondary';
+  refreshBtn.textContent = '↻ 更新';
+  refreshBtn.addEventListener('click', () => renderUploadStatusList(list));
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'secondary';
+  closeBtn.textContent = '閉じる';
+  actions.appendChild(refreshBtn);
+  actions.appendChild(closeBtn);
+  modal.appendChild(heading);
+  modal.appendChild(desc);
+  modal.appendChild(list);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+  const close = () => overlay.remove();
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+  await renderUploadStatusList(list);
 }
 
 /**

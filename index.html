@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260912a">
+<link rel="stylesheet" href="css/style.css?v=20260912b">
 <link rel="stylesheet" href="css/camera.css?v=20260912a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -287,6 +287,13 @@
         <button id="drive-upload-btn" disabled>☁ Driveへ送信</button>
       </div>
       <p id="drive-upload-status" class="modal-desc" hidden></p>
+      <hr class="modal-divider">
+      <!-- 端末⇔待機列(IndexedDB)⇔Driveの状態がややこしい時の診断用一覧(2026年9月追加)。
+           カードごとにデータの所在・解像度・詰まっている箇所を確認し、1件ずつ送信もできる。 -->
+      <p class="modal-desc">「☁ Driveへ送信」がうまく動かない時は、こちらでカードごとの状態を確認できます。</p>
+      <div class="modal-actions">
+        <button id="upload-status-btn" class="secondary">📋 アップロード状況を見る</button>
+      </div>
     </div>
   </div>
 
@@ -298,14 +305,14 @@
   <script src="js/config.js?v=20260905f"></script>
   <script src="js/auth.js?v=20260911a"></script>
   <script src="js/drive.js?v=20260911b"></script>
-  <script src="js/upload-queue.js?v=20260911f"></script>
+  <script src="js/upload-queue.js?v=20260912a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911e"></script>
   <script src="js/camera.js?v=20260912a"></script>
   <script src="js/sound.js?v=20260911e"></script>
   <script src="js/canvas.js?v=20260911a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260912c"></script>
+  <script src="js/app.js?v=20260912d"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260905f"></script>
