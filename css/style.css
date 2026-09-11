@@ -1101,6 +1101,14 @@ html, body {
 }
 
 .star-card-title-ocr-btn:hover { background: #fff; border-color: var(--text); }
+/* **2026年9月修正**: 上の`display: flex`はクラスセレクタ(著者スタイル)のため、通常の
+   カスケード規則上、常にUA既定の`[hidden]{display:none}`(ユーザーエージェントスタイル)より
+   優先されてしまい、js/app.jsが`ocrBtn.hidden = true`で隠しているつもりでも実際には
+   ずっと表示され続けていた。この24x24pxの丸ボタンがセッションカードの右上に常時
+   重なっていたため、セッションへ入ろうとタップした位置がたまたまそこに重なると、入室では
+   なくOCR(タイトル編集用)が起動してしまう不具合の原因になっていた。`[hidden]`付きの
+   セレクタで明示的に上書きし、本来の意図通りTitle編集中だけ表示されるようにする。 */
+.star-card-title-ocr-btn[hidden] { display: none; }
 
 .star-card--session .star-card-memo,
 .star-card--session .star-card-memo-view {
