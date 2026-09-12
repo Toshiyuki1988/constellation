@@ -82,13 +82,37 @@ function openCamera(initialMode) {
  * visualViewport非対応の環境向けのフォールバックとして残す)。 */
 let camViewportSyncBound = false;
 
-function syncCameraOverlayToVisualViewport() {
+/**
+ * 2026年9月、回転時の「一瞬正しい画角になるがすぐ拡大される」不具合が
+ * orientationchange対応後も直らなかったため、原因切り分け用のログを追加した
+ * (?debug付きURLの🐞パネルで確認する)。カメラが開いている間だけ記録する。
+ */
+function camDebugLogViewportState(label) {
+  if (!camEls || !camEls.overlay.classList.contains('open') || !window.visualViewport) return;
+  const vv = window.visualViewport;
+  const activeVideoEl = activeZoomEls(camMode) && activeZoomEls(camMode).videoEl;
+  const screenEl = activeVideoEl && activeVideoEl.parentElement;
+  const rect = screenEl ? screenEl.getBoundingClientRect() : null;
+  camDebugLog(
+    `[cam-orient] ${label} t=${Math.round(performance.now())} `
+    + `vv=${vv.width.toFixed(0)}x${vv.height.toFixed(0)}@${vv.offsetLeft.toFixed(0)},${vv.offsetTop.toFixed(0)} `
+    + `innerWH=${window.innerWidth}x${window.innerHeight} `
+    + `overlayStyleWH=${camEls.overlay.style.width}x${camEls.overlay.style.height} `
+    + `screenRectWH=${rect ? `${rect.width.toFixed(0)}x${rect.height.toFixed(0)}` : '(なし)'} `
+    + `videoWH=${activeVideoEl ? `${activeVideoEl.videoWidth}x${activeVideoEl.videoHeight}` : '(なし)'} `
+    + `orientation=${window.screen && window.screen.orientation ? `${window.screen.orientation.type}/${window.screen.orientation.angle}` : '(不明)'}`
+  );
+}
+
+function syncCameraOverlayToVisualViewport(evt) {
   if (!camEls || !window.visualViewport) return;
+  camDebugLogViewportState(`sync前(${evt ? evt.type : '手動'})`);
   const vv = window.visualViewport;
   camEls.overlay.style.width = `${vv.width}px`;
   camEls.overlay.style.height = `${vv.height}px`;
   camEls.overlay.style.left = `${vv.offsetLeft}px`;
   camEls.overlay.style.top = `${vv.offsetTop}px`;
+  camDebugLogViewportState(`sync後(${evt ? evt.type : '手動'})`);
 }
 
 /**
@@ -105,9 +129,13 @@ function syncCameraOverlayToVisualViewport() {
  */
 let camOrientationSettleTimers = [];
 
-function handleCameraOrientationSettle() {
+function handleCameraOrientationSettle(evt) {
+  camDebugLogViewportState(`orientationイベント発火(${evt ? evt.type : '不明'})`);
   camOrientationSettleTimers.forEach((id) => clearTimeout(id));
-  camOrientationSettleTimers = [0, 150, 400].map((delay) => setTimeout(syncCameraOverlayToVisualViewport, delay));
+  camOrientationSettleTimers = [0, 150, 400].map((delay) => setTimeout(() => {
+    camDebugLogViewportState(`遅延同期タイマー(${delay}ms)`);
+    syncCameraOverlayToVisualViewport();
+  }, delay));
 }
 
 function bindCameraViewportSync() {
@@ -198,6 +226,12 @@ function wireCameraEvents() {
   wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
   wirePinchZoom(camEls.videoScreen, camEls.videoVideo, camEls.zoomBadgeVideo);
+
+  // 回転時に映像ストリーム自体のネイティブ解像度(videoWidth/videoHeight)が変化していないか
+  // 確認するためのデバッグログ(2026年9月追加)。<video>は内部解像度が変わると'resize'を発火する。
+  [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => {
+    v.addEventListener('resize', () => camDebugLogViewportState(`video resize(${v.id})`));
+  });
 }
 
 function isRecording() {
