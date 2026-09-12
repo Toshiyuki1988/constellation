@@ -117,25 +117,41 @@ function syncCameraOverlayToVisualViewport(evt) {
 
 /**
  * 画面回転時、「一瞬正しい画角になるがすぐ拡大される」不具合の対応(2026年9月)。
- * 上記syncCameraOverlayToVisualViewport()はvisualViewportの'resize'/'scroll'イベント任せ
- * だが、実機の回転直後はこのイベントの発火が数百ms遅れることがあり、その間
- * #camera-overlayのインラインサイズ(px固定値)は回転前の値のまま取り残される。
- * 以前(このJS同期を入れる前)はCSSのdvh/dvwがブラウザ側で回転と同時に即座に再計算されて
- * いたため、この「古いサイズが一瞬残る」ラグ自体が無かった。回転イベント
- * (orientationchange/screen.orientationのchange)を追加のトリガーとして拾い、
- * 複数回(0ms・150ms・400ms)遅延させて再同期することで、visualViewport側のイベントが
- * 遅れて発火する端末でも早期に正しいサイズへ収束させ、古いサイズのまま表示され続ける
- * 時間を最小化する。
+ * 当初はvisualViewportのイベントが遅れて発火し#camera-overlayの古いインラインサイズが
+ * 一瞬残ることを疑い、orientationchange/screen.orientationのchangeをトリガーに
+ * 複数回(0ms・150ms・400ms)再同期する対応を入れたが、実機のデバッグログ(?debugパネル)で
+ * 確認したところ、vv(visualViewport)・overlayのインラインサイズ・.cam-screenの
+ * getBoundingClientRect()・video.videoWidth/videoHeightは回転前後で常に一致しており、
+ * **このアプリのJS側が計算しているサイズには一切ズレが無い**ことが判明した(videoWidth/
+ * videoHeightも回転に関わらず常に同じ値のままだった)。つまり不具合はJS/CSSから見える
+ * どのサイズ値にも表れない、ブラウザ内部の映像デコード・回転補正パイプライン(JSからは
+ * 観測も制御もできない層)側で、回転直後の一瞬だけ発生していると考えられる。
+ * そのため、原因そのものを直すのではなく、回転直後の一定時間だけプレビューの<video>を
+ * 一時的に非表示(opacity:0)にして、この過渡的な描画の乱れ自体をユーザーに見せない
+ * 対症療法に切り替えた。多くのネイティブカメラアプリが回転時に一瞬プレビューを暗転させる
+ * のと同じ考え方。
  */
 let camOrientationSettleTimers = [];
+let camOrientationRevealTimer = null;
+
+function activeCamVideoEl() {
+  const target = activeZoomEls(camMode);
+  return target ? target.videoEl : null;
+}
 
 function handleCameraOrientationSettle(evt) {
   camDebugLogViewportState(`orientationイベント発火(${evt ? evt.type : '不明'})`);
+  const videoEl = activeCamVideoEl();
+  if (videoEl) videoEl.style.opacity = '0'; // 回転中の乱れた描画を隠す(見た目のみ、撮影処理には影響しない)
   camOrientationSettleTimers.forEach((id) => clearTimeout(id));
   camOrientationSettleTimers = [0, 150, 400].map((delay) => setTimeout(() => {
     camDebugLogViewportState(`遅延同期タイマー(${delay}ms)`);
     syncCameraOverlayToVisualViewport();
   }, delay));
+  clearTimeout(camOrientationRevealTimer);
+  camOrientationRevealTimer = setTimeout(() => {
+    if (videoEl) videoEl.style.opacity = '';
+  }, 480); // 最後の再同期(400ms)より後にフェードインさせる
 }
 
 function bindCameraViewportSync() {
@@ -1175,6 +1191,9 @@ function teardownCamera() {
   currentTiltPulse = null;
   camOrientationSettleTimers.forEach((id) => clearTimeout(id));
   camOrientationSettleTimers = [];
+  clearTimeout(camOrientationRevealTimer);
+  camOrientationRevealTimer = null;
+  [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });
   camEls.overlay.classList.remove('open');
   clearCameraError();
 }

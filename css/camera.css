@@ -45,7 +45,12 @@
 
 .cam-screen { position: absolute; inset: 0; display: none; overflow: hidden; touch-action: none; }
 .cam-screen.active { display: block; }
-.cam-screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; transform-origin: center center; }
+.cam-screen video {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; transform-origin: center center;
+  /* 回転直後の一瞬だけjs/camera.jsのhandleCameraOrientationSettle()がopacity:0にする際、
+     唐突な明滅ではなく滑らかなフェードにするため(2026年9月追加)。 */
+  transition: opacity 0.15s ease-out;
+}
 
 /* ピンチズーム中(js/camera.jsのsetCamZoom())の倍率表示。ネイティブ制御(track.applyConstraints)
    ではなくCSS拡大によるデジタルズームの場合は🔍を添えて区別する。 */
