@@ -3,6 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- 「ホーム画面に追加」経由で開いた時だけ、Safariのアドレスバー・ツールバーを消して全画面表示にする
+     (2026年9月追加)。通常のSafariタブで開いた場合は効果が無い(iOSの仕様)。ランドスケープで
+     撮影する時、ブラウザのUIが縦幅を圧迫して撮影可能エリアが極端に細くなる問題への対策。 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CONSTELLATION">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260912c">
 <link rel="stylesheet" href="css/camera.css?v=20260913a">
