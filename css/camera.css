@@ -17,7 +17,12 @@
      (「ブラウザヘッダ・ボトムで見切れているのに、実際の写真はそこまで写っている」という
      実機報告)。動的ビューポート単位(dvh/dvw、今の実際に見えている範囲に追従)へ切り替え、
      プレビューの見た目と撮影結果を一致させる。dvh未対応の古いブラウザ向けに、先に通常の
-     vh/vwを書いておき、対応ブラウザだけ後続の宣言で上書きされるようにしている。 */
+     vh/vwを書いておき、対応ブラウザだけ後続の宣言で上書きされるようにしている。
+     **2026年9月追記**: 一時期この上をさらにJS(js/camera.jsのsyncCameraOverlayToVisualViewport()、
+     現在は削除済み)からvisualViewportの値で上書きしていたが、getUserMedia使用中に端末を
+     回転させるとwindow.innerWidth/visualViewportがJSからは凍結して更新されない実機不具合
+     (iOS、Safari/Chrome両方で確認)が判明したため撤回した。このサイズ指定は再びCSSの
+     dvh/dvwのみに委ねている(js/camera.jsのbindCameraViewportSync()参照)。 */
   width: 100vw;
   height: 100vh;
   width: 100dvw;

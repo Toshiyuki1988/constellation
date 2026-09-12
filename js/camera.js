@@ -62,7 +62,6 @@ let camWaveRAF = null;
 function openCamera(initialMode) {
   ensureCameraDom();
   bindCameraViewportSync();
-  syncCameraOverlayToVisualViewport();
   return new Promise((resolve) => {
     resolveCamera = resolve;
     camEls.overlay.classList.add('open');
@@ -70,95 +69,68 @@ function openCamera(initialMode) {
   });
 }
 
-/* ---------------- visualViewportに基づく実サイズ同期(2026年9月追加) ----------------
- * CSSのdvh/dvwだけ(#camera-overlay、css/camera.css)による対応では、実機で「ブラウザの
- * ヘッダー・ボトムバー分、プレビューで見えている範囲より実際の写真の方が上下に広く写る」
- * 不具合が解消しなかった。position:fixed要素に対してdvh/dvwがアドレスバー・ボトムバーの
- * 表示状態をどこまで正確に反映するかはブラウザの実装に委ねられる部分が残るため、より確実な
- * 手段として、ブラウザが「今まさに実際に見えている範囲」を直接教えてくれるwindow.visualViewport
- * (Safari/Chrome双方で対応)を使い、#camera-overlayの実サイズ・位置をJSから直接同値に
- * 同期する。これにより、js/camera.jsのcomputeCoverCropRect()が読むgetBoundingClientRect()の
- * 値も、常に「ユーザーが実際に見ている範囲」と一致するようになる(CSSのdvh/dvwは
- * visualViewport非対応の環境向けのフォールバックとして残す)。 */
+/* ---------------- 画面回転時のプレビュー凍結対策(2026年9月) ----------------
+ * 経緯: 「回転すると一瞬正しい画角になるがすぐ拡大される」不具合の調査のため、一時期
+ * #camera-overlayの実サイズをJSからwindow.visualViewportの値で直接上書きする実装を
+ * 入れていた(当初は「dvh/dvwだけではブラウザUI分の見切れが残る」問題への対応だった)。
+ * 実機のデバッグログ(?debugパネル)で調べたところ、カメラ映像(getUserMedia)を表示中に
+ * 端末を回転させると、orientationchangeイベント自体は発火するのに、
+ * window.innerWidth/window.visualViewportの値がJSからは回転前のまま凍結して一切
+ * 更新されないことが分かった(Safari・Chrome双方で再現、どちらもiOSではWebKitベースの
+ * ため共通の癖とみられる)。このため、JSでvisualViewportの値を書き込む同期処理は
+ * 「凍結した古い(回転前の)サイズ」を#camera-overlayへ書き込み続けるだけになり、
+ * 回転後もプレビューが縦持ちサイズのまま画面の隅に取り残され、相対的に拡大して見える
+ * 不具合の直接の原因になっていた。
+ * 対応: #camera-overlayのサイズ指定はCSSのdvh/dvw(css/camera.css)にのみ委ね、
+ * JSからのインラインサイズ上書きは廃止した。dvh/dvwはブラウザのレイアウトエンジンが
+ * 直接計算するCSS単位であり、window.innerWidth等のJS APIの値が凍結していても
+ * 正しく追従することを実機で確認済み。以前この上書きを追加した動機だった
+ * 「dvh/dvwだけでは残っていたブラウザUI分の見切れ」が仮に再発しても、頻度・実害の
+ * 大きい回転時のズーム不具合の解消を優先する。
+ * 回転イベント自体(orientationchange/screen.orientationのchange)は、システムの
+ * 回転アニメーション中の一瞬の描画の乱れを見せないための暗転(フェード)演出にのみ使う。 */
 let camViewportSyncBound = false;
-
-/**
- * 2026年9月、回転時の「一瞬正しい画角になるがすぐ拡大される」不具合が
- * orientationchange対応後も直らなかったため、原因切り分け用のログを追加した
- * (?debug付きURLの🐞パネルで確認する)。カメラが開いている間だけ記録する。
- */
-function camDebugLogViewportState(label) {
-  if (!camEls || !camEls.overlay.classList.contains('open') || !window.visualViewport) return;
-  const vv = window.visualViewport;
-  const activeVideoEl = activeZoomEls(camMode) && activeZoomEls(camMode).videoEl;
-  const screenEl = activeVideoEl && activeVideoEl.parentElement;
-  const rect = screenEl ? screenEl.getBoundingClientRect() : null;
-  camDebugLog(
-    `[cam-orient] ${label} t=${Math.round(performance.now())} `
-    + `vv=${vv.width.toFixed(0)}x${vv.height.toFixed(0)}@${vv.offsetLeft.toFixed(0)},${vv.offsetTop.toFixed(0)} `
-    + `innerWH=${window.innerWidth}x${window.innerHeight} `
-    + `overlayStyleWH=${camEls.overlay.style.width}x${camEls.overlay.style.height} `
-    + `screenRectWH=${rect ? `${rect.width.toFixed(0)}x${rect.height.toFixed(0)}` : '(なし)'} `
-    + `videoWH=${activeVideoEl ? `${activeVideoEl.videoWidth}x${activeVideoEl.videoHeight}` : '(なし)'} `
-    + `orientation=${window.screen && window.screen.orientation ? `${window.screen.orientation.type}/${window.screen.orientation.angle}` : '(不明)'}`
-  );
-}
-
-function syncCameraOverlayToVisualViewport(evt) {
-  if (!camEls || !window.visualViewport) return;
-  camDebugLogViewportState(`sync前(${evt ? evt.type : '手動'})`);
-  const vv = window.visualViewport;
-  camEls.overlay.style.width = `${vv.width}px`;
-  camEls.overlay.style.height = `${vv.height}px`;
-  camEls.overlay.style.left = `${vv.offsetLeft}px`;
-  camEls.overlay.style.top = `${vv.offsetTop}px`;
-  camDebugLogViewportState(`sync後(${evt ? evt.type : '手動'})`);
-}
-
-/**
- * 画面回転時、「一瞬正しい画角になるがすぐ拡大される」不具合の対応(2026年9月)。
- * 当初はvisualViewportのイベントが遅れて発火し#camera-overlayの古いインラインサイズが
- * 一瞬残ることを疑い、orientationchange/screen.orientationのchangeをトリガーに
- * 複数回(0ms・150ms・400ms)再同期する対応を入れたが、実機のデバッグログ(?debugパネル)で
- * 確認したところ、vv(visualViewport)・overlayのインラインサイズ・.cam-screenの
- * getBoundingClientRect()・video.videoWidth/videoHeightは回転前後で常に一致しており、
- * **このアプリのJS側が計算しているサイズには一切ズレが無い**ことが判明した(videoWidth/
- * videoHeightも回転に関わらず常に同じ値のままだった)。つまり不具合はJS/CSSから見える
- * どのサイズ値にも表れない、ブラウザ内部の映像デコード・回転補正パイプライン(JSからは
- * 観測も制御もできない層)側で、回転直後の一瞬だけ発生していると考えられる。
- * そのため、原因そのものを直すのではなく、回転直後の一定時間だけプレビューの<video>を
- * 一時的に非表示(opacity:0)にして、この過渡的な描画の乱れ自体をユーザーに見せない
- * 対症療法に切り替えた。多くのネイティブカメラアプリが回転時に一瞬プレビューを暗転させる
- * のと同じ考え方。
- */
-let camOrientationSettleTimers = [];
-let camOrientationRevealTimer = null;
+let camOrientationFadeTimer = null;
 
 function activeCamVideoEl() {
   const target = activeZoomEls(camMode);
   return target ? target.videoEl : null;
 }
 
+/** 実機での動作確認用ログ(?debugパネル)。今はサイズ上書きをしていないので、
+ *  ここで見るのは「CSSのdvh/dvwが実際にどの値へ落ち着いたか」の観測用途のみ。 */
+function camDebugLogViewportState(label) {
+  if (!camEls || !camEls.overlay.classList.contains('open')) return;
+  const vv = window.visualViewport;
+  const activeVideoEl = activeCamVideoEl();
+  const screenEl = activeVideoEl && activeVideoEl.parentElement;
+  const rect = screenEl ? screenEl.getBoundingClientRect() : null;
+  const overlayRect = camEls.overlay.getBoundingClientRect();
+  camDebugLog(
+    `[cam-orient] ${label} t=${Math.round(performance.now())} `
+    + `vv=${vv ? `${vv.width.toFixed(0)}x${vv.height.toFixed(0)}` : '(非対応)'} `
+    + `innerWH=${window.innerWidth}x${window.innerHeight} `
+    + `overlayRectWH=${overlayRect.width.toFixed(0)}x${overlayRect.height.toFixed(0)} `
+    + `screenRectWH=${rect ? `${rect.width.toFixed(0)}x${rect.height.toFixed(0)}` : '(なし)'} `
+    + `videoWH=${activeVideoEl ? `${activeVideoEl.videoWidth}x${activeVideoEl.videoHeight}` : '(なし)'} `
+    + `orientation=${window.screen && window.screen.orientation ? `${window.screen.orientation.type}/${window.screen.orientation.angle}` : '(不明)'}`
+  );
+}
+
 function handleCameraOrientationSettle(evt) {
   camDebugLogViewportState(`orientationイベント発火(${evt ? evt.type : '不明'})`);
   const videoEl = activeCamVideoEl();
-  if (videoEl) videoEl.style.opacity = '0'; // 回転中の乱れた描画を隠す(見た目のみ、撮影処理には影響しない)
-  camOrientationSettleTimers.forEach((id) => clearTimeout(id));
-  camOrientationSettleTimers = [0, 150, 400].map((delay) => setTimeout(() => {
-    camDebugLogViewportState(`遅延同期タイマー(${delay}ms)`);
-    syncCameraOverlayToVisualViewport();
-  }, delay));
-  clearTimeout(camOrientationRevealTimer);
-  camOrientationRevealTimer = setTimeout(() => {
+  if (videoEl) videoEl.style.opacity = '0'; // 回転アニメーション中の乱れた描画を隠す(見た目のみ、撮影処理には影響しない)
+  clearTimeout(camOrientationFadeTimer);
+  camOrientationFadeTimer = setTimeout(() => {
+    camDebugLogViewportState('フェードイン');
     if (videoEl) videoEl.style.opacity = '';
-  }, 480); // 最後の再同期(400ms)より後にフェードインさせる
+  }, 500);
 }
 
 function bindCameraViewportSync() {
-  if (camViewportSyncBound || !window.visualViewport) return;
+  if (camViewportSyncBound) return;
   camViewportSyncBound = true;
-  window.visualViewport.addEventListener('resize', syncCameraOverlayToVisualViewport);
-  window.visualViewport.addEventListener('scroll', syncCameraOverlayToVisualViewport);
   window.addEventListener('orientationchange', handleCameraOrientationSettle);
   if (window.screen && window.screen.orientation) {
     window.screen.orientation.addEventListener('change', handleCameraOrientationSettle);
@@ -1189,10 +1161,8 @@ function teardownCamera() {
   teardownWaveform();
   currentTiltLayer = null;
   currentTiltPulse = null;
-  camOrientationSettleTimers.forEach((id) => clearTimeout(id));
-  camOrientationSettleTimers = [];
-  clearTimeout(camOrientationRevealTimer);
-  camOrientationRevealTimer = null;
+  clearTimeout(camOrientationFadeTimer);
+  camOrientationFadeTimer = null;
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });
   camEls.overlay.classList.remove('open');
   clearCameraError();
