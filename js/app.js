@@ -54,6 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsError = document.getElementById('settings-error');
   els.settingsSaveBtn = document.getElementById('settings-save-btn');
   els.settingsCancelBtn = document.getElementById('settings-cancel-btn');
+  els.settingsCloseBtn = document.getElementById('settings-close-btn');
   els.signInBtn = document.getElementById('sign-in-btn');
   els.signOutBtn = document.getElementById('sign-out-btn');
   els.toolUpload = document.getElementById('tool-upload');
@@ -95,6 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsBtn.addEventListener('click', () => openSettings());
   els.settingsSaveBtn.addEventListener('click', handleSettingsSave);
   els.settingsCancelBtn.addEventListener('click', closeSettings);
+  els.settingsCloseBtn.addEventListener('click', closeSettings);
 
   // Driveへの手動アップロード(2026年9月、完全手動化。設定モーダル内に置き、誤操作を防ぐ)。
   els.driveUploadBtn = document.getElementById('drive-upload-btn');
@@ -189,6 +191,7 @@ function openSettings() {
   els.settingsApiKey.value = CONFIG.GEMINI_API_KEY;
   els.settingsError.hidden = true;
   els.settingsCancelBtn.hidden = !isConfigured();
+  els.settingsCloseBtn.hidden = !isConfigured(); // 初回の必須設定中はキャンセル同様、閉じる手段を出さない
   els.settingsModal.classList.add('visible');
 }
 
@@ -1066,6 +1069,13 @@ const CAMERA_ICON_SVG =
   'stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/>' +
   '<circle cx="12" cy="13.2" r="3.2"/></svg>';
 
+// セッションカードの入室ボタン(2026年9月追加)。絵文字の🚪は茶色が目立ちすぎるため、
+// 他のアイコンボタン(CAMERA_ICON_SVG等)と同じ、currentColorで地の文字色に馴染む
+// 線画のフォルダアイコンにした(css/style.cssの.star-card-session-enter-btnでvar(--muted)を指定)。
+const FOLDER_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a1 1 0 011-1h4.5l1.7 2H20a1 1 0 011 1v9.5a1 1 0 01-1 1H4a1 1 0 01-1-1V7z"/></svg>';
+
 // 編集ガイド(長押しで表示される緑のトンボ)。四隅は自由変形、四辺は縦横どちらか片方だけの
 // リサイズを担う。実際のドラッグ処理は js/canvas.js の attachCardGestures() 側で行う。
 const EDIT_GUIDE_HANDLES_HTML = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
@@ -1325,7 +1335,7 @@ function renderCard(card) {
           <button class="star-card-title-ocr-btn" title="OCRでタイトルを読み取る" hidden>${CAMERA_ICON_SVG}</button>
           <div class="star-card-session-title-row">
             <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
-            <button class="star-card-session-enter-btn" title="セッションに入る">🚪</button>
+            <button class="star-card-session-enter-btn" title="セッションに入る">${FOLDER_ICON_SVG}</button>
           </div>
           <span class="star-card-session-count">${childCount}件</span>
         </div>

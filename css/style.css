@@ -1079,12 +1079,12 @@ html, body {
   border-radius: 50%;
   font-size: 12px;
   line-height: 1;
-  color: var(--text);
+  color: var(--muted); /* 地味な色にする指定(2026年9月)。派手な絵文字ドアから線画フォルダアイコンへ変更済み */
   cursor: pointer;
   padding: 0;
 }
 
-.star-card-session-enter-btn:hover { background: #fff; border-color: var(--text); }
+.star-card-session-enter-btn:hover { background: #fff; border-color: var(--text); color: var(--text); }
 
 .star-card-session-name {
   font-family: var(--serif);
@@ -1867,6 +1867,7 @@ html, body {
 .modal-overlay.visible { display: flex; }
 
 .modal {
+  position: relative;
   width: 100%;
   max-width: 420px;
   background: var(--panel);
@@ -1875,6 +1876,28 @@ html, body {
   padding: 22px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.2);
 }
+
+/* 設定モーダルの右上に置く閉じるボタン(2026年9月追加)。既存の#settings-cancel-btnと
+   表示条件を揃えている(初回の必須設定中は出さない)。 */
+.modal-close-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.modal-close-btn:hover { color: var(--text); }
 
 .modal h2 {
   font-family: var(--serif);
