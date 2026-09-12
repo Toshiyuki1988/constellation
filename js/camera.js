@@ -88,7 +88,16 @@ function openCamera(initialMode) {
  * 「dvh/dvwだけでは残っていたブラウザUI分の見切れ」が仮に再発しても、頻度・実害の
  * 大きい回転時のズーム不具合の解消を優先する。
  * 回転イベント自体(orientationchange/screen.orientationのchange)は、システムの
- * 回転アニメーション中の一瞬の描画の乱れを見せないための暗転(フェード)演出にのみ使う。 */
+ * 回転アニメーション中の一瞬の描画の乱れを見せないための暗転(フェード)演出に使う。
+ * **2026年9月追記**: 上記の対応後もなお画角が拡大されたまま戻らない実機報告が続いたため、
+ * 疑いの先をコンテナのサイズ計算から映像ストリーム自体に切り替えた。getUserMediaで取得した
+ * 映像トラックは、取得した瞬間の物理的な向きの解像度・縦横比のままで、その後端末を回転させても
+ * ブラウザが自動で再ネゴシエートしてくれるとは限らない(特にiOS Safari)。コンテナ側
+ * (dvh/dvw)は正しく追従していても、映像トラック自体の縦横比が古いままだと
+ * object-fit: coverの計算がずれてズームして見える。対策として、回転を検知したら
+ * 暗転している間に`acquireStreamForMode()`でストリームを取り直す(=新しい物理的な向きで
+ * 撮り直す)ようにした。録画中(video/audioモード)はストリームの差し替えがMediaRecorderを
+ * 壊すため対象外。 */
 let camViewportSyncBound = false;
 let camOrientationFadeTimer = null;
 
@@ -122,10 +131,42 @@ function handleCameraOrientationSettle(evt) {
   const videoEl = activeCamVideoEl();
   if (videoEl) videoEl.style.opacity = '0'; // 回転アニメーション中の乱れた描画を隠す(見た目のみ、撮影処理には影響しない)
   clearTimeout(camOrientationFadeTimer);
-  camOrientationFadeTimer = setTimeout(() => {
+  camOrientationFadeTimer = setTimeout(async () => {
+    await restartStreamForOrientation();
     camDebugLogViewportState('フェードイン');
-    if (videoEl) videoEl.style.opacity = '';
+    const currentVideoEl = activeCamVideoEl(); // restartStreamForOrientation()中にモードが変わっている可能性があるため取り直す
+    if (currentVideoEl) currentVideoEl.style.opacity = '';
   }, 500);
+}
+
+/** 回転後、映像トラックを新しい物理的な向きで取り直す(handleCameraOrientationSettle()参照)。
+ *  モード切替中・録画中・カメラを閉じた後に遅れて発火した場合は何もしない。 */
+async function restartStreamForOrientation() {
+  if (camSwitching) return; // モード切替と競合すると camStream の取り違えが起きるため譲る
+  if (isRecording()) return; // 録画中にストリームを差し替えるとMediaRecorderが壊れる
+  const mode = camMode;
+  if (mode !== 'photo' && mode !== 'caption' && mode !== 'video') return; // 音声モードは映像トラックを持たない
+  if (!camEls || !camEls.overlay.classList.contains('open')) return;
+  camSwitching = true; // switchCameraMode()と同じフラグを共有し、この間のモード切替を防ぐ
+  try {
+    await acquireStreamForMode(mode);
+    if (!camEls.overlay.classList.contains('open')) {
+      stopCameraStream(); // 取得中にカメラが閉じられていた場合、取り直したストリームを宙に浮かせない
+      return;
+    }
+    if (camMode !== mode) return; // camSwitchingで排他しているため通常は起きないが、念のための保険
+    const videoEl = activeCamVideoEl();
+    if (videoEl) {
+      videoEl.srcObject = camStream;
+      videoEl.play().catch(() => {});
+    }
+    resetCamZoom(activeZoomEls(mode)); // 新しいトラックはズーム状態を引き継がないため表示側も1倍に揃える
+    camDebugLog('回転検知によりカメラストリームを再取得しました');
+  } catch (err) {
+    camDebugLog(`回転時のストリーム再取得に失敗: ${err && err.message ? err.message : err}`);
+  } finally {
+    camSwitching = false;
+  }
 }
 
 function bindCameraViewportSync() {
