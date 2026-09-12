@@ -1323,7 +1323,10 @@ function renderCard(card) {
         ${thumbsHtml}
         <div class="star-card-session-text">
           <button class="star-card-title-ocr-btn" title="OCRでタイトルを読み取る" hidden>${CAMERA_ICON_SVG}</button>
-          <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
+          <div class="star-card-session-title-row">
+            <span class="star-card-session-name">${escapeHtml(refSession ? refSession.name : '(不明なセッション)')}</span>
+            <button class="star-card-session-enter-btn" title="セッションに入る">🚪</button>
+          </div>
           <span class="star-card-session-count">${childCount}件</span>
         </div>
       </div>
@@ -1461,6 +1464,18 @@ function renderCard(card) {
 
   if (isSessionCard) {
     attachTapToOpen(el.querySelector('.star-card-session-body'), () => enterSession(card.refSessionId, false));
+    // 2026年9月追加: セッションボディ全面のタップだけに頼らず、タイトル右に専用の
+    // 入室ボタンを置いた。タイトル編集用OCRボタン(hidden指定漏れで常時表示になり、
+    // 入室のタップ判定を奪っていた不具合が過去にあった)とは別のボタンにすることで、
+    // 同じ事故が起きないようにする。
+    const enterBtn = el.querySelector('.star-card-session-enter-btn');
+    if (enterBtn) {
+      enterBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      enterBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        enterSession(card.refSessionId, false);
+      });
+    }
   }
 
   // インフォメーションカードは.star-card-memoを使わず専用のフィールドを持つため、

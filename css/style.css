@@ -1055,6 +1055,37 @@ html, body {
   text-align: left;
 }
 
+/* タイトルと入室ボタンを横並びにする行(2026年9月追加)。星座ボディ全面のタップに
+   任せきりだった入室手段が、OCRボタンの表示バグ(css/style.cssの
+   .star-card-title-ocr-btn[hidden]のコメント参照)によって奪われた実機報告を受け、
+   タイトル横に常設・独立の入室ボタンを追加した。 */
+.star-card-session-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
+.star-card-session-enter-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.star-card-session-enter-btn:hover { background: #fff; border-color: var(--text); }
+
 .star-card-session-name {
   font-family: var(--serif);
   font-style: italic;
