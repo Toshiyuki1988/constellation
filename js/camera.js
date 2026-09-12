@@ -91,11 +91,34 @@ function syncCameraOverlayToVisualViewport() {
   camEls.overlay.style.top = `${vv.offsetTop}px`;
 }
 
+/**
+ * 画面回転時、「一瞬正しい画角になるがすぐ拡大される」不具合の対応(2026年9月)。
+ * 上記syncCameraOverlayToVisualViewport()はvisualViewportの'resize'/'scroll'イベント任せ
+ * だが、実機の回転直後はこのイベントの発火が数百ms遅れることがあり、その間
+ * #camera-overlayのインラインサイズ(px固定値)は回転前の値のまま取り残される。
+ * 以前(このJS同期を入れる前)はCSSのdvh/dvwがブラウザ側で回転と同時に即座に再計算されて
+ * いたため、この「古いサイズが一瞬残る」ラグ自体が無かった。回転イベント
+ * (orientationchange/screen.orientationのchange)を追加のトリガーとして拾い、
+ * 複数回(0ms・150ms・400ms)遅延させて再同期することで、visualViewport側のイベントが
+ * 遅れて発火する端末でも早期に正しいサイズへ収束させ、古いサイズのまま表示され続ける
+ * 時間を最小化する。
+ */
+let camOrientationSettleTimers = [];
+
+function handleCameraOrientationSettle() {
+  camOrientationSettleTimers.forEach((id) => clearTimeout(id));
+  camOrientationSettleTimers = [0, 150, 400].map((delay) => setTimeout(syncCameraOverlayToVisualViewport, delay));
+}
+
 function bindCameraViewportSync() {
   if (camViewportSyncBound || !window.visualViewport) return;
   camViewportSyncBound = true;
   window.visualViewport.addEventListener('resize', syncCameraOverlayToVisualViewport);
   window.visualViewport.addEventListener('scroll', syncCameraOverlayToVisualViewport);
+  window.addEventListener('orientationchange', handleCameraOrientationSettle);
+  if (window.screen && window.screen.orientation) {
+    window.screen.orientation.addEventListener('change', handleCameraOrientationSettle);
+  }
 }
 
 function ensureCameraDom() {
@@ -1116,6 +1139,8 @@ function teardownCamera() {
   teardownWaveform();
   currentTiltLayer = null;
   currentTiltPulse = null;
+  camOrientationSettleTimers.forEach((id) => clearTimeout(id));
+  camOrientationSettleTimers = [];
   camEls.overlay.classList.remove('open');
   clearCameraError();
 }
