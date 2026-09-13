@@ -25,6 +25,8 @@
 //   playChatReplySound()       座談会の自動返信が1件表示される直前の「シュコッ」
 //   playConstellationAddCardSound()  Crews Constellationでカードを追加した時の「キン☆」
 //   playConstellationMoveCardSound() Crews Constellationでカードのドラッグを始めた時の「ヒュウ…」
+//   playScopeScanSound()       Astrometry Scopeで走査(Gemini呼び出し)を開始した時の「ヒュイィィ…」
+//   playScopeCompleteSound()   Astrometry Scopeで走査結果が揃った時の3音の上昇チャイム
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -622,4 +624,59 @@ function playConstellationMoveCardSound() {
   sweep.connect(sweepGain).connect(highpass);
   sweep.start(now);
   sweep.stop(now + 0.38);
+}
+
+/** Astrometry Scope: 走査(Gemini呼び出し)開始「ヒュイィィ…」。応答が届くまでの時間は
+ *  読めない(数百ms〜数秒)ため、開始音は1回きり短めに鳴らすだけにとどめ、完了は
+ *  playScopeCompleteSound()で別途鳴らす(js/app.jsのチャット返信音と同じ教訓:
+ *  「音は結果が揃った瞬間に鳴らす」を踏襲)。 */
+function playScopeScanSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const filter = c.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.value = 900;
+  filter.Q.value = 0.7;
+  filter.connect(c.destination);
+
+  const sweep = c.createOscillator();
+  const sweepGain = c.createGain();
+  sweep.type = 'sawtooth';
+  sweep.frequency.setValueAtTime(220, now);
+  sweep.frequency.exponentialRampToValueAtTime(760, now + 0.5);
+  sweepGain.gain.setValueAtTime(0.0001, now);
+  sweepGain.gain.linearRampToValueAtTime(0.035, now + 0.05);
+  sweepGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+  sweep.connect(sweepGain).connect(filter);
+  sweep.start(now);
+  sweep.stop(now + 0.58);
+}
+
+/** Astrometry Scope: 走査結果(色彩・素材・系譜・文脈)が揃った時の、3音の穏やかな上昇チャイム。 */
+function playScopeCompleteSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const convolver = c.createConvolver();
+  convolver.buffer = getSoundReverbImpulse(c);
+  const wetGain = c.createGain();
+  wetGain.gain.value = 0.22;
+  convolver.connect(wetGain).connect(c.destination);
+
+  [660, 880, 1100].forEach((freq, i) => {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    const t0 = now + i * 0.09;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.06, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.4);
+    gain.connect(c.destination);
+    gain.connect(convolver);
+    osc.connect(gain);
+    osc.start(t0);
+    osc.stop(t0 + 0.42);
+  });
 }

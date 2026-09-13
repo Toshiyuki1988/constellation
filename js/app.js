@@ -1136,10 +1136,14 @@ function editGuideHexHtml(mediaType) {
   // この写真に接続された状態のサマリーカードを新規作成するショートカット。画像のみ(サマリーが
   // 画像を見るのは接続された写真だけなので、動画・音声カードに置いても意味を持たないため)。
   const summonHex = mediaType === 'image' ? hex('summon', 'Summon') : '';
+  // Astrometry Scopeモジュール(js/modules/astrometry-scope.js)を、この写真をあらかじめ
+  // 読み込んだ状態で起動するショートカット。画像のみ(色彩・素材・美術史的な分析は静止画の
+  // 見た目に対する分析のため、動画・音声には馴染まない)。
+  const scopeHex = mediaType === 'image' ? hex('scope', 'Scope') : '';
   // ONのCrewsペルソナ1人に、このカードの内容(メモ・写真ならサムネイル)を読んで一言だけ
   // コメントさせ、ASTR接続済みの新規コメントカードとして残す(2026年9月追加)。
   const commentHex = COMMENTABLE_MEDIA_TYPES.includes(mediaType) ? hex('comment', 'Comment') : '';
-  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex + summonHex + commentHex;
+  return captionHex + hex('edit', 'Edit') + astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + extractHex + summonHex + scopeHex + commentHex;
 }
 
 /**
@@ -1467,8 +1471,12 @@ function renderCard(card) {
         handleCardComment(card, el);
       } else if (action === 'reply') {
         handleCommentReply(card, el);
+      } else if (action === 'scope') {
+        // Astrometry Scope本体はモジュール(js/modules/astrometry-scope.js)側の実装。
+        // ここでは起動フックを呼ぶだけ(Mapping Storys等と同じ、window越しの薄い統合)。
+        if (window.openAstrometryScope) window.openAstrometryScope(card);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply' && action !== 'scope') scheduleAutoSave();
     });
   });
 

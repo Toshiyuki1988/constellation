@@ -719,6 +719,9 @@ html, body {
 }
 .star-card-hex--extract { left: 50%; top: 100%; transform: translate(-50%, 25%); }
 .star-card-hex--summon  { left: 50%; top: 0%; transform: translate(-50%, -25%); }
+/* Astrometry Scope(2026年9月追加)。既存の右辺2箇所(depth/delete)とは別の高さ(縦中央)に
+   置き、右辺の3つ目として並べる。 */
+.star-card-hex--scope   { left: 100%; top: 50%; transform: translate(15%, -50%); }
 
 .star-card-hex-strut {
   position: absolute;
@@ -729,7 +732,7 @@ html, body {
   z-index: 6;
 }
 .star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title, .star-card-hex-strut--toggle, .star-card-hex-strut--reply { right: -20px; top: 50%; transform: translateY(-50%); }
-.star-card-hex-strut--depth, .star-card-hex-strut--delete { left: -20px; top: 50%; transform: translateY(-50%); }
+.star-card-hex-strut--depth, .star-card-hex-strut--delete, .star-card-hex-strut--scope { left: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--extract { width: 2px; height: 20px; left: 50%; bottom: 100%; transform: translateX(-50%); }
 .star-card-hex-strut--summon { width: 2px; height: 20px; left: 50%; top: 100%; transform: translateX(-50%); }
 
