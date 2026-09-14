@@ -99,6 +99,49 @@
 .cam-sun { position: absolute; left: 56px; top: -14px; width: 26px; height: 26px; }
 .cam-sun circle, .cam-sun line { stroke: #ffe27a; stroke-width: 1.6; fill: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
 
+/* ---------- Frame Guide: ダブルタップで出す位置合わせ用の矩形(2026年9月追加) ----------
+   絵画・写真の四隅に重ねて構図の目安にするためだけのガイド。移動・リサイズできるが、
+   撮影結果(capturePhoto())には一切反映しない(camera-rect-guide-artifact.htmlで検証済み)。
+   既存のcam-tick(傾きガイド)と同じ白い線で統一している。 */
+.cam-frame-guide {
+  position: absolute; z-index: 5; border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 0 20px rgba(255, 255, 255, 0.15);
+  display: none; touch-action: none;
+}
+.cam-frame-guide.visible { display: block; }
+.cam-frame-guide::before {
+  /* 三分割線(構図の目安) */
+  content: '';
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+    linear-gradient(to right, transparent calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+  pointer-events: none;
+}
+.cam-frame-handle {
+  position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; touch-action: none;
+}
+.cam-frame-handle::after {
+  content: ''; position: absolute; inset: 8px; background: #fff; border-radius: 2px;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+}
+.cam-frame-handle.nw { top: 0; left: 0; cursor: nwse-resize; }
+.cam-frame-handle.ne { top: 0; left: 100%; cursor: nesw-resize; }
+.cam-frame-handle.sw { top: 100%; left: 0; cursor: nesw-resize; }
+.cam-frame-handle.se { top: 100%; left: 100%; cursor: nwse-resize; }
+.cam-frame-body { position: absolute; inset: 0; cursor: move; }
+
+@keyframes camFrameAppear {
+  0% { opacity: 0; transform: scale(0.92); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.cam-frame-guide.appearing { animation: camFrameAppear 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .cam-frame-guide.appearing { animation: none; }
+}
+
 /* ---------- 写真:シャッター ---------- */
 .cam-shutter-btn {
   position: absolute; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);

@@ -625,6 +625,42 @@ html, body {
   z-index: 5;
 }
 
+/* ---------- 「掴む」演出(2026年9月追加、js/canvas.js) ----------
+   長押し中は指の位置でリングが少しずつ閉じていき(spawnPressRing())、確定した瞬間に
+   単発の発光リングが一度だけ広がって消える(spawnGrabBurst())。常時アニメーションする
+   パルスではなく、操作の瞬間にだけ発生する一過性の演出(パフォーマンス配慮)。
+   gesture-refresh-artifact.htmlで検証済み。 */
+.card-press-ring {
+  position: fixed; width: 54px; height: 54px; margin: -27px 0 0 -27px;
+  border-radius: 50%; pointer-events: none; z-index: 900;
+}
+.card-press-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.card-press-ring circle {
+  fill: none; stroke: #2e7d32; stroke-width: 3; opacity: 0.75;
+  stroke-dasharray: 150.8; /* 2*PI*24 */
+  stroke-dashoffset: 150.8;
+  stroke-linecap: round;
+}
+.card-press-ring.animating circle {
+  transition: stroke-dashoffset 300ms linear; /* CARD_LONG_PRESS_MSと同じ長さ */
+  stroke-dashoffset: 0;
+}
+
+@keyframes cardGrabBurst {
+  0% { transform: scale(0.3); opacity: 0.9; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+.card-grab-burst {
+  position: fixed; width: 54px; height: 54px; margin: -27px 0 0 -27px;
+  border-radius: 50%; border: 2px solid #2e7d32;
+  pointer-events: none; z-index: 900;
+  animation: cardGrabBurst 380ms ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-press-ring.animating circle { transition: none; }
+  .card-grab-burst { animation: none; opacity: 0; }
+}
+
 /*
  * ASTRを長押しして線を引いている間、つながろうとしている2枚(押し込んだ元のカードと、
  * 今指/カーソルが乗っている先のカード)を同じ緑の発光で示す。押し込んだ元のカードは

@@ -103,6 +103,33 @@
         text-align: center; margin-top: 16px;
         font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: rgba(255, 255, 255, 0.4);
       }
+
+      /* ---------- 5本指サモン(2026年9月追加) ----------
+         背景を5本指で同時に触れると、キーパッドと同じ入口へダブルタップ不要で即座に
+         到達できる。指先から中心へ収束する線→魔法陣のように広がって消える単発リング→
+         キーパッド展開、という一過性の演出(gesture-refresh-artifact.htmlで検証済み)。
+         常時アニメーションするパルスは使わない(パフォーマンス配慮)。 */
+      .module-summon-svg { position: fixed; inset: 0; pointer-events: none; z-index: 145; overflow: visible; }
+      .module-summon-line { stroke: #55e6f7; stroke-width: 1.5; opacity: 0; stroke-dasharray: 4 3; }
+      .module-summon-line.animating {
+        transition: opacity 260ms ease-out, stroke-dashoffset 260ms ease-out;
+        opacity: 0.85; stroke-dashoffset: 0;
+      }
+      @keyframes module-summon-ring-expand {
+        0% { transform: scale(0.2); opacity: 0.9; border-width: 3px; }
+        70% { opacity: 0.5; }
+        100% { transform: scale(1); opacity: 0; border-width: 1px; }
+      }
+      .module-summon-ring {
+        position: fixed; width: 220px; height: 220px; margin: -110px 0 0 -110px;
+        border-radius: 50%; border: 3px solid #55e6f7;
+        pointer-events: none; z-index: 146;
+        animation: module-summon-ring-expand 520ms cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .module-summon-line { transition: none !important; opacity: 0 !important; }
+        .module-summon-ring { animation: none; opacity: 0; }
+      }
     `;
     document.head.appendChild(style);
   }
@@ -205,12 +232,18 @@
     if (digit) onDigit(digit);
   }
 
-  function openModuleKeypad() {
-    soundAudioCtx();
+  /** キーパッドのDOM/スタイルが未構築なら用意する。openModuleKeypad()と
+   *  5本指サモン(playSummonGesture())の両方から、初回アクセス時に呼ぶ。 */
+  function ensureKeypadReady() {
     if (!kpEls) {
       injectStyles();
       buildDom();
     }
+  }
+
+  function openModuleKeypad() {
+    soundAudioCtx();
+    ensureKeypadReady();
     enteredDigits = '';
     updateSlots();
     kpEls.overlay.classList.add('open');
@@ -223,16 +256,59 @@
     kpEls.overlay.classList.remove('open');
   }
 
-  /* ---------------- 背景を2本指でダブルタップすると起動 ----------------
-   * 「2本指で同時に押して、すぐ離す」を1回のタップ単位とみなし、それが短い間隔で
-   * 2回続いたら起動する。1本指パン・2本指ピンチ・長押し(パイメニュー)のいずれとも
-   * 動きの質(本数・保持時間・移動量)が異なるため、既存のinteract.js/pie-menu.jsには
-   * 一切手を触れず、ただポインタイベントを観測するだけで判定できる。 */
+  /** 5本指サモン(2026年9月追加): 5本目の指が乗った瞬間、ダブルタップを待たず即座に
+   *  発火する。指先の座標(5点)それぞれから重心へ収束する線を一瞬引き、続けて重心を
+   *  中心に魔法陣のような発光リングが広がって消え、キーパッドが開く。 */
+  function playSummonGesture(positions) {
+    ensureKeypadReady();
+    const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
+    const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'module-summon-svg');
+    document.body.appendChild(svg);
+    positions.forEach((p) => {
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('x1', p.x); line.setAttribute('y1', p.y);
+      line.setAttribute('x2', p.x); line.setAttribute('y2', p.y);
+      line.setAttribute('class', 'module-summon-line');
+      const len = Math.hypot(p.x - cx, p.y - cy);
+      line.style.strokeDasharray = len;
+      line.style.strokeDashoffset = len;
+      svg.appendChild(line);
+      requestAnimationFrame(() => {
+        line.setAttribute('x2', cx); line.setAttribute('y2', cy);
+        line.classList.add('animating');
+        line.style.strokeDashoffset = 0;
+      });
+    });
+    setTimeout(() => svg.remove(), 320);
+
+    setTimeout(() => {
+      const ring = document.createElement('div');
+      ring.className = 'module-summon-ring';
+      ring.style.left = `${cx}px`;
+      ring.style.top = `${cy}px`;
+      document.body.appendChild(ring);
+      if (navigator.vibrate) navigator.vibrate([6, 30, 10]);
+      setTimeout(() => ring.remove(), 540);
+    }, 200);
+
+    setTimeout(() => openModuleKeypad(), 420);
+  }
+
+  /* ---------------- 背景を2本指でダブルタップ、または5本指で同時タッチすると起動 ----------------
+   * 2本指: 「2本指で同時に押して、すぐ離す」を1回のタップ単位とみなし、それが短い間隔で
+   * 2回続いたら起動する。5本指: ダブルタップ不要で即座に起動する(playSummonGesture())。
+   * 1本指パン・2本指ピンチ・長押し(パイメニュー)のいずれとも動きの質(本数・保持時間・
+   * 移動量)が異なるため、既存のinteract.js/pie-menu.jsには一切手を触れず、ただポインタ
+   * イベントを観測するだけで判定できる。 */
 
   const TAP_MOVE_TOLERANCE_PX = 14;
   const TAP_MAX_HOLD_MS = 350;
   const DOUBLE_GAP_MAX_MS = 600;
   const DOUBLE_POS_TOLERANCE_PX = 90;
+  const SUMMON_FINGER_COUNT = 5;
 
   let activeCount = 0;
   let episodeActive = false;
@@ -242,6 +318,7 @@
   let episodePositions = []; // { id, x, y, startX, startY }
   let lastTwoTapAt = 0;
   let lastTwoTapPos = null;
+  let summonTriggered = false; // 5本指サモンが発火済みか(全指が離れるまで再発火しない)
 
   function onLauncherPointerDown(e) {
     if (e.target !== els.viewport) return;
@@ -262,6 +339,12 @@
         lastViewportTapAt = 0;
         lastViewportTapPos = null;
       }
+      if (episodePeakCount >= SUMMON_FINGER_COUNT && !summonTriggered) {
+        // 5本指サモン発火: このエピソードはもう2本指タップ判定の対象にしない。
+        summonTriggered = true;
+        episodeActive = false;
+        playSummonGesture(episodePositions.map((p) => ({ x: p.x, y: p.y })));
+      }
     }
   }
 
@@ -278,6 +361,9 @@
 
   function onLauncherPointerUp(e) {
     if (activeCount > 0) activeCount--;
+    // 5本指サモンが発火するとepisodeActiveをfalseにするため、下のreturnより前で
+    // 判定する(全指が離れたら、サモンの再発火を許可する)。
+    if (activeCount === 0) summonTriggered = false;
     if (!episodeActive) return;
     if (activeCount === 0) {
       episodeActive = false;

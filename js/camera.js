@@ -193,6 +193,7 @@ function ensureCameraDom() {
     focusLayerPhoto: document.getElementById('focus-layer-photo'),
     zoomBadgePhoto: document.getElementById('zoom-badge-photo'),
     shutterPhoto: document.getElementById('camera-shutter-photo'),
+    frameGuidePhoto: document.getElementById('frame-guide-photo'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
@@ -251,6 +252,8 @@ function wireCameraEvents() {
 
   wireTapFocus(camEls.photoScreen, camEls.focusLayerPhoto, () => camEls.videoPhoto);
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
+
+  wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto);
 
   wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
@@ -514,6 +517,117 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
     tryApplyFocusPoint(x, y, rect.width, rect.height);
     void getVideoEl;
   });
+}
+
+/* ---------------- Frame Guide: ダブルタップで出す位置合わせ用の矩形(2026年9月追加) ----------------
+ * 絵画・写真の四隅に重ねて構図を整えるためだけのガイド。移動・リサイズできるが撮影結果には
+ * 一切反映しない(capturePhoto()はこの矩形の状態を一切参照しない)。ダブルタップ検出は
+ * js/canvas.jsの俯瞰ズーム判定(pointerdown/pointerupの間隔・距離を見るだけの自前実装)と
+ * 同じ考え方。wireTapFocus()の既存のclick(シングルタップでピント)とは独立に動くため、
+ * ダブルタップの1・2回目それぞれでピントも合わせにいくが実害はない(むしろ自然)。 */
+function wireFrameGuide(screenEl, frameEl) {
+  const DOUBLE_TAP_MS = 350;
+  const DOUBLE_TAP_MOVE_TOLERANCE_PX = 10;
+  const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 40;
+  let pressStart = null;
+  let lastTapAt = 0;
+  let lastTapPos = null;
+  let visible = false;
+
+  function applyRect(x, y, w, h) {
+    frameEl.style.left = `${x}px`;
+    frameEl.style.top = `${y}px`;
+    frameEl.style.width = `${w}px`;
+    frameEl.style.height = `${h}px`;
+  }
+
+  function showDefault() {
+    const rect = screenEl.getBoundingClientRect();
+    const w = rect.width * 0.62;
+    const h = rect.height * 0.48;
+    applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h);
+    frameEl.classList.add('visible', 'appearing');
+    setTimeout(() => frameEl.classList.remove('appearing'), 200);
+    visible = true;
+  }
+  function hide() {
+    frameEl.classList.remove('visible');
+    visible = false;
+  }
+  function toggle() {
+    if (visible) hide(); else showDefault();
+  }
+
+  screenEl.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.cam-frame-guide, button')) return;
+    pressStart = { x: e.clientX, y: e.clientY };
+  });
+  screenEl.addEventListener('pointerup', (e) => {
+    if (!pressStart) return;
+    const moved = Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y);
+    pressStart = null;
+    if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) return;
+    const now = Date.now();
+    const pos = { x: e.clientX, y: e.clientY };
+    if (
+      lastTapPos &&
+      now - lastTapAt < DOUBLE_TAP_MS &&
+      Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < DOUBLE_TAP_DISTANCE_TOLERANCE_PX
+    ) {
+      lastTapAt = 0;
+      lastTapPos = null;
+      toggle();
+    } else {
+      lastTapAt = now;
+      lastTapPos = pos;
+    }
+  });
+
+  /* ---- 矩形の移動・リサイズ(四隅ハンドル) ---- */
+  let dragMode = null; // 'move' | 'nw'|'ne'|'sw'|'se'
+  let dragStart = null;
+
+  function beginDrag(mode, e) {
+    dragMode = mode;
+    const r = frameEl.getBoundingClientRect();
+    const parentRect = screenEl.getBoundingClientRect();
+    dragStart = {
+      x: e.clientX, y: e.clientY,
+      rx: r.left - parentRect.left, ry: r.top - parentRect.top,
+      rw: r.width, rh: r.height,
+    };
+    e.stopPropagation();
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
+  }
+
+  frameEl.querySelector('.cam-frame-body').addEventListener('pointerdown', (e) => beginDrag('move', e));
+  frameEl.querySelectorAll('.cam-frame-handle').forEach((h) => {
+    const mode = h.classList.contains('nw') ? 'nw' : h.classList.contains('ne') ? 'ne' : h.classList.contains('sw') ? 'sw' : 'se';
+    h.addEventListener('pointerdown', (e) => beginDrag(mode, e));
+  });
+
+  const MIN_FRAME_SIZE = 60;
+  document.addEventListener('pointermove', (e) => {
+    if (!dragMode || !dragStart) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    const { rx, ry, rw, rh } = dragStart;
+    if (dragMode === 'move') {
+      applyRect(rx + dx, ry + dy, rw, rh);
+      return;
+    }
+    let x = rx, y = ry, w = rw, h = rh;
+    if (dragMode.includes('e')) w = Math.max(MIN_FRAME_SIZE, rw + dx);
+    if (dragMode.includes('w')) { w = Math.max(MIN_FRAME_SIZE, rw - dx); x = rx + (rw - w); }
+    if (dragMode.includes('s')) h = Math.max(MIN_FRAME_SIZE, rh + dy);
+    if (dragMode.includes('n')) { h = Math.max(MIN_FRAME_SIZE, rh - dy); y = ry + (rh - h); }
+    applyRect(x, y, w, h);
+  });
+  document.addEventListener('pointerup', () => { dragMode = null; dragStart = null; });
+  document.addEventListener('pointercancel', () => { dragMode = null; dragStart = null; });
+
+  // モードを抜けて戻ってきた時など、毎回ゼロから位置合わせできるよう非表示にリセットする。
+  screenEl.__resetFrameGuide = hide;
 }
 
 /* ---------------- ピンチズーム(2026年9月追加) ----------------
@@ -1207,6 +1321,8 @@ function teardownCamera() {
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });
   camEls.overlay.classList.remove('open');
   clearCameraError();
+  // Frame Guideは毎回まっさらな状態から位置合わせできるよう、カメラを閉じるたびに隠す。
+  if (camEls.photoScreen && camEls.photoScreen.__resetFrameGuide) camEls.photoScreen.__resetFrameGuide();
 }
 
 /* ---------------- 効果音(Web Audio合成、音声ファイル不使用) ---------------- */
