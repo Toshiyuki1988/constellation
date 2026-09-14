@@ -641,6 +641,13 @@
    *  推測する(構造化されたキャプション欄がこのアプリに無いため)。あくまで初期値で、
    *  contenteditableなフィールドとしてユーザーが走査前に自由に修正できる。走査後は
    *  Geminiが画像を見た上での推測(resolvedMeta)で上書きされる。 */
+  /** 「タイトル/素材・技法/制作年」の3行構成(例:「失われた世界」「キャンバス、油彩」
+   *  「2023年」)は、会場キャプションとして非常によく見る型。このパターンに含まれる
+   *  素材・技法の行は、旧ロジックでは(era行でもseries行でもない・24字以下という条件
+   *  だけで)artist候補として誤って拾われてしまっていた(2026年9月、実機報告)。
+   *  既知の素材・技法キーワードを含む行はartist候補から除外する。 */
+  const MATERIAL_LINE_RE = /(油彩|水彩|水墨|墨画|墨彩|アクリル|テンペラ|版画|木版|銅版|石版|リトグラフ|シルクスクリーン|エッチング|ドライポイント|写真|ゼラチンシルバー|インクジェット|鉛筆|木炭|パステル|クレヨン|墨|顔彩|岩絵具|和紙|画用紙|紙本|絹本|板絵|キャンバス|カンヴァス|布|陶|磁器|ブロンズ|彫刻|樹脂|ミクストメディア|コラージュ|漆|金属|ガラス|映像|動画|インスタレーション|オイル|カンバス)/;
+
   function guessMetaFromMemo(memo) {
     const lines = String(memo || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const result = { object: '', artist: '', era: '', series: '' };
@@ -650,7 +657,7 @@
     const eraLine = lines.find((l) => /\d{3,4}\s*年|\d{4}/.test(l));
     if (eraLine) result.era = eraLine;
     result.object = lines[0];
-    const artistLine = lines.slice(1).find((l) => l !== eraLine && l !== seriesLine && l.length <= 24);
+    const artistLine = lines.slice(1).find((l) => l !== eraLine && l !== seriesLine && l.length <= 24 && !MATERIAL_LINE_RE.test(l));
     if (artistLine) result.artist = artistLine;
     return result;
   }
