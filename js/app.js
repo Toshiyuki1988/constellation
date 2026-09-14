@@ -1640,8 +1640,14 @@ function renderCard(card) {
   if (!isTextCard) updateCardStatusBadges(el, card);
 
   // セッションカードはメモが空のままなら、以前どおりユーザーが手動で決めた高さを保つ
-  // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。
-  if (!isSessionCard || card.memo) {
+  // (毎回自動採寸すると、写真枠を持たない分だけ小さく潰れてしまうため)。イマジナリー
+  // カード(Star Pencil)も同じ理由で自動採寸の対象外にする: 中身(SVG・リサイズ
+  // ハンドル・編集ガイドのヘックス)が全てposition:absoluteのため、syncCardHeight()が
+  // height:autoへ一度リセットした瞬間、高さの算出根拠が無くなりmin-height(100px)まで
+  // 潰れてしまう不具合があった(2026年9月、実機報告: 「完成させてモジュールを閉じると
+  // 縦に圧縮される」)。イマジナリーカードの高さは常にcommitDrawing()のbounding box計算
+  // で確定するため、そもそも自動採寸が不要。
+  if (!isImaginaryCard && (!isSessionCard || card.memo)) {
     syncCardHeight(el);
   }
 }

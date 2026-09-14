@@ -871,6 +871,16 @@ html, body {
   height: 100%;
   object-fit: contain;
   display: block;
+  /* <img>要素はブラウザ既定でネイティブのドラッグ(HTML5 Drag and Drop API)が有効なため、
+     カードを掴んで動かそうとした一部の操作がpointerイベントではなくネイティブ画像ドラッグ
+     として扱われ、同じビューポート内へドロップすると外部ファイル用のドロップハンドラ
+     (handleViewportDrop())が誤って反応し、カードが複製されたように見える不具合があった
+     (2026年9月、Star Pencilで写真の上から描こうとして発覚。以前から存在していた模様)。
+     .erx-stage img(Extract範囲選択)には既に同じ対策が入っていたが、カード本体の写真
+     表示には漏れていた。 */
+  -webkit-user-drag: none;
+  user-drag: none;
+  user-select: none;
 }
 
 .star-card-media video {
