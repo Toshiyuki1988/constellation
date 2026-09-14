@@ -331,6 +331,24 @@
     document.head.appendChild(style);
   }
 
+  /** 背景タップで閉じる判定。単純な`click`イベントの`e.target===overlay`判定だと、
+   *  スマホでパネル内をスクロール/操作しようとした指がわずかに枠外へ流れただけでも
+   *  clickが発火し、意図せずモジュールが閉じてしまう不具合があった(2026年9月、
+   *  実機報告)。pointerdown・pointerupの両方が背景要素自身で、かつ移動距離が
+   *  小さい(タップ相当)場合だけ閉じるようにする。 */
+  function attachBackgroundTapToClose(overlayEl, onClose) {
+    let start = null;
+    overlayEl.addEventListener('pointerdown', (e) => {
+      start = e.target === overlayEl ? { x: e.clientX, y: e.clientY } : null;
+    });
+    overlayEl.addEventListener('pointerup', (e) => {
+      if (!start) return;
+      const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+      start = null;
+      if (moved < 10 && e.target === overlayEl) onClose();
+    });
+  }
+
   /* ==================== DOM構築 ==================== */
 
   function buildDom() {
@@ -507,7 +525,7 @@
     archive.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     asEls.closeBtn.addEventListener('click', closeAstrometryScope);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAstrometryScope(); });
+    attachBackgroundTapToClose(overlay, closeAstrometryScope);
     asEls.uploadBtn.addEventListener('click', () => asEls.fileInput.click());
     asEls.fileInput.addEventListener('change', () => {
       if (asEls.fileInput.files[0]) loadTargetImageFile(asEls.fileInput.files[0]);
@@ -538,11 +556,11 @@
     });
 
     asEls.popupClose.addEventListener('click', closePlotPopup);
-    asEls.popupOverlay.addEventListener('click', (e) => { if (e.target === asEls.popupOverlay) closePlotPopup(); });
+    attachBackgroundTapToClose(asEls.popupOverlay, closePlotPopup);
 
     asEls.archiveOpenBtn.addEventListener('click', () => openArchiveOverlay(currentCard));
     asEls.archiveCloseBtn.addEventListener('click', closeArchiveOverlay);
-    asEls.archiveOverlay.addEventListener('click', (e) => { if (e.target === asEls.archiveOverlay) closeArchiveOverlay(); });
+    attachBackgroundTapToClose(asEls.archiveOverlay, closeArchiveOverlay);
     asEls.archiveNewBtn.addEventListener('click', () => {
       closeArchiveOverlay();
       openAstrometryScope();

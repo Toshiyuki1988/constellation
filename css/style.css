@@ -718,10 +718,17 @@ html, body {
   letter-spacing: 0.04em;
 }
 .star-card-hex--extract { left: 50%; top: 100%; transform: translate(-50%, 25%); }
-.star-card-hex--summon  { left: 50%; top: 0%; transform: translate(-50%, -25%); }
+/* Summon: 元は25%(他の辺ヘックスの15%食い込みより深い)内側に食い込んでおり、写真カードの
+   メモ欄・テキスト編集の邪魔になるという実機報告(2026年9月)を受け、他の辺ヘックスと同じ
+   15%食い込みに揃えた。 */
+.star-card-hex--summon  { left: 50%; top: 0%; transform: translate(-50%, -15%); }
 /* Astrometry Scope(2026年9月追加)。既存の右辺2箇所(depth/delete)とは別の高さ(縦中央)に
    置き、右辺の3つ目として並べる。 */
 .star-card-hex--scope   { left: 100%; top: 50%; transform: translate(15%, -50%); }
+/* Comment(2026年9月): 以前は位置指定が漏れており(未整理)、ブラウザ既定のstatic位置に
+   配置されてカード内側(メモ欄・テキスト編集の邪魔になる位置)に表示されてしまっていた
+   実機報告を受け、左辺の空いていた縦中央(scopeと対称の位置)に明示的に配置した。 */
+.star-card-hex--comment { left: 0; top: 50%; transform: translate(-115%, -50%); }
 
 .star-card-hex-strut {
   position: absolute;
@@ -731,7 +738,7 @@ html, body {
   opacity: 0.7;
   z-index: 6;
 }
-.star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title, .star-card-hex-strut--toggle, .star-card-hex-strut--reply { right: -20px; top: 50%; transform: translateY(-50%); }
+.star-card-hex-strut--caption, .star-card-hex-strut--edit, .star-card-hex-strut--title, .star-card-hex-strut--toggle, .star-card-hex-strut--reply, .star-card-hex-strut--comment { right: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--depth, .star-card-hex-strut--delete, .star-card-hex-strut--scope { left: -20px; top: 50%; transform: translateY(-50%); }
 .star-card-hex-strut--extract { width: 2px; height: 20px; left: 50%; bottom: 100%; transform: translateX(-50%); }
 .star-card-hex-strut--summon { width: 2px; height: 20px; left: 50%; top: 100%; transform: translateX(-50%); }
@@ -782,11 +789,10 @@ html, body {
    (imaginaryカードはcaption/edit/titleを持たないため衝突しない)。 */
 .star-card-hex--draw { left: 0; top: 22%; transform: translate(-115%, -50%); }
 .star-card-hex-strut--draw { right: -20px; top: 50%; transform: translateY(-50%); }
-/* Comment(2026年9月にimaginaryカードでも対応): 既存の写真/動画/音声/テキストカードの
-   commentHexには位置指定が無い(既存の未整理)ため、他のカードへ影響させないよう
-   imaginaryカードに限定して位置を与える。edit等と同じ左辺・下寄りの位置を使う。 */
-.star-card--imaginary .star-card-hex--comment { left: 0; top: 78%; transform: translate(-115%, -50%); }
-.star-card--imaginary .star-card-hex-strut--comment { right: -20px; top: 50%; transform: translateY(-50%); }
+/* Comment(2026年9月にimaginaryカードでも対応): 全カード種別共通の.star-card-hex--comment
+   (左辺・縦中央)の位置指定をそのまま使う。Draw(左辺・上寄り)とは別位置のため衝突しない。
+   以前はimaginaryカードに限定した専用位置(下寄り)を持っていたが、上記の全カード共通の
+   位置指定漏れを直したタイミングで不要になったため統合した。 */
 
 /* Driveへのアップロードがバックグラウンドで進行中(まだサムネイルだけ)であることを控えめに示す */
 .star-card--upload-pending {
