@@ -212,6 +212,44 @@
   .cam-frame-guide.appearing { animation: none; }
 }
 
+/* ---------- カメラのハードウェア制御: 露出補正・ホワイトバランス・トーチ(2026年9月追加) ----------
+   Frame Guideと同じ暖色パレットだが、主役のFrame Guideトグルより一段控えめな平面デザインに
+   している(紙の重なり演出はFrame Guide側だけの見せ場として残す)。タップのたびにプリセットを
+   1つずつ巡回するだけの単純なボタンで、スライダーは持たない。対応していない端末では
+   js/camera.jsのupdateCamControlAvailability()がボタンごとhiddenのまま隠す。 */
+.cam-control-row {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: 8px;
+  z-index: 8;
+  display: flex;
+  gap: 10px;
+}
+.cam-control-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.cam-control-btn {
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 1.5px solid var(--frame-accent-deep);
+  background: var(--frame-paper); color: var(--frame-accent-deep);
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: pointer;
+  box-shadow: 0 2px 6px var(--frame-shadow);
+  transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease;
+}
+.cam-control-btn[hidden] { display: none; }
+.cam-control-btn svg { width: 18px; height: 18px; }
+.cam-control-btn--text { font: 700 11px/1 inherit; letter-spacing: 0.02em; }
+.cam-control-btn:active { transform: scale(0.94); }
+.cam-control-btn.active {
+  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
+  color: var(--frame-paper);
+}
+.cam-control-label {
+  font-family: inherit; font-size: 8.5px; letter-spacing: 0.05em;
+  color: var(--frame-paper); background: rgba(0, 0, 0, 0.4);
+  padding: 1px 6px; border-radius: 6px; white-space: nowrap;
+}
+.cam-control-label[hidden] { display: none; }
+
 /* ---------- 写真:シャッター ---------- */
 .cam-shutter-btn {
   position: absolute; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);

@@ -44,6 +44,17 @@ let camZoomNative = false;
 let camZoomCaps = null; // {min, max, step} | null
 const CAM_ZOOM_DIGITAL_MAX = 4;
 
+// 露出補正・ホワイトバランス・トーチ(2026年9月追加)。いずれも画像処理ではなく実機の
+// MediaStreamTrack Capabilities(Image Capture拡張)を直接操作する、いわゆるハードウェア制御。
+// ズームと同様、対応状況は端末・ブラウザ次第(特にiOS Safariは対応が薄いと見られる)。
+// スライダーではなく「タップのたびにプリセットを1つずつ巡回する」ボタン方式にしている。
+let camExposurePresets = null; // [{value,label}, ...] | null(非対応)
+let camExposureIndex = 0;
+let camWbPresets = null; // [{mode,temp?,label}, ...] | null(非対応)
+let camWbIndex = 0;
+let camTorchSupported = false;
+let camTorchOn = false;
+
 let camMediaRecorder = null;
 let camRecordedChunks = [];
 let camRecordTimerId = null;
@@ -157,6 +168,7 @@ async function restartStreamForOrientation() {
       videoEl.play().catch(() => {});
     }
     resetCamZoom(activeZoomEls(mode)); // 新しいトラックはズーム状態を引き継がないため表示側も1倍に揃える
+    resetCamControls();
     camDebugLog('回転検知によりカメラストリームを再取得しました');
   } catch (err) {
     camDebugLog(`回転時のストリーム再取得に失敗: ${err && err.message ? err.message : err}`);
@@ -189,6 +201,12 @@ function ensureCameraDom() {
     shutterPhoto: document.getElementById('camera-shutter-photo'),
     frameGuidePhoto: document.getElementById('frame-guide-photo'),
     frameGuideTogglePhoto: document.getElementById('frame-guide-toggle-photo'),
+    exposureBtn: document.getElementById('cam-exposure-btn'),
+    exposureLabel: document.getElementById('cam-exposure-label'),
+    wbBtn: document.getElementById('cam-wb-btn'),
+    wbLabel: document.getElementById('cam-wb-label'),
+    torchBtn: document.getElementById('cam-torch-btn'),
+    torchLabel: document.getElementById('cam-torch-label'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
@@ -247,6 +265,7 @@ function wireCameraEvents() {
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
 
   wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto, camEls.frameGuideTogglePhoto);
+  wireCameraControls();
 
   wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
@@ -274,6 +293,7 @@ async function switchCameraMode(mode) {
     updateScreenVisibility();
     clearCameraError();
     resetCamZoom(activeZoomEls(mode));
+    resetCamControls();
 
     try {
       await acquireStreamForMode(mode);
@@ -350,6 +370,7 @@ async function maximizeVideoTrackResolution(stream) {
   camDebugLog(`カメラ対応幅: width.max=${caps.width && caps.width.max} height.max=${caps.height && caps.height.max}`);
   logCameraControlCapabilities(caps);
   camZoomCaps = caps.zoom || null; // ピンチズームで実際のセンサー/光学ズームを使えるかどうか(js/camera.jsのsetCamZoom()参照)
+  updateCamControlAvailability(caps); // 露出補正・ホワイトバランス・トーチの対応状況をボタンへ反映
   if (!caps.width || !caps.width.max || !caps.height || !caps.height.max) return;
   if (before && caps.width.max <= before.width && caps.height.max <= before.height) return; // 既に上限に達している
   try {
@@ -377,6 +398,160 @@ function logCameraControlCapabilities(caps) {
     .map((f) => `${f}=${caps[f] !== undefined ? JSON.stringify(caps[f]) : '(非対応)'}`)
     .join(' / ');
   camDebugLog(`カメラ機能調査: ${summary}`);
+}
+
+/* ---------------- 露出補正・ホワイトバランス・トーチ(2026年9月追加) ----------------
+ * いずれも画像処理ではなく、getUserMediaで取得したMediaStreamTrackのapplyConstraints()で
+ * カメラハードウェア自体の設定を変える(js/drive.js等とは無関係の、この端末のカメラの
+ * 実際の露出・色温度・ライトを操作する)。スライダーは持たず、ボタンをタップするたびに
+ * あらかじめ計算しておいたプリセットを1つずつ巡回する方式にした。 */
+
+const CAM_WB_PRESET_KELVIN = [
+  { temp: 3200, label: '白熱灯' },
+  { temp: 4000, label: '蛍光灯' },
+  { temp: 5500, label: '昼光' },
+  { temp: 6500, label: '曇天' },
+];
+
+function roundToStep(value, step) {
+  if (!step) return value;
+  return Math.round(value / step) * step;
+}
+
+function formatEv(value) {
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded > 0 ? '+' : ''}${rounded}`;
+}
+
+/** exposureCompensationのmin/maxから「標準・明るめ・暗め」の3プリセットを作る(非対応ならnull) */
+function computeExposurePresets(caps) {
+  const ec = caps.exposureCompensation;
+  if (!ec || typeof ec.min !== 'number' || typeof ec.max !== 'number' || ec.min === ec.max) return null;
+  const step = ec.step || 0.1;
+  const zero = Math.max(ec.min, Math.min(ec.max, 0));
+  const bright = roundToStep(Math.min(ec.max, ec.max * 0.6), step);
+  const dim = roundToStep(Math.max(ec.min, ec.min * 0.6), step);
+  return [
+    { value: zero, label: '標準' },
+    { value: bright, label: `明るめ ${formatEv(bright)}` },
+    { value: dim, label: `暗め ${formatEv(dim)}` },
+  ];
+}
+
+/** whiteBalanceModeに'manual'とcolorTemperatureが両方揃っている端末だけプリセットを作る */
+function computeWbPresets(caps) {
+  const wm = caps.whiteBalanceMode;
+  const ct = caps.colorTemperature;
+  if (!Array.isArray(wm) || !wm.includes('manual')) return null;
+  if (!ct || typeof ct.min !== 'number' || typeof ct.max !== 'number') return null;
+  const clamp = (k) => Math.max(ct.min, Math.min(ct.max, k));
+  const presets = [{ mode: 'continuous', label: 'オート' }];
+  CAM_WB_PRESET_KELVIN.forEach((p) => presets.push({ mode: 'manual', temp: clamp(p.temp), label: p.label }));
+  return presets;
+}
+
+/** 新しいストリームを取得するたび、前のトラック宛ての状態を引きずらないよう呼ぶ(resetCamZoom()と対) */
+function resetCamControls() {
+  camExposurePresets = null;
+  camExposureIndex = 0;
+  camWbPresets = null;
+  camWbIndex = 0;
+  camTorchSupported = false;
+  camTorchOn = false;
+  if (!camEls) return;
+  [camEls.exposureBtn, camEls.wbBtn, camEls.torchBtn].forEach((btn) => {
+    if (btn) { btn.hidden = true; btn.classList.remove('active'); }
+  });
+  [camEls.exposureLabel, camEls.wbLabel, camEls.torchLabel].forEach((label) => { if (label) label.hidden = true; });
+}
+
+/** 実機のCapabilitiesを見て、対応しているボタンだけ表示する(js/camera.jsのmaximizeVideoTrackResolution()から呼ぶ) */
+function updateCamControlAvailability(caps) {
+  if (!camEls) return;
+  camExposurePresets = computeExposurePresets(caps);
+  camExposureIndex = 0;
+  if (camEls.exposureBtn) camEls.exposureBtn.hidden = !camExposurePresets;
+  if (camEls.exposureLabel) {
+    camEls.exposureLabel.hidden = !camExposurePresets;
+    if (camExposurePresets) camEls.exposureLabel.textContent = camExposurePresets[0].label;
+  }
+
+  camWbPresets = computeWbPresets(caps);
+  camWbIndex = 0;
+  if (camEls.wbBtn) camEls.wbBtn.hidden = !camWbPresets;
+  if (camEls.wbLabel) {
+    camEls.wbLabel.hidden = !camWbPresets;
+    if (camWbPresets) camEls.wbLabel.textContent = camWbPresets[0].label;
+  }
+
+  camTorchSupported = caps.torch === true;
+  camTorchOn = false;
+  if (camEls.torchBtn) { camEls.torchBtn.hidden = !camTorchSupported; camEls.torchBtn.classList.remove('active'); }
+  if (camEls.torchLabel) { camEls.torchLabel.hidden = !camTorchSupported; camEls.torchLabel.textContent = 'OFF'; }
+
+  camDebugLog(`カメラ制御ボタン: 露出=${camExposurePresets ? 'あり' : 'なし'} / WB=${camWbPresets ? 'あり' : 'なし'} / トーチ=${camTorchSupported ? 'あり' : 'なし'}`);
+}
+
+function currentVideoTrack() {
+  return camStream && camStream.getVideoTracks()[0];
+}
+
+async function cycleExposure() {
+  if (!camExposurePresets) return;
+  const track = currentVideoTrack();
+  if (!track) return;
+  camExposureIndex = (camExposureIndex + 1) % camExposurePresets.length;
+  const preset = camExposurePresets[camExposureIndex];
+  camEls.exposureLabel.textContent = preset.label;
+  camEls.exposureBtn.classList.toggle('active', preset.value !== 0);
+  try {
+    await track.applyConstraints({ advanced: [{ exposureCompensation: preset.value }] });
+  } catch (err) {
+    camDebugLog(`露出補正applyConstraints失敗: ${err && err.message ? err.message : err}`);
+  }
+}
+
+async function cycleWhiteBalance() {
+  if (!camWbPresets) return;
+  const track = currentVideoTrack();
+  if (!track) return;
+  camWbIndex = (camWbIndex + 1) % camWbPresets.length;
+  const preset = camWbPresets[camWbIndex];
+  camEls.wbLabel.textContent = preset.label;
+  camEls.wbBtn.classList.toggle('active', preset.mode !== 'continuous');
+  try {
+    if (preset.mode === 'continuous') {
+      await track.applyConstraints({ advanced: [{ whiteBalanceMode: 'continuous' }] });
+    } else {
+      await track.applyConstraints({ advanced: [{ whiteBalanceMode: 'manual', colorTemperature: preset.temp }] });
+    }
+  } catch (err) {
+    camDebugLog(`ホワイトバランスapplyConstraints失敗: ${err && err.message ? err.message : err}`);
+  }
+}
+
+async function toggleTorch() {
+  if (!camTorchSupported) return;
+  const track = currentVideoTrack();
+  if (!track) return;
+  const next = !camTorchOn;
+  try {
+    await track.applyConstraints({ advanced: [{ torch: next }] });
+    camTorchOn = next; // 成功した場合だけ状態を確定する(失敗時はボタンの表示と実機の状態がズレないよう据え置く)
+    camEls.torchBtn.classList.toggle('active', camTorchOn);
+    camEls.torchLabel.textContent = camTorchOn ? 'ON' : 'OFF';
+  } catch (err) {
+    camDebugLog(`トーチapplyConstraints失敗: ${err && err.message ? err.message : err}`);
+  }
+}
+
+function wireCameraControls() {
+  [camEls.exposureBtn, camEls.wbBtn, camEls.torchBtn].forEach((btn) => {
+    if (btn) btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  });
+  if (camEls.exposureBtn) camEls.exposureBtn.addEventListener('click', (e) => { e.stopPropagation(); cycleExposure(); });
+  if (camEls.wbBtn) camEls.wbBtn.addEventListener('click', (e) => { e.stopPropagation(); cycleWhiteBalance(); });
+  if (camEls.torchBtn) camEls.torchBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleTorch(); });
 }
 
 function stopCameraStream() {

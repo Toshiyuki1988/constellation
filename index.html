@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260914f">
-<link rel="stylesheet" href="css/camera.css?v=20260915c">
+<link rel="stylesheet" href="css/camera.css?v=20260915d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -157,6 +157,28 @@
       <div class="cam-hint">タップでピント</div>
       <div class="cam-focus-layer" id="focus-layer-photo"></div>
       <div class="cam-zoom-badge" id="zoom-badge-photo" hidden></div>
+      <!-- カメラのハードウェア制御(露出補正・ホワイトバランス・トーチ、2026年9月追加): いずれも
+           画像処理ではなく実機のMediaStreamTrack Capabilitiesを直接操作する。対応していない
+           端末(特にiOS Safari)ではボタンごとhiddenのまま隠れる(js/camera.jsのupdateCamControlAvailability()
+           参照)。タップのたびにプリセットを1つずつ巡回する方式で、スライダーは使わない。 -->
+      <div class="cam-control-row" id="cam-control-row-photo">
+        <div class="cam-control-item">
+          <button class="cam-control-btn" id="cam-exposure-btn" type="button" title="露出補正" hidden>
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4.2" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v2.4M12 18.6V21M21 12h-2.4M5.4 12H3M18.2 5.8l-1.7 1.7M7.5 16.5l-1.7 1.7M18.2 18.2l-1.7-1.7M7.5 7.5l-1.7-1.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+          <span class="cam-control-label" id="cam-exposure-label" hidden>標準</span>
+        </div>
+        <div class="cam-control-item">
+          <button class="cam-control-btn cam-control-btn--text" id="cam-wb-btn" type="button" title="ホワイトバランス" hidden>WB</button>
+          <span class="cam-control-label" id="cam-wb-label" hidden>オート</span>
+        </div>
+        <div class="cam-control-item">
+          <button class="cam-control-btn" id="cam-torch-btn" type="button" title="ライト" hidden>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 21h6M10 18h4M8 10a4 4 0 1 1 8 0c0 2-1.2 3-2 4.2-.4.6-.6 1.1-.6 1.8h-2.8c0-.7-.2-1.2-.6-1.8C9.2 13 8 12 8 10Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="cam-control-label" id="cam-torch-label" hidden>OFF</span>
+        </div>
+      </div>
       <!-- Frame Guide(2026年9月追加、同月中にビジュアル刷新): 位置合わせ用の矩形。撮影結果には
            一切影響しない見た目の目安専用(js/camera.jsのwireFrameGuide()参照)。ダブルタップでも
            開閉できるが、実機でダブルタップ判定が安定しない報告を受け、確実な入口としてボタンを
@@ -325,7 +347,7 @@
   <script src="js/upload-queue.js?v=20260912a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911e"></script>
-  <script src="js/camera.js?v=20260915b"></script>
+  <script src="js/camera.js?v=20260915c"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
