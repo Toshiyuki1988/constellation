@@ -99,6 +99,17 @@
 .cam-sun { position: absolute; left: 56px; top: -14px; width: 26px; height: 26px; }
 .cam-sun circle, .cam-sun line { stroke: #ffe27a; stroke-width: 1.6; fill: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
 
+/* ---------- Frame Guide: 位置合わせ用の矩形を開閉するボタン(2026年9月追加) ----------
+   実機で「素早くダブルタップしても反応しない」報告があり、ジェスチャー判定の
+   不確実性に頼らない確実な入口として、既存の#camera-close(閉じる、右上)と対称の
+   左上に常設した。 */
+.cam-frame-guide-toggle {
+  position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 8px; z-index: 20;
+  background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.25); color: #fff;
+  font-family: inherit; font-size: 10px; padding: 7px 10px; border-radius: 14px; cursor: pointer;
+}
+.cam-frame-guide-toggle.active { background: rgba(255, 255, 255, 0.9); color: #000; }
+
 /* ---------- Frame Guide: ダブルタップで出す位置合わせ用の矩形(2026年9月追加) ----------
    絵画・写真の四隅に重ねて構図の目安にするためだけのガイド。移動・リサイズできるが、
    撮影結果(capturePhoto())には一切反映しない(camera-rect-guide-artifact.htmlで検証済み)。

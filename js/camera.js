@@ -194,6 +194,7 @@ function ensureCameraDom() {
     zoomBadgePhoto: document.getElementById('zoom-badge-photo'),
     shutterPhoto: document.getElementById('camera-shutter-photo'),
     frameGuidePhoto: document.getElementById('frame-guide-photo'),
+    frameGuideTogglePhoto: document.getElementById('frame-guide-toggle-photo'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
@@ -253,7 +254,7 @@ function wireCameraEvents() {
   wireTapFocus(camEls.photoScreen, camEls.focusLayerPhoto, () => camEls.videoPhoto);
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
 
-  wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto);
+  wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto, camEls.frameGuideTogglePhoto);
 
   wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
@@ -525,7 +526,7 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
  * js/canvas.jsの俯瞰ズーム判定(pointerdown/pointerupの間隔・距離を見るだけの自前実装)と
  * 同じ考え方。wireTapFocus()の既存のclick(シングルタップでピント)とは独立に動くため、
  * ダブルタップの1・2回目それぞれでピントも合わせにいくが実害はない(むしろ自然)。 */
-function wireFrameGuide(screenEl, frameEl) {
+function wireFrameGuide(screenEl, frameEl, toggleBtn) {
   // 実機で「ダブルタップしても反応しない」報告(2026年9月)を受け、指のブレ・タップ間隔の
   // バラつきに強くなるよう、js/canvas.jsの俯瞰ズーム判定(350ms/10px/40px)より緩めた値にした。
   const DOUBLE_TAP_MS = 500;
@@ -551,13 +552,25 @@ function wireFrameGuide(screenEl, frameEl) {
     frameEl.classList.add('visible', 'appearing');
     setTimeout(() => frameEl.classList.remove('appearing'), 200);
     visible = true;
+    if (toggleBtn) toggleBtn.classList.add('active');
   }
   function hide() {
     frameEl.classList.remove('visible');
     visible = false;
+    if (toggleBtn) toggleBtn.classList.remove('active');
   }
   function toggle() {
     if (visible) hide(); else showDefault();
+  }
+
+  // ジェスチャー判定の不確実性に頼らない確実な入口(2026年9月追加)。実機で「素早く
+  // ダブルタップしても反応しない」報告が続いたため、ボタンでも開閉できるようにした。
+  if (toggleBtn) {
+    toggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggle();
+    });
   }
 
   // 実機での原因切り分け用のデバッグログ(2026年9月、「ダブルタップしても反応しない」

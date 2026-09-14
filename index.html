@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260914f">
-<link rel="stylesheet" href="css/camera.css?v=20260914a">
+<link rel="stylesheet" href="css/camera.css?v=20260915a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -164,8 +164,10 @@
       <div class="cam-align-pulse" id="align-pulse-photo">◆ 正対しています</div>
       <div class="cam-focus-layer" id="focus-layer-photo"></div>
       <div class="cam-zoom-badge" id="zoom-badge-photo" hidden></div>
-      <!-- Frame Guide(2026年9月追加): ダブルタップで出る位置合わせ用の矩形。撮影結果には
-           一切影響しない見た目の目安専用(js/camera.jsのwireFrameGuide()参照)。 -->
+      <!-- Frame Guide(2026年9月追加): 位置合わせ用の矩形。撮影結果には一切影響しない
+           見た目の目安専用(js/camera.jsのwireFrameGuide()参照)。ダブルタップでも開閉できるが、
+           実機でダブルタップ判定が安定しない報告を受け、確実な入口としてボタンを常設した。 -->
+      <button class="cam-frame-guide-toggle" id="frame-guide-toggle-photo" title="位置合わせガイドの表示切り替え">📐 ガイド</button>
       <div class="cam-frame-guide" id="frame-guide-photo">
         <div class="cam-frame-body"></div>
         <div class="cam-frame-handle nw"></div>
@@ -327,7 +329,7 @@
   <script src="js/upload-queue.js?v=20260912a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911e"></script>
-  <script src="js/camera.js?v=20260914b"></script>
+  <script src="js/camera.js?v=20260915a"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
