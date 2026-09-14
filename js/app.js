@@ -996,6 +996,11 @@ function redrawAsterismLines() {
       c.mediaType !== 'streetview' &&
       c.mediaType !== 'chat' &&
       c.mediaType !== 'comment' && // 生成時に既にASTR接続済みのため、見た順の自動線は対象外
+      // イマジナリーカード(Star Pencil)も自動線の対象から除外する(2026年9月、ユーザー
+      // 指示)。描いた絵は作成時刻が近いというだけで他のカードと繋がってしまうと画面が
+      // 混み合うため。手動のASTR接続(編集ガイド)は「何かに使えるかもしれない」という
+      // ユーザー判断で引き続き持たせている。
+      c.mediaType !== 'imaginary' &&
       !c.summarySourceId
   );
 
