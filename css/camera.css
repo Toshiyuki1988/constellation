@@ -99,19 +99,20 @@
    幾何学モチーフ)とペーパークラフト(重なった紙の切り抜き、トリムマーク)を掛け合わせた
    特注デザインにした。背景の黒い映像に対して、暖色の紙が1枚浮いているように見せるため、
    ::beforeで少し回転させた「奥の紙」を覗かせ、本体は木漏れ日のような柔らかいクリーム色にした。 */
-.cam-frame-guide-toggle {
-  position: absolute;
-  bottom: calc(26px + 10px + env(safe-area-inset-bottom, 0px)); /* (64px-44px)/2=10pxずらして縦中心をシャッターに揃える */
-  right: calc(50% + 32px + 14px); /* シャッター半径32px + 間隔14px */
+/* .cam-round-toggle: シャッターを挟んで左右対称に並ぶ丸ボタンの共通の見た目(2026年9月、
+   手ブレ検知オートシャッター追加時に.cam-frame-guide-toggle専用だったCSSを共通化した)。
+   位置(bottom/left/right)だけ、使う場所ごとに個別クラス/ラッパーで指定する。 */
+.cam-round-toggle {
+  position: relative;
   z-index: 8;
   width: 46px; height: 46px;
   border: none; background: none; color: var(--frame-accent-deep);
   cursor: pointer; padding: 0;
   transition: transform 0.12s ease;
 }
-.cam-frame-guide-toggle::before {
+.cam-round-toggle::before {
   /* 奥にもう1枚、少し回転してずれた紙が重なっているように見せる(ペーパークラフトの重なり)。
-     位置指定なしの::beforeは通常のツリー順で描画されるため、後ろに置く.cam-frame-guide-toggle-face
+     位置指定なしの::beforeは通常のツリー順で描画されるため、後ろに置く.cam-round-toggle-face
      (実在の子要素)より必ず先に(=下に)描かれる。ここにz-index:-1を使うと、ボタン自身の
      背景よりもさらに上に描画されてしまう(negative z-indexは「自身の背景より上・通常コンテンツより下」
      という順序のため)不具合を実機確認で踏んだため、z-indexに頼らずDOM順序だけで重なりを制御している。 */
@@ -120,20 +121,38 @@
   background: var(--frame-accent-deep);
   transform: rotate(-9deg) translate(1px, 2px);
 }
-.cam-frame-guide-toggle-face {
+.cam-round-toggle-face {
   position: absolute; inset: 0; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   background: var(--frame-paper); color: var(--frame-accent-deep);
   box-shadow: 0 3px 8px var(--frame-shadow), 0 1px 0 rgba(255, 255, 255, 0.4) inset;
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
-.cam-frame-guide-toggle svg { width: 20px; height: 20px; }
-.cam-frame-guide-toggle:active { transform: translateY(1px) scale(0.96); }
-.cam-frame-guide-toggle.active .cam-frame-guide-toggle-face {
+.cam-round-toggle svg { width: 20px; height: 20px; }
+.cam-round-toggle:active { transform: translateY(1px) scale(0.96); }
+.cam-round-toggle.active .cam-round-toggle-face {
   background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
   color: var(--frame-paper);
   box-shadow: 0 1px 3px var(--frame-shadow) inset, 0 2px 6px var(--frame-shadow);
 }
+
+.cam-frame-guide-toggle {
+  position: absolute;
+  bottom: calc(26px + 10px + env(safe-area-inset-bottom, 0px)); /* (64px-44px)/2=10pxずらして縦中心をシャッターに揃える */
+  right: calc(50% + 32px + 14px); /* シャッター半径32px + 間隔14px */
+}
+
+/* 手ブレ検知オートシャッター(2026年9月追加)。Frame Guideトグルと左右対称になるよう、
+   シャッターの右横・同じ縦位置に置く。ラベル(状態表示)を下に添えるためラッパーで
+   position:absoluteを持たせ、中のボタン自体はflow内(position:relative)に戻す。 */
+.cam-round-toggle-wrap {
+  position: absolute;
+  bottom: calc(26px + 10px + env(safe-area-inset-bottom, 0px) - 12px); /* ラベル分だけ全体を少し下げて、ボタン単体の縦中心はシャッターに揃える */
+  left: calc(50% + 32px + 14px);
+  z-index: 8;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.cam-round-toggle-wrap .cam-control-label { position: static; }
 
 /* ---------- Frame Guide: ダブルタップ/ボタンで出す位置合わせ用の矩形 ----------
    絵画・写真の四隅に重ねて構図の目安にするためだけのガイド。移動・リサイズできるが、
@@ -202,6 +221,77 @@
 .cam-frame-handle.sw { top: 100%; left: 0; cursor: nesw-resize; }
 .cam-frame-handle.se { top: 100%; left: 100%; cursor: nwse-resize; }
 .cam-frame-body { position: absolute; inset: 0; cursor: move; }
+
+/* 比率プリセット(F/P/M/S/円形)の選択チップ。矩形の上辺の外側に並べる(2026年9月追加)。
+   F=人物型・P=風景型・M=海景型・S=正方形という、油彩キャンバスの号数で使われる4形状+円形。 */
+.cam-frame-ratio-row {
+  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+  margin-bottom: 10px;
+  display: flex; gap: 6px; touch-action: none;
+}
+.cam-frame-ratio-chip {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 1.5px solid var(--frame-accent-deep);
+  background: var(--frame-paper); color: var(--frame-accent-deep);
+  font: 700 10px/1 inherit; cursor: pointer; padding: 0;
+  box-shadow: 0 2px 5px var(--frame-shadow);
+  transition: transform 0.1s ease, background 0.15s ease, color 0.15s ease;
+}
+.cam-frame-ratio-chip:active { transform: scale(0.92); }
+.cam-frame-ratio-chip.active {
+  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
+  color: var(--frame-paper);
+}
+
+/* 縦スライダー2本、矩形の右横の外側に添える(2026年9月追加)。位置(高さの割合)がそのまま
+   値を表す「本物のスライダー」で、ドラッグ中の相対量ではなくトラック上の絶対位置から
+   毎回値を計算し直す(js/camera.jsのapplySizeSliderDrag()/applyZoomSliderDrag()参照)。
+   内側(--size)=選択中の比率を保ったままのサイズ変更、外側(--zoom)=カメラズーム。 */
+.cam-frame-slider {
+  position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+  width: 26px; height: 140px; touch-action: none;
+}
+.cam-frame-slider--size { margin-left: 16px; }
+.cam-frame-slider--zoom { margin-left: 56px; }
+.cam-frame-slider-track {
+  position: absolute; left: 50%; top: 0; bottom: 0; width: 4px; transform: translateX(-50%);
+  background: var(--frame-paper-dim); border-radius: 2px;
+}
+.cam-frame-slider-thumb {
+  position: absolute; left: 50%; top: 50%; width: 26px; height: 26px;
+  transform: translate(-50%, -50%);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--frame-paper); border: 2.5px solid var(--frame-accent);
+  box-shadow: 0 2px 5px var(--frame-shadow);
+  font-size: 11px; line-height: 1;
+}
+.cam-frame-slider--zoom .cam-frame-slider-thumb { border-color: var(--frame-accent-deep); }
+
+/* 対称/非対称リサイズの切り替え。矩形の下辺の外側、中央に置く(2026年9月追加)。
+   四隅ハンドル・サイズスライダーどちらのリサイズにも共通で効く
+   (js/camera.jsのframeSymmetricResize参照)。 */
+.cam-frame-symmetry-toggle {
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  margin-top: 10px;
+  height: 22px; border-radius: 11px; padding: 0 10px;
+  border: 1.5px solid var(--frame-accent-deep);
+  background: var(--frame-paper); color: var(--frame-accent-deep);
+  font-family: inherit; font-size: 9.5px; letter-spacing: 0.04em; white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 5px var(--frame-shadow);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cam-frame-symmetry-toggle.active {
+  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
+  color: var(--frame-paper);
+}
+
+/* 円形プリセット(2026年9月追加): 矩形そのものを丸めるだけで、三分割線・トリムマークは
+   円には合わないため非表示にする。リサイズハンドル・両スライダーは引き続き
+   (見えないバウンディングボックスに対して)機能する。 */
+.cam-frame-guide.shape-circle { border-radius: 50%; }
+.cam-frame-guide.shape-circle::before { display: none; }
+.cam-frame-guide.shape-circle .cam-frame-corner { display: none; }
 
 @keyframes camFrameAppear {
   0% { opacity: 0; transform: scale(0.92) rotate(-2.5deg); }

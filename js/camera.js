@@ -44,16 +44,42 @@ let camZoomNative = false;
 let camZoomCaps = null; // {min, max, step} | null
 const CAM_ZOOM_DIGITAL_MAX = 4;
 
-// 露出補正・ホワイトバランス・トーチ(2026年9月追加)。いずれも画像処理ではなく実機の
+// 露出補正・ホワイトバランス(2026年9月追加)。いずれも画像処理ではなく実機の
 // MediaStreamTrack Capabilities(Image Capture拡張)を直接操作する、いわゆるハードウェア制御。
 // ズームと同様、対応状況は端末・ブラウザ次第(特にiOS Safariは対応が薄いと見られる)。
 // スライダーではなく「タップのたびにプリセットを1つずつ巡回する」ボタン方式にしている。
+// **トーチも同時期に一度実装したが、「誤って点灯させたままの意図しないフラッシュ撮影を
+// 避けたい」というユーザー判断により同月中に撤去した。**
 let camExposurePresets = null; // [{value,label}, ...] | null(非対応)
 let camExposureIndex = 0;
 let camWbPresets = null; // [{mode,temp?,label}, ...] | null(非対応)
 let camWbIndex = 0;
-let camTorchSupported = false;
-let camTorchOn = false;
+
+// 手ブレ検知オートシャッター(2026年9月追加、トーチ撤去の代わり)。DeviceMotionで
+// 「構えて静止した瞬間」を検知して自動シャッターを切る。センサー非対応・権限拒否・
+// 一定時間イベントが来ない端末では自動的にタイマー撮影へフォールバックする。
+let camAutoShutterArmed = false;
+let camAutoShutterMode = null; // 'motion' | 'timer' | null
+let camAutoShutterLastVec = null;
+let camAutoShutterSteadySince = null;
+let camAutoShutterTimerId = null;
+let camAutoShutterWatchdogId = null;
+let camAutoShutterMotionGotEvent = false;
+const AUTO_SHUTTER_STEADY_MS = 550; // これだけの時間、揺れが閾値を下回り続けたら撮影する
+const AUTO_SHUTTER_JERK_THRESHOLD = 0.5; // m/s^2、前フレームとの加速度差(経験的な閾値)
+const AUTO_SHUTTER_TIMER_MS = 3000; // センサー非対応時のフォールバック: 単純な3秒タイマー
+const AUTO_SHUTTER_MOTION_WATCHDOG_MS = 1200; // この間に1件もdevicemotionが届かなければタイマーへ切り替える
+
+// Frame Guideの比率プリセット(2026年9月追加)。F/P/M/Sは油彩キャンバスの号数で使われる
+// 「人物型・風景型・海景型・正方形」の4形状にちなむ近似比率(号数によって微妙に違うため、
+// 構図の目安として代表的な値に丸めている)。ratioはすべて「長辺/短辺」。
+const CAM_FRAME_RATIO_PRESETS = [
+  { key: 'F', ratio: 1.29, shape: 'rect' },
+  { key: 'P', ratio: 1.50, shape: 'rect' },
+  { key: 'M', ratio: 1.68, shape: 'rect' },
+  { key: 'S', ratio: 1.00, shape: 'rect' },
+  { key: 'C', ratio: 1.00, shape: 'circle' },
+];
 
 let camMediaRecorder = null;
 let camRecordedChunks = [];
@@ -201,12 +227,16 @@ function ensureCameraDom() {
     shutterPhoto: document.getElementById('camera-shutter-photo'),
     frameGuidePhoto: document.getElementById('frame-guide-photo'),
     frameGuideTogglePhoto: document.getElementById('frame-guide-toggle-photo'),
+    frameRatioRowPhoto: document.getElementById('frame-ratio-row-photo'),
+    frameSizeSliderPhoto: document.getElementById('frame-size-slider-photo'),
+    frameZoomSliderPhoto: document.getElementById('frame-zoom-slider-photo'),
+    frameSymmetryTogglePhoto: document.getElementById('frame-symmetry-toggle-photo'),
     exposureBtn: document.getElementById('cam-exposure-btn'),
     exposureLabel: document.getElementById('cam-exposure-label'),
     wbBtn: document.getElementById('cam-wb-btn'),
     wbLabel: document.getElementById('cam-wb-label'),
-    torchBtn: document.getElementById('cam-torch-btn'),
-    torchLabel: document.getElementById('cam-torch-label'),
+    autoShutterBtn: document.getElementById('cam-auto-shutter-btn'),
+    autoShutterLabel: document.getElementById('cam-auto-shutter-label'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
@@ -264,8 +294,9 @@ function wireCameraEvents() {
   wireTapFocus(camEls.photoScreen, camEls.focusLayerPhoto, () => camEls.videoPhoto);
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
 
-  wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto, camEls.frameGuideTogglePhoto);
+  wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto, camEls.frameGuideTogglePhoto, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wireCameraControls();
+  wireAutoShutterButton();
 
   wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
@@ -456,13 +487,11 @@ function resetCamControls() {
   camExposureIndex = 0;
   camWbPresets = null;
   camWbIndex = 0;
-  camTorchSupported = false;
-  camTorchOn = false;
   if (!camEls) return;
-  [camEls.exposureBtn, camEls.wbBtn, camEls.torchBtn].forEach((btn) => {
+  [camEls.exposureBtn, camEls.wbBtn].forEach((btn) => {
     if (btn) { btn.hidden = true; btn.classList.remove('active'); }
   });
-  [camEls.exposureLabel, camEls.wbLabel, camEls.torchLabel].forEach((label) => { if (label) label.hidden = true; });
+  [camEls.exposureLabel, camEls.wbLabel].forEach((label) => { if (label) label.hidden = true; });
 }
 
 /** 実機のCapabilitiesを見て、対応しているボタンだけ表示する(js/camera.jsのmaximizeVideoTrackResolution()から呼ぶ) */
@@ -484,12 +513,7 @@ function updateCamControlAvailability(caps) {
     if (camWbPresets) camEls.wbLabel.textContent = camWbPresets[0].label;
   }
 
-  camTorchSupported = caps.torch === true;
-  camTorchOn = false;
-  if (camEls.torchBtn) { camEls.torchBtn.hidden = !camTorchSupported; camEls.torchBtn.classList.remove('active'); }
-  if (camEls.torchLabel) { camEls.torchLabel.hidden = !camTorchSupported; camEls.torchLabel.textContent = 'OFF'; }
-
-  camDebugLog(`カメラ制御ボタン: 露出=${camExposurePresets ? 'あり' : 'なし'} / WB=${camWbPresets ? 'あり' : 'なし'} / トーチ=${camTorchSupported ? 'あり' : 'なし'}`);
+  camDebugLog(`カメラ制御ボタン: 露出=${camExposurePresets ? 'あり' : 'なし'} / WB=${camWbPresets ? 'あり' : 'なし'}`);
 }
 
 function currentVideoTrack() {
@@ -530,28 +554,129 @@ async function cycleWhiteBalance() {
   }
 }
 
-async function toggleTorch() {
-  if (!camTorchSupported) return;
-  const track = currentVideoTrack();
-  if (!track) return;
-  const next = !camTorchOn;
-  try {
-    await track.applyConstraints({ advanced: [{ torch: next }] });
-    camTorchOn = next; // 成功した場合だけ状態を確定する(失敗時はボタンの表示と実機の状態がズレないよう据え置く)
-    camEls.torchBtn.classList.toggle('active', camTorchOn);
-    camEls.torchLabel.textContent = camTorchOn ? 'ON' : 'OFF';
-  } catch (err) {
-    camDebugLog(`トーチapplyConstraints失敗: ${err && err.message ? err.message : err}`);
-  }
-}
-
 function wireCameraControls() {
-  [camEls.exposureBtn, camEls.wbBtn, camEls.torchBtn].forEach((btn) => {
+  [camEls.exposureBtn, camEls.wbBtn].forEach((btn) => {
     if (btn) btn.addEventListener('pointerdown', (e) => e.stopPropagation());
   });
   if (camEls.exposureBtn) camEls.exposureBtn.addEventListener('click', (e) => { e.stopPropagation(); cycleExposure(); });
   if (camEls.wbBtn) camEls.wbBtn.addEventListener('click', (e) => { e.stopPropagation(); cycleWhiteBalance(); });
-  if (camEls.torchBtn) camEls.torchBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleTorch(); });
+}
+
+/* ---------------- 手ブレ検知オートシャッター(2026年9月追加) ----------------
+ * トーチ(誤って点灯させたままの意図しないフラッシュ撮影が心配、というユーザー判断で撤去)の
+ * 代わりに、暗い展示室でのシャッターブレ対策として追加した。DeviceMotionの加速度から
+ * 「前フレームとの差(ジャーク)」を計算し、これが閾値を下回る状態がAUTO_SHUTTER_STEADY_MS
+ * だけ続いたら自動でシャッターを切る。iOSは権限確認が必要(旧・傾きガイドと同じAPI)。
+ * 権限拒否・API非対応・権限は通ったが実際にはイベントが来ない(センサー無し等)場合は、
+ * AUTO_SHUTTER_MOTION_WATCHDOG_MS以内に1件もイベントが来なければ単純な3秒タイマーに
+ * 切り替える「保険」を必ず用意し、どんな端末でも最終的には必ず撮影されるようにしている。 */
+
+function wireAutoShutterButton() {
+  if (!camEls.autoShutterBtn) return;
+  camEls.autoShutterBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  camEls.autoShutterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (camAutoShutterArmed) disarmAutoShutter(); else armAutoShutter();
+  });
+}
+
+async function ensureMotionPermission() {
+  if (typeof DeviceMotionEvent === 'undefined') return false;
+  try {
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      const perm = await DeviceMotionEvent.requestPermission();
+      return perm === 'granted';
+    }
+    return true; // 権限確認が不要な環境(iOS以外の大半)
+  } catch (err) {
+    camDebugLog(`devicemotion権限取得失敗: ${err && err.message ? err.message : err}`);
+    return false;
+  }
+}
+
+async function armAutoShutter() {
+  if (camAutoShutterArmed) return;
+  camAutoShutterArmed = true;
+  camAutoShutterMode = null;
+  camAutoShutterLastVec = null;
+  camAutoShutterSteadySince = null;
+  camAutoShutterMotionGotEvent = false;
+  camEls.autoShutterBtn.classList.add('active');
+  camEls.autoShutterLabel.hidden = false;
+  camEls.autoShutterLabel.textContent = '判定中…';
+
+  const granted = await ensureMotionPermission();
+  if (!camAutoShutterArmed) return; // 権限確認中にキャンセルされた
+  if (!granted) {
+    startAutoShutterTimerFallback();
+    return;
+  }
+  window.addEventListener('devicemotion', handleAutoShutterMotion);
+  camDebugLog('オートシャッター: devicemotion監視を開始しました');
+  // 権限は通ったが実機にセンサーが無い等でイベントが一切来ないケースの保険。
+  camAutoShutterWatchdogId = setTimeout(() => {
+    if (camAutoShutterArmed && !camAutoShutterMotionGotEvent) {
+      camDebugLog('オートシャッター: devicemotionイベントが届かないためタイマーへ切り替えます');
+      window.removeEventListener('devicemotion', handleAutoShutterMotion);
+      startAutoShutterTimerFallback();
+    }
+  }, AUTO_SHUTTER_MOTION_WATCHDOG_MS);
+}
+
+function startAutoShutterTimerFallback() {
+  camAutoShutterMode = 'timer';
+  camEls.autoShutterLabel.textContent = `${Math.round(AUTO_SHUTTER_TIMER_MS / 1000)}秒後に撮影`;
+  camAutoShutterTimerId = setTimeout(() => { fireAutoShutter(); }, AUTO_SHUTTER_TIMER_MS);
+}
+
+function handleAutoShutterMotion(e) {
+  if (!camAutoShutterArmed) return;
+  camAutoShutterMotionGotEvent = true;
+  if (camAutoShutterMode == null) {
+    camAutoShutterMode = 'motion';
+    camEls.autoShutterLabel.textContent = '構えて待機…';
+  }
+  if (camAutoShutterMode !== 'motion') return; // 既にタイマーへフォールバック済みなら無視
+  const a = e.acceleration && e.acceleration.x != null ? e.acceleration : e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  if (camAutoShutterLastVec) {
+    const dx = a.x - camAutoShutterLastVec.x;
+    const dy = a.y - camAutoShutterLastVec.y;
+    const dz = a.z - camAutoShutterLastVec.z;
+    const jerk = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const now = performance.now();
+    if (jerk < AUTO_SHUTTER_JERK_THRESHOLD) {
+      if (camAutoShutterSteadySince == null) camAutoShutterSteadySince = now;
+      if (now - camAutoShutterSteadySince >= AUTO_SHUTTER_STEADY_MS) {
+        fireAutoShutter();
+        return;
+      }
+    } else {
+      camAutoShutterSteadySince = null;
+    }
+  }
+  camAutoShutterLastVec = { x: a.x, y: a.y, z: a.z };
+}
+
+function fireAutoShutter() {
+  camDebugLog(`オートシャッター: 撮影(mode=${camAutoShutterMode})`);
+  disarmAutoShutter();
+  if (camEls && camEls.shutterPhoto && !camEls.shutterPhoto.disabled) capturePhoto();
+}
+
+function disarmAutoShutter() {
+  camAutoShutterArmed = false;
+  camAutoShutterMode = null;
+  camAutoShutterLastVec = null;
+  camAutoShutterSteadySince = null;
+  window.removeEventListener('devicemotion', handleAutoShutterMotion);
+  clearTimeout(camAutoShutterTimerId);
+  camAutoShutterTimerId = null;
+  clearTimeout(camAutoShutterWatchdogId);
+  camAutoShutterWatchdogId = null;
+  if (!camEls) return;
+  if (camEls.autoShutterBtn) camEls.autoShutterBtn.classList.remove('active');
+  if (camEls.autoShutterLabel) { camEls.autoShutterLabel.hidden = true; camEls.autoShutterLabel.textContent = 'OFF'; }
 }
 
 function stopCameraStream() {
@@ -563,6 +688,7 @@ function stopCameraStream() {
 
 function teardownModeExtras() {
   teardownWaveform();
+  disarmAutoShutter(); // モードを抜けたら監視・タイマーを必ず止める(devicemotionリスナーの残留防止)
 }
 
 function updateScreenVisibility() {
@@ -649,17 +775,48 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
  * 一切反映しない(capturePhoto()はこの矩形の状態を一切参照しない)。ダブルタップ検出は
  * js/canvas.jsの俯瞰ズーム判定(pointerdown/pointerupの間隔・距離を見るだけの自前実装)と
  * 同じ考え方。wireTapFocus()の既存のclick(シングルタップでピント)とは独立に動くため、
- * ダブルタップの1・2回目それぞれでピントも合わせにいくが実害はない(むしろ自然)。 */
-function wireFrameGuide(screenEl, frameEl, toggleBtn) {
+ * ダブルタップの1・2回目それぞれでピントも合わせにいくが実害はない(むしろ自然)。
+ * **比率プリセット・スライダーリサイズ・対称/非対称トグルを追加(2026年9月)**:
+ * F/P/M/S/○(油彩キャンバスの号数比率+円形、CAM_FRAME_RATIO_PRESETS)の選択チップと、
+ * 2本の縦スライダー(サイズ=選択中の比率を保ったままの拡縮、ズーム=既存のピンチズームと
+ * 同じcamZoomScaleを動かす)を矩形に添えた。どちらも「ドラッグ量」ではなく「トラック上の
+ * 絶対位置」で値を決める本物のスライダー。四隅ハンドルは引き続き比率を無視した自由リサイズ
+ * 専用で、下辺の対称/非対称トグルがハンドル・サイズスライダー両方のリサイズの基準点
+ * (中心固定 or 反対側固定)を切り替える。 */
+function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
   // 実機で「ダブルタップしても反応しない」報告(2026年9月)を受け、指のブレ・タップ間隔の
   // バラつきに強くなるよう、js/canvas.jsの俯瞰ズーム判定(350ms/10px/40px)より緩めた値にした。
   const DOUBLE_TAP_MS = 500;
   const DOUBLE_TAP_MOVE_TOLERANCE_PX = 20;
   const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 70;
+  const MIN_FRAME_SIZE = 60;
   let pressStart = null;
   let lastTapAt = 0;
   let lastTapPos = null;
   let visible = false;
+  let ratioIndex = 0; // CAM_FRAME_RATIO_PRESETSのどれを使っているか
+  let symmetric = false; // 対称/非対称リサイズ(下辺トグル)
+
+  const ratioRowEl = frameEl.querySelector('.cam-frame-ratio-row');
+  const sizeSliderEl = frameEl.querySelector('.cam-frame-slider--size');
+  const zoomSliderEl = frameEl.querySelector('.cam-frame-slider--zoom');
+  const symmetryBtn = frameEl.querySelector('.cam-frame-symmetry-toggle');
+  const sizeThumbEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-frame-slider-thumb');
+  const sizeTrackEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-frame-slider-track');
+  const zoomThumbEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-frame-slider-thumb');
+  const zoomTrackEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-frame-slider-track');
+
+  function currentRatio() { return CAM_FRAME_RATIO_PRESETS[ratioIndex].ratio; }
+  function currentShape() { return CAM_FRAME_RATIO_PRESETS[ratioIndex].shape; }
+
+  /** その比率で矩形の長辺が取りうる範囲。画面の94%以内に収まるよう都度計算する。 */
+  function sizeBoundsForRatio(ratio) {
+    const rect = screenEl.getBoundingClientRect();
+    const maxByWidth = rect.width * 0.94;
+    const maxByHeight = rect.height * 0.94 * ratio;
+    const max = Math.max(MIN_FRAME_SIZE + 20, Math.min(maxByWidth, maxByHeight));
+    return { min: MIN_FRAME_SIZE, max };
+  }
 
   function applyRect(x, y, w, h) {
     frameEl.style.left = `${x}px`;
@@ -668,15 +825,50 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn) {
     frameEl.style.height = `${h}px`;
   }
 
+  function applyShapeAndChips() {
+    frameEl.classList.toggle('shape-circle', currentShape() === 'circle');
+    if (!ratioRowEl) return;
+    ratioRowEl.querySelectorAll('.cam-frame-ratio-chip').forEach((chip, i) => {
+      chip.classList.toggle('active', i === ratioIndex);
+    });
+  }
+
+  /** サイズスライダーのつまみ位置を、今の矩形の幅から逆算して合わせ直す(重い処理では
+   *  ないが毎pointermoveでは呼ばない。プリセット切替・ハンドルドラッグ終了時などに使う)。 */
+  function syncSizeSliderThumb() {
+    if (!sizeThumbEl) return;
+    const bounds = sizeBoundsForRatio(currentRatio());
+    const w = parseFloat(frameEl.style.width) || bounds.min;
+    const frac = bounds.max > bounds.min ? Math.max(0, Math.min(1, (w - bounds.min) / (bounds.max - bounds.min))) : 0;
+    sizeThumbEl.style.top = `${(1 - frac) * 100}%`;
+  }
+
+  /** ズームスライダーのつまみ位置を、現在のcamZoomScaleから合わせ直す。ピンチズーム側
+   *  (setCamZoom())からも呼べるよう、screenEl.__syncFrameZoomSliderとして橋渡しする。 */
+  function syncZoomSliderThumb() {
+    if (!zoomThumbEl) return;
+    const max = maxZoomForCurrentTrack();
+    const frac = max > 1 ? Math.max(0, Math.min(1, (camZoomScale - 1) / (max - 1))) : 0;
+    zoomThumbEl.style.top = `${(1 - frac) * 100}%`;
+  }
+  screenEl.__syncFrameZoomSlider = syncZoomSliderThumb;
+
   function showDefault() {
+    ratioIndex = 0;
+    symmetric = false;
+    applyShapeAndChips();
+    if (symmetryBtn) { symmetryBtn.classList.remove('active'); symmetryBtn.textContent = '非対称'; }
+    const bounds = sizeBoundsForRatio(currentRatio());
     const rect = screenEl.getBoundingClientRect();
-    const w = rect.width * 0.62;
-    const h = rect.height * 0.48;
+    const w = Math.min(bounds.max, Math.max(bounds.min, rect.width * 0.62));
+    const h = w / currentRatio();
     applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h);
     frameEl.classList.add('visible', 'appearing');
     setTimeout(() => frameEl.classList.remove('appearing'), 200);
     visible = true;
     if (toggleBtn) toggleBtn.classList.add('active');
+    syncSizeSliderThumb();
+    syncZoomSliderThumb();
   }
   function hide() {
     frameEl.classList.remove('visible');
@@ -685,6 +877,41 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn) {
   }
   function toggle() {
     if (visible) hide(); else showDefault();
+  }
+
+  /** 比率プリセットを切り替える。今の中心・今の長辺の長さをできるだけ保ったまま、
+   *  新しい比率に合わせて短辺だけ引き直す。 */
+  function applyPreset(index) {
+    ratioIndex = index;
+    applyShapeAndChips();
+    const rect = {
+      x: parseFloat(frameEl.style.left) || 0, y: parseFloat(frameEl.style.top) || 0,
+      w: parseFloat(frameEl.style.width) || 200, h: parseFloat(frameEl.style.height) || 200,
+    };
+    const bounds = sizeBoundsForRatio(currentRatio());
+    const longSide = Math.max(rect.w, rect.h);
+    const w = Math.max(bounds.min, Math.min(bounds.max, longSide));
+    const h = w / currentRatio();
+    const centerX = rect.x + rect.w / 2;
+    const centerY = rect.y + rect.h / 2;
+    applyRect(centerX - w / 2, centerY - h / 2, w, h);
+    syncSizeSliderThumb();
+  }
+
+  if (ratioRowEl) {
+    ratioRowEl.querySelectorAll('.cam-frame-ratio-chip').forEach((chip, i) => {
+      chip.addEventListener('pointerdown', (e) => e.stopPropagation());
+      chip.addEventListener('click', (e) => { e.stopPropagation(); applyPreset(i); });
+    });
+  }
+  if (symmetryBtn) {
+    symmetryBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    symmetryBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      symmetric = !symmetric;
+      symmetryBtn.classList.toggle('active', symmetric);
+      symmetryBtn.textContent = symmetric ? '対称' : '非対称';
+    });
   }
 
   // ジェスチャー判定の不確実性に頼らない確実な入口(2026年9月追加)。実機で「素早く
@@ -740,7 +967,7 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn) {
   });
 
   /* ---- 矩形の移動・リサイズ(四隅ハンドル) ---- */
-  let dragMode = null; // 'move' | 'nw'|'ne'|'sw'|'se'
+  let dragMode = null; // 'move' | 'nw'|'ne'|'sw'|'se' | 'size-slider' | 'zoom-slider'
   let dragStart = null;
 
   function beginDrag(mode, e) {
@@ -752,6 +979,15 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn) {
       rx: r.left - parentRect.left, ry: r.top - parentRect.top,
       rw: r.width, rh: r.height,
     };
+    // スライダーのトラック位置・その比率での可動範囲は、ドラッグ中(pointermoveのたび)に
+    // getBoundingClientRect()し直すと重いため、開始時に1回だけ計算して使い回す
+    // (Asterism線のドラッグ最適化と同じ考え方、本ファイル上部CLAUDE.mdの既存の教訓)。
+    if (mode === 'size-slider' && sizeTrackEl) {
+      dragStart.trackRect = sizeTrackEl.getBoundingClientRect();
+      dragStart.sizeBounds = sizeBoundsForRatio(currentRatio());
+    } else if (mode === 'zoom-slider' && zoomTrackEl) {
+      dragStart.trackRect = zoomTrackEl.getBoundingClientRect();
+    }
     e.stopPropagation();
     try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
   }
@@ -761,25 +997,76 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn) {
     const mode = h.classList.contains('nw') ? 'nw' : h.classList.contains('ne') ? 'ne' : h.classList.contains('sw') ? 'sw' : 'se';
     h.addEventListener('pointerdown', (e) => beginDrag(mode, e));
   });
+  if (sizeSliderEl) sizeSliderEl.addEventListener('pointerdown', (e) => beginDrag('size-slider', e));
+  if (zoomSliderEl) zoomSliderEl.addEventListener('pointerdown', (e) => beginDrag('zoom-slider', e));
 
-  const MIN_FRAME_SIZE = 60;
+  /** トラック上のpointerY位置を0(下端)〜1(上端)の割合に変換する(位置マッピング式のスライダー共通処理) */
+  function fracFromTrack(trackRect, clientY) {
+    const frac = 1 - (clientY - trackRect.top) / trackRect.height;
+    return Math.max(0, Math.min(1, frac));
+  }
+
   document.addEventListener('pointermove', (e) => {
     if (!dragMode || !dragStart) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     const { rx, ry, rw, rh } = dragStart;
+
     if (dragMode === 'move') {
       applyRect(rx + dx, ry + dy, rw, rh);
       return;
     }
-    let x = rx, y = ry, w = rw, h = rh;
-    if (dragMode.includes('e')) w = Math.max(MIN_FRAME_SIZE, rw + dx);
-    if (dragMode.includes('w')) { w = Math.max(MIN_FRAME_SIZE, rw - dx); x = rx + (rw - w); }
-    if (dragMode.includes('s')) h = Math.max(MIN_FRAME_SIZE, rh + dy);
-    if (dragMode.includes('n')) { h = Math.max(MIN_FRAME_SIZE, rh - dy); y = ry + (rh - h); }
+
+    if (dragMode === 'size-slider') {
+      // 「スライダー」= ドラッグ量ではなくトラック上の絶対位置がそのまま値になる(2026年9月追加)。
+      const frac = fracFromTrack(dragStart.trackRect, e.clientY);
+      const { min, max } = dragStart.sizeBounds;
+      const w = min + frac * (max - min);
+      const h = w / currentRatio();
+      if (symmetric) {
+        const cx = rx + rw / 2, cy = ry + rh / 2;
+        applyRect(cx - w / 2, cy - h / 2, w, h);
+      } else {
+        applyRect(rx, ry, w, h); // 非対称: 左上を固定したまま右・下へ伸び縮みする
+      }
+      if (sizeThumbEl) sizeThumbEl.style.top = `${(1 - frac) * 100}%`; // 自分のドラッグ中は逆算せず直接反映(軽量)
+      return;
+    }
+
+    if (dragMode === 'zoom-slider') {
+      const frac = fracFromTrack(dragStart.trackRect, e.clientY);
+      const max = maxZoomForCurrentTrack();
+      setCamZoom(1 + frac * (max - 1), videoEl, zoomBadgeEl); // setCamZoom()自体がネイティブ/デジタルズームを仕切ってくれる
+      if (zoomThumbEl) zoomThumbEl.style.top = `${(1 - frac) * 100}%`;
+      return;
+    }
+
+    // 四隅ハンドル: 比率を無視した自由リサイズ。下辺トグルで対称(中心固定)/非対称(対角固定)を切り替える。
+    let x, y, w, h;
+    if (symmetric) {
+      const signX = dragMode.includes('e') ? 1 : -1;
+      const signY = dragMode.includes('s') ? 1 : -1;
+      const extX = dx * signX, extY = dy * signY;
+      const cx = rx + rw / 2, cy = ry + rh / 2;
+      w = Math.max(MIN_FRAME_SIZE, rw + 2 * extX);
+      h = Math.max(MIN_FRAME_SIZE, rh + 2 * extY);
+      x = cx - w / 2;
+      y = cy - h / 2;
+    } else {
+      x = rx; y = ry; w = rw; h = rh;
+      if (dragMode.includes('e')) w = Math.max(MIN_FRAME_SIZE, rw + dx);
+      if (dragMode.includes('w')) { w = Math.max(MIN_FRAME_SIZE, rw - dx); x = rx + (rw - w); }
+      if (dragMode.includes('s')) h = Math.max(MIN_FRAME_SIZE, rh + dy);
+      if (dragMode.includes('n')) { h = Math.max(MIN_FRAME_SIZE, rh - dy); y = ry + (rh - h); }
+    }
     applyRect(x, y, w, h);
   });
-  document.addEventListener('pointerup', () => { dragMode = null; dragStart = null; });
+  document.addEventListener('pointerup', () => {
+    const wasHandleDrag = dragMode && dragMode !== 'move' && dragMode !== 'size-slider' && dragMode !== 'zoom-slider';
+    dragMode = null;
+    dragStart = null;
+    if (wasHandleDrag) syncSizeSliderThumb(); // 四隅ハンドルでの自由リサイズ後、サイズスライダーのつまみを実際の大きさへ合わせ直す
+  });
   document.addEventListener('pointercancel', () => { dragMode = null; dragStart = null; });
 
   // モードを抜けて戻ってきた時など、毎回ゼロから位置合わせできるよう非表示にリセットする。
@@ -873,6 +1160,10 @@ function setCamZoom(scale, videoEl, badgeEl) {
     videoEl.style.transform = `scale(${camZoomScale})`;
   }
   updateZoomBadge(badgeEl); // バッジは常に即座に最新の指の位置を反映する(ハードウェア追従待ちはしない)
+  // Frame Guideのズームスライダーのつまみも追従させる(ピンチズーム・スライダー操作のどちらで
+  // 変えても、もう片方の表示にすぐ反映される。2026年9月追加)。ガイドを持たない画面/非表示中でも
+  // 単に見えないつまみの位置を更新するだけなので無害。
+  if (camEls && camEls.photoScreen && camEls.photoScreen.__syncFrameZoomSlider) camEls.photoScreen.__syncFrameZoomSlider();
 }
 
 /** 現在の撮影に使うべきデジタルズーム倍率(ネイティブズーム中は1、それ以外はcamZoomScale) */
@@ -1466,6 +1757,7 @@ function teardownCamera() {
   resolveCamera = null;
   stopCameraStream();
   teardownWaveform();
+  disarmAutoShutter();
   clearTimeout(camOrientationFadeTimer);
   camOrientationFadeTimer = null;
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });

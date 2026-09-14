@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260914f">
-<link rel="stylesheet" href="css/camera.css?v=20260915d">
+<link rel="stylesheet" href="css/camera.css?v=20260915e">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -157,10 +157,11 @@
       <div class="cam-hint">タップでピント</div>
       <div class="cam-focus-layer" id="focus-layer-photo"></div>
       <div class="cam-zoom-badge" id="zoom-badge-photo" hidden></div>
-      <!-- カメラのハードウェア制御(露出補正・ホワイトバランス・トーチ、2026年9月追加): いずれも
+      <!-- カメラのハードウェア制御(露出補正・ホワイトバランス、2026年9月追加): いずれも
            画像処理ではなく実機のMediaStreamTrack Capabilitiesを直接操作する。対応していない
            端末(特にiOS Safari)ではボタンごとhiddenのまま隠れる(js/camera.jsのupdateCamControlAvailability()
-           参照)。タップのたびにプリセットを1つずつ巡回する方式で、スライダーは使わない。 -->
+           参照)。タップのたびにプリセットを1つずつ巡回する方式。**トーチは同月中に撤去した**
+           (誤って点灯させたままの「意図しないフラッシュ撮影」を避けるため、というユーザー判断)。 -->
       <div class="cam-control-row" id="cam-control-row-photo">
         <div class="cam-control-item">
           <button class="cam-control-btn" id="cam-exposure-btn" type="button" title="露出補正" hidden>
@@ -172,24 +173,42 @@
           <button class="cam-control-btn cam-control-btn--text" id="cam-wb-btn" type="button" title="ホワイトバランス" hidden>WB</button>
           <span class="cam-control-label" id="cam-wb-label" hidden>オート</span>
         </div>
-        <div class="cam-control-item">
-          <button class="cam-control-btn" id="cam-torch-btn" type="button" title="ライト" hidden>
-            <svg viewBox="0 0 24 24" fill="none"><path d="M9 21h6M10 18h4M8 10a4 4 0 1 1 8 0c0 2-1.2 3-2 4.2-.4.6-.6 1.1-.6 1.8h-2.8c0-.7-.2-1.2-.6-1.8C9.2 13 8 12 8 10Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <span class="cam-control-label" id="cam-torch-label" hidden>OFF</span>
-        </div>
       </div>
       <!-- Frame Guide(2026年9月追加、同月中にビジュアル刷新): 位置合わせ用の矩形。撮影結果には
            一切影響しない見た目の目安専用(js/camera.jsのwireFrameGuide()参照)。ダブルタップでも
            開閉できるが、実機でダブルタップ判定が安定しない報告を受け、確実な入口としてボタンを
            常設した(シャッターの左横、ユーザー要望による配置)。もともと別途あった「傾きガイド
-           (トンボ)」機能は、Frame Guideとの役割重複・実機での掴みにくさの指摘を機に削除した。 -->
-      <button class="cam-frame-guide-toggle" id="frame-guide-toggle-photo" title="位置合わせガイドの表示切り替え">
-        <span class="cam-frame-guide-toggle-face">
+           (トンボ)」機能は、Frame Guideとの役割重複・実機での掴みにくさの指摘を機に削除した。
+           **比率プリセット・スライダーリサイズ・対称/非対称トグルを追加(2026年9月)**:
+           上辺外側にF/P/M/S/○(油彩キャンバスの号数比率+円形)の選択チップ、右横外側に
+           2本の縦スライダー(内側=選択中の比率を保ったままのサイズ変更、外側=カメラズーム、
+           どちらも位置マッピング式の本物のスライダー)、下辺外側に対称/非対称リサイズの
+           切り替えボタンを添えた。四隅ハンドルは引き続き比率を無視した自由リサイズ専用。 -->
+      <button class="cam-round-toggle cam-frame-guide-toggle" id="frame-guide-toggle-photo" title="位置合わせガイドの表示切り替え">
+        <span class="cam-round-toggle-face">
           <svg viewBox="0 0 24 24" fill="none"><path d="M4 9V5.5C4 4.67 4.67 4 5.5 4H9M15 4H18.5C19.33 4 20 4.67 20 5.5V9M20 15V18.5C20 19.33 19.33 20 18.5 20H15M9 20H5.5C4.67 20 4 19.33 4 18.5V15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </span>
       </button>
+      <!-- 手ブレ検知オートシャッター(2026年9月追加): 誤フラッシュの心配があるトーチを撤去した
+           代わりに、暗い展示室でのシャッターブレ対策として追加した。DeviceMotionで「構えて
+           静止した瞬間」を検知して自動シャッターを切り、センサー非対応・権限拒否の端末では
+           自動的に3秒タイマーへフォールバックする(js/camera.jsのarmAutoShutter()参照)。 -->
+      <div class="cam-round-toggle-wrap" id="cam-auto-shutter-wrap">
+        <button class="cam-round-toggle" id="cam-auto-shutter-btn" type="button" title="手ブレ検知オートシャッター">
+          <span class="cam-round-toggle-face">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="13" r="7.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 13V8.5M9 3.5h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </span>
+        </button>
+        <span class="cam-control-label" id="cam-auto-shutter-label" hidden>OFF</span>
+      </div>
       <div class="cam-frame-guide" id="frame-guide-photo">
+        <div class="cam-frame-ratio-row" id="frame-ratio-row-photo">
+          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="F" title="F(人物型)">F</button>
+          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="P" title="P(風景型)">P</button>
+          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="M" title="M(海景型)">M</button>
+          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="S" title="S(正方形)">S</button>
+          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="C" title="円形">○</button>
+        </div>
         <div class="cam-frame-body"></div>
         <div class="cam-frame-corner nw"></div>
         <div class="cam-frame-corner ne"></div>
@@ -199,6 +218,13 @@
         <div class="cam-frame-handle ne"><span></span></div>
         <div class="cam-frame-handle sw"><span></span></div>
         <div class="cam-frame-handle se"><span></span></div>
+        <div class="cam-frame-slider cam-frame-slider--size" id="frame-size-slider-photo" title="比率を保ったままサイズ変更">
+          <div class="cam-frame-slider-track"><div class="cam-frame-slider-thumb"></div></div>
+        </div>
+        <div class="cam-frame-slider cam-frame-slider--zoom" id="frame-zoom-slider-photo" title="カメラズーム">
+          <div class="cam-frame-slider-track"><div class="cam-frame-slider-thumb">🔍</div></div>
+        </div>
+        <button class="cam-frame-symmetry-toggle" id="frame-symmetry-toggle-photo" type="button" title="リサイズの基準点を切り替え">非対称</button>
       </div>
       <button class="cam-shutter-btn" id="camera-shutter-photo" title="撮影"></button>
     </div>
@@ -347,7 +373,7 @@
   <script src="js/upload-queue.js?v=20260912a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911e"></script>
-  <script src="js/camera.js?v=20260915c"></script>
+  <script src="js/camera.js?v=20260915d"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
