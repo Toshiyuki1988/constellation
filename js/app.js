@@ -215,6 +215,27 @@ function closeSettings() {
  *   区別できるようにした)。
  * @returns {Promise<string|null>}
  */
+/**
+ * 背景タップ(クリック)で閉じるオーバーレイの共通ヘルパー(2026年9月追加)。単純な`click`
+ * イベントの`e.target===backgroundEl`判定だと、スマホでパネル内をスクロール/操作しようと
+ * した指がわずかに背景へ流れただけでもclickが発火し、意図せず閉じてしまう不具合があった
+ * (Astrometry Scopeでの実機報告を受けて発覚)。pointerdown・pointerupの両方が背景要素
+ * 自身で、かつ移動距離が小さい(タップ相当)場合だけ閉じるようにする。オーバーレイ/モーダル/
+ * キーパッド等、「背景をタップしたら閉じる」を実装する箇所は全てこのヘルパーを使うこと。
+ */
+function attachBackgroundTapToClose(backgroundEl, onClose) {
+  let start = null;
+  backgroundEl.addEventListener('pointerdown', (e) => {
+    start = e.target === backgroundEl ? { x: e.clientX, y: e.clientY } : null;
+  });
+  backgroundEl.addEventListener('pointerup', (e) => {
+    if (!start) return;
+    const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+    start = null;
+    if (moved < 10 && e.target === backgroundEl) onClose();
+  });
+}
+
 function showChoiceDialog({ title, message, options }) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -248,9 +269,7 @@ function showChoiceDialog({ title, message, options }) {
       btn.addEventListener('click', () => finish(opt.value));
       actions.appendChild(btn);
     });
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) finish(null);
-    });
+    attachBackgroundTapToClose(overlay, () => finish(null));
 
     document.body.appendChild(overlay);
   });
@@ -1357,7 +1376,7 @@ function showMemoOverlay(card) {
   modal.appendChild(textCol);
 
   overlay.appendChild(modal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  attachBackgroundTapToClose(overlay, () => overlay.remove());
   document.body.appendChild(overlay);
 }
 
@@ -3006,7 +3025,7 @@ function openCommentHistory() {
   overlay.appendChild(modal);
   const close = () => overlay.remove();
   closeBtn.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  attachBackgroundTapToClose(overlay, close);
   document.body.appendChild(overlay);
 }
 
@@ -4852,7 +4871,7 @@ async function openUploadStatusList() {
   overlay.appendChild(modal);
   const close = () => overlay.remove();
   closeBtn.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  attachBackgroundTapToClose(overlay, close);
   document.body.appendChild(overlay);
   await renderUploadStatusList(list);
 }

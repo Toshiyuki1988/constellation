@@ -718,10 +718,14 @@ html, body {
   letter-spacing: 0.04em;
 }
 .star-card-hex--extract { left: 50%; top: 100%; transform: translate(-50%, 25%); }
-/* Summon: 元は25%(他の辺ヘックスの15%食い込みより深い)内側に食い込んでおり、写真カードの
-   メモ欄・テキスト編集の邪魔になるという実機報告(2026年9月)を受け、他の辺ヘックスと同じ
-   15%食い込みに揃えた。 */
-.star-card-hex--summon  { left: 50%; top: 0%; transform: translate(-50%, -15%); }
+/* Summon: `top:100%`のextractは要素のtop edgeをカード下端に置くため、要素は何もしなくても
+   自然に外側(下)へ伸びる(そこへ+25%の余白を追加しているだけ)。一方summonの`top:0%`は要素の
+   top edgeをカード上端に置くが、要素自身は自然にそこから下(=カード内側)へ伸びてしまうため、
+   外側(上)へ出すには自身の高さぶん(-100%)を追加でずらす必要がある。前回の修正
+   (-25%→-15%)は「内側食い込みを減らすつもり」で実際には逆方向のtranslateだったため、
+   むしろ食い込みが悪化していた(2026年9月、実機報告で発覚)。-100%(外に出す)-15%(他の辺
+   ヘックスと同じ余白)=-115%が正しい値。 */
+.star-card-hex--summon  { left: 50%; top: 0%; transform: translate(-50%, -115%); }
 /* Astrometry Scope(2026年9月追加)。既存の右辺2箇所(depth/delete)とは別の高さ(縦中央)に
    置き、右辺の3つ目として並べる。 */
 .star-card-hex--scope   { left: 100%; top: 50%; transform: translate(15%, -50%); }

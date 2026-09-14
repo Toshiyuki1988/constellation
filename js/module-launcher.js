@@ -149,7 +149,10 @@
         onDigit(btn.dataset.digit);
       });
     });
-    overlay.querySelector('.module-keypad-backdrop').addEventListener('click', closeModuleKeypad);
+    // 単純なclickでの背景タップ判定は、スマホで数字ボタンを狙おうとした指がわずかに
+    // 背景へ流れただけでも誤って閉じてしまう(2026年9月、Astrometry Scopeでの実機報告を
+    // 受けて他のオーバーレイも横断的に対応)。app.jsのattachBackgroundTapToClose()に統一。
+    attachBackgroundTapToClose(overlay.querySelector('.module-keypad-backdrop'), closeModuleKeypad);
   }
 
   function updateSlots() {

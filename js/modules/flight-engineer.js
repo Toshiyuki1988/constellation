@@ -301,7 +301,10 @@
     feEls.previewTitle = overlay.querySelector('.fe-preview-title');
     feEls.previewCount = overlay.querySelector('.fe-preview-count');
     feEls.previewGrid = overlay.querySelector('.fe-preview-grid');
-    overlay.querySelector('.fe-preview-backdrop').addEventListener('click', closeSessionPreview);
+    // 単純なclickでの背景タップ判定はスマホで誤って閉じやすいため(2026年9月、Astrometry
+    // Scopeでの実機報告を受けて他のオーバーレイも横断的に対応)、app.jsのグローバルヘルパー
+    // attachBackgroundTapToClose()に統一。
+    attachBackgroundTapToClose(overlay.querySelector('.fe-preview-backdrop'), closeSessionPreview);
     overlay.querySelector('.fe-preview-close').addEventListener('click', closeSessionPreview);
   }
 

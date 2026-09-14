@@ -374,7 +374,10 @@
 
     overlay.addEventListener('pointerdown', (e) => e.stopPropagation());
     spEls.layersCloseBtn.addEventListener('click', closeLayerViewer);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeLayerViewer(); });
+    // 単純なclickでの背景タップ判定はスマホで誤って閉じやすいため(2026年9月、Astrometry
+    // Scopeでの実機報告を受けて他のオーバーレイも横断的に対応)、app.jsのグローバル
+    // ヘルパーattachBackgroundTapToClose()に統一。
+    attachBackgroundTapToClose(overlay, closeLayerViewer);
 
     let swipeStartX = null, swipeStartY = null, swipeStartT = 0;
     spEls.layersHead.addEventListener('pointerdown', (e) => {

@@ -496,7 +496,10 @@
       e.stopPropagation();
       closeCrews();
     });
-    crEls.overlay.querySelector('.crews-backdrop').addEventListener('click', closeCrews);
+    // 単純なclickでの背景タップ判定はスマホで誤って閉じやすいため(2026年9月、Astrometry
+    // Scopeでの実機報告を受けて他のオーバーレイも横断的に対応)、app.jsのグローバルヘルパー
+    // attachBackgroundTapToClose()に統一。
+    attachBackgroundTapToClose(crEls.overlay.querySelector('.crews-backdrop'), closeCrews);
 
     crEls.openConstellationBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     crEls.openConstellationBtn.addEventListener('click', (e) => { e.stopPropagation(); openConstellation(); });
@@ -1219,7 +1222,7 @@
     };
 
     overlay.querySelector('.crews-info-close').addEventListener('click', hideCrewInfoPopup);
-    overlay.querySelector('.crews-info-backdrop').addEventListener('click', hideCrewInfoPopup);
+    attachBackgroundTapToClose(overlay.querySelector('.crews-info-backdrop'), hideCrewInfoPopup);
     overlay.querySelectorAll('.crews-info-copy').forEach((btn) => {
       btn.addEventListener('click', () => copyInfoPopupField(btn));
     });

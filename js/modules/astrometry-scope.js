@@ -331,23 +331,9 @@
     document.head.appendChild(style);
   }
 
-  /** 背景タップで閉じる判定。単純な`click`イベントの`e.target===overlay`判定だと、
-   *  スマホでパネル内をスクロール/操作しようとした指がわずかに枠外へ流れただけでも
-   *  clickが発火し、意図せずモジュールが閉じてしまう不具合があった(2026年9月、
-   *  実機報告)。pointerdown・pointerupの両方が背景要素自身で、かつ移動距離が
-   *  小さい(タップ相当)場合だけ閉じるようにする。 */
-  function attachBackgroundTapToClose(overlayEl, onClose) {
-    let start = null;
-    overlayEl.addEventListener('pointerdown', (e) => {
-      start = e.target === overlayEl ? { x: e.clientX, y: e.clientY } : null;
-    });
-    overlayEl.addEventListener('pointerup', (e) => {
-      if (!start) return;
-      const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
-      start = null;
-      if (moved < 10 && e.target === overlayEl) onClose();
-    });
-  }
+  // 背景タップで閉じる判定はjs/app.jsのグローバルヘルパーattachBackgroundTapToClose()を
+  // 使う(2026年9月、他のオーバーレイにも横断的に対応した際、このモジュール専用だった
+  // ローカル定義をグローバルへ統合した)。
 
   /* ==================== DOM構築 ==================== */
 
