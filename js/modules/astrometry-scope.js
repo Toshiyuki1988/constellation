@@ -25,16 +25,31 @@
 // 2. モジュール共通の起動基盤(js/module-launcher.js)経由、キーパッドで"258"
 //    (電話キーパッドの中央列。123=WormGate・456=Crews・789=Mapping Storysで洛書の3行、
 //    147=Flight Engineerで左列を使っているため、残る中央列を割り当てた)と入力すると、
-//    対象の写真を持たない状態(window.openAstrometryScope())で開く。この場合は
-//    モックアップ由来の「現地で撮った写真を読み込む」アップロード/ドラッグ&ドロップで
-//    対象を手動で用意する(結果はどのカードにも紐付かないため保存されない)。
+//    全セッション横断の「Archive」一覧(openArchiveOverlay(null))が開く(2026年9月変更、
+//    後述)。そこから「+ 新規スキャン」ボタンで、対象の写真を持たない状態(モックアップ由来の
+//    「現地で撮った写真を読み込む」アップロード/ドラッグ&ドロップで対象を手動で用意する。
+//    結果はどのカードにも紐付かないため保存されない)のスキャン画面(window.openAstrometryScope())
+//    へ進める。
 //
 // 走査結果の保存・後日の見返し(2026年9月、ユーザー要望): 写真カードから起動した場合のみ、
 // 1回の走査(=1回のGemini呼び出し)ごとの結果を card.astrometryScans(配列)へ追記し、
 // 既存のconstellation-data.jsonへ通常のカードデータと同じくオートセーブされる。パネルを
-// 再度開くと最新の走査結果を(APIを呼ばずに)自動表示し、「過去の走査」欄から過去の結果へ
-// 何度でも遡って見返せる。件数はASTROMETRY_HISTORY_MAX件までで古い方から切り捨てる
-// (コメント履歴等、このアプリの他の履歴データと同じ考え方)。
+// 再度開くと最新の走査結果を(APIを呼ばずに)自動表示する。件数はASTROMETRY_HISTORY_MAX件
+// までで古い方から切り捨てる(コメント履歴等、このアプリの他の履歴データと同じ考え方)。
+//
+// Archiveの別階層化(2026年9月追加): 過去の走査をメインパネル内に並べて表示すると、
+// 件数が増えるほど画面が肥大化するというユーザー指摘を受け、メインパネル側は件数入りの
+// ボタン1つ(「📂 過去の走査を見る(N件)」)だけにし、実際の一覧は別階層のオーバーレイ
+// (asc-archive-overlay)へ切り出した。このオーバーレイはfilterCard引数の有無で、
+// 「今開いているカードだけ」(メインパネルのArchiveボタンから)と「全カード横断」
+// (キーパッド258から)の両方を兼ねる。一覧の各行をクリックすると、該当カードの
+// スコープ画面を開いてその走査結果を表示する。
+//
+// Artist(作者名)の自動判定(2026年9月追加): 個展の会場キャプションには作家名そのものが
+// 書かれていないことが多い(展覧会全体のタイトルや看板側にしかない)ため、写真カードの
+// メモ欄からguessMetaFromMemo()で作者名を推測できなかった場合、そのカードが属する
+// セッションのタイトルからヒューリスティックに抜き出す(guessArtistFromSession())。
+// Geminiへは問い合わせず、あくまでSCAN INITIATE前の初期値としてユーザーが自由に修正できる。
 
 (function () {
   'use strict';
@@ -57,7 +72,11 @@
   function injectStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      .asc-overlay {
+      /* asc-plot-popup-overlay・asc-archive-overlayはdocument.bodyの直接の子として
+         追加されるため、.asc-overlayスコープに変数を閉じ込めると変数が継承されず
+         (var()未定義でcolor/backgroundが無効値扱いになり)黒文字で読めなくなる不具合が
+         あった(2026年9月)。:rootに置いて文書全体からアクセスできるようにして解決した。 */
+      :root {
         --asc-void: #04070c;
         --asc-void-2: #070d15;
         --asc-panel: rgba(12, 21, 30, 0.86);
@@ -70,6 +89,8 @@
         --asc-star: #eaf6f2;
         --asc-dim: #5f7d82;
         --asc-dim-2: #3d5259;
+      }
+      .asc-overlay {
         position: fixed; inset: 0; z-index: 145;
         display: flex; align-items: center; justify-content: center;
         padding: clamp(10px, 3vw, 26px);
@@ -174,14 +195,64 @@
       .asc-scan-btn .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 7px; vertical-align: middle; }
 
       .asc-history { margin-top: 14px; }
-      .asc-history-row { display: flex; flex-wrap: wrap; gap: 6px; }
-      .asc-history-btn {
-        font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.03em; color: var(--asc-dim);
-        background: transparent; border: 1px solid var(--asc-grid-line); border-radius: 5px; padding: 5px 9px; cursor: pointer;
-        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      .asc-archive-open-btn {
+        width: 100%; padding: 8px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.03em;
+        color: var(--asc-dim); background: rgba(255,255,255,0.02); border: 1px solid var(--asc-grid-line); border-radius: 6px;
+        cursor: pointer; text-align: left; transition: color 0.15s, border-color 0.15s, background 0.15s;
       }
-      .asc-history-btn:hover { color: var(--asc-star); border-color: var(--asc-dim-2); }
-      .asc-history-btn.active { color: var(--asc-void); background: var(--asc-phosphor); border-color: var(--asc-phosphor); }
+      .asc-archive-open-btn:hover { color: var(--asc-star); border-color: var(--asc-phosphor-dim); background: rgba(94,234,212,0.05); }
+      .asc-archive-count { color: var(--asc-phosphor); font-weight: 700; margin-left: 6px; }
+
+      .asc-archive-overlay {
+        position: fixed; inset: 0; z-index: 148;
+        display: flex; align-items: center; justify-content: center;
+        padding: clamp(10px, 3vw, 26px);
+        background: rgba(2, 4, 7, 0.78);
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        opacity: 0; pointer-events: none; transition: opacity 0.2s ease-out;
+      }
+      .asc-archive-overlay.open { opacity: 1; pointer-events: auto; }
+      .asc-archive-panel {
+        width: 100%; max-width: 640px; max-height: 82vh; margin: auto; display: flex; flex-direction: column;
+        border: 1px solid var(--asc-phosphor-dim); border-radius: 14px; background: var(--asc-panel-solid);
+        box-shadow: 0 0 0 1px rgba(94,234,212,0.1), 0 40px 90px -40px rgba(0,0,0,0.85);
+        color: var(--asc-star); overflow: hidden;
+        transform: scale(0.96) translateY(6px); transition: transform 0.2s ease-out;
+      }
+      .asc-archive-overlay.open .asc-archive-panel { transform: scale(1) translateY(0); }
+      .asc-archive-head {
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+        padding: 16px 20px; border-bottom: 1px solid var(--asc-grid-line); cursor: grab; flex-shrink: 0;
+      }
+      .asc-archive-title { font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 15px; letter-spacing: 0.05em; margin: 0; color: var(--asc-star); }
+      .asc-archive-title span { font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 400; font-size: 11px; color: var(--asc-dim); margin-left: 8px; }
+      .asc-archive-subtitle { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--asc-dim); letter-spacing: 0.03em; margin: 4px 0 0; }
+      .asc-archive-head-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+      .asc-archive-new-btn {
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.04em; color: var(--asc-phosphor);
+        background: rgba(94,234,212,0.08); border: 1px solid var(--asc-phosphor-dim); border-radius: 6px; padding: 7px 11px; cursor: pointer;
+        transition: background 0.15s; white-space: nowrap;
+      }
+      .asc-archive-new-btn:hover { background: rgba(94,234,212,0.2); }
+      .asc-archive-close {
+        width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--asc-grid-line); background: rgba(255,255,255,0.03);
+        color: var(--asc-dim); font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+        transition: color 0.15s, border-color 0.15s; flex-shrink: 0;
+      }
+      .asc-archive-close:hover { color: var(--asc-star); border-color: var(--asc-phosphor-dim); }
+      .asc-archive-list { overflow-y: auto; padding: 10px 14px 16px; }
+      .asc-archive-empty { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--asc-dim); letter-spacing: 0.02em; line-height: 1.7; padding: 20px 20px 26px; }
+      .asc-archive-row {
+        display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 9px 10px; margin-bottom: 6px;
+        border: 1px solid var(--asc-grid-line); border-radius: 8px; background: rgba(255,255,255,0.015); cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .asc-archive-row:hover { border-color: var(--asc-phosphor-dim); background: rgba(94,234,212,0.06); }
+      .asc-archive-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: #030608; }
+      .asc-archive-thumb--empty { display: block; }
+      .asc-archive-row-info { min-width: 0; flex: 1; }
+      .asc-archive-row-title { display: block; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 13px; color: var(--asc-star); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .asc-archive-row-sub { display: block; font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--asc-dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
       .asc-api-note { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: var(--asc-dim-2); letter-spacing: 0.02em; margin: 10px 0 0; line-height: 1.6; }
 
@@ -298,8 +369,7 @@
             </div>
             <button type="button" class="asc-scan-btn" disabled><span class="dot"></span>SCAN INITIATE — 走査開始</button>
             <div class="asc-history" hidden>
-              <p class="asc-pane-label" style="margin:12px 0 8px;">Archive <small>過去の走査</small></p>
-              <div class="asc-history-row"></div>
+              <button type="button" class="asc-archive-open-btn">📂 過去の走査を見る<span class="asc-archive-count"></span></button>
             </div>
             <p class="asc-api-note">1回の走査につきGemini API呼び出しは1回だけ(色彩・素材・系譜・文脈分析をまとめて1リクエストで受け取る設計)。他の機能と共有の無料枠(1日250回)を消費します。</p>
           </div>
@@ -368,6 +438,26 @@
     `;
     document.body.appendChild(popup);
 
+    const archive = document.createElement('div');
+    archive.className = 'asc-archive-overlay';
+    archive.innerHTML = `
+      <div class="asc-archive-panel">
+        <div class="asc-archive-head">
+          <div>
+            <h3 class="asc-archive-title">ARCHIVE<span>過去の走査</span></h3>
+            <p class="asc-archive-subtitle">—</p>
+          </div>
+          <div class="asc-archive-head-actions">
+            <button type="button" class="asc-archive-new-btn">+ 新規スキャン</button>
+            <button type="button" class="asc-archive-close" aria-label="閉じる">✕</button>
+          </div>
+        </div>
+        <div class="asc-archive-list"></div>
+        <p class="asc-archive-empty" hidden>まだ走査結果がありません。写真カードの編集ガイドから「Scope」を押すか、「+ 新規スキャン」で対象画像を読み込んでください。</p>
+      </div>
+    `;
+    document.body.appendChild(archive);
+
     asEls = {
       overlay,
       scope: overlay.querySelector('.asc-scope'),
@@ -385,7 +475,8 @@
       scanSweep: overlay.querySelector('.asc-scan-sweep'),
       scanBtn: overlay.querySelector('.asc-scan-btn'),
       historyBlock: overlay.querySelector('.asc-history'),
-      historyRow: overlay.querySelector('.asc-history-row'),
+      archiveOpenBtn: overlay.querySelector('.asc-archive-open-btn'),
+      archiveCount: overlay.querySelector('.asc-archive-count'),
       colorSection: overlay.querySelector('.asc-section-color'),
       materialSection: overlay.querySelector('.asc-section-material'),
       plotSvg: overlay.querySelector('.asc-plot-svg'),
@@ -400,12 +491,20 @@
       popupBody: popup.querySelector('.asc-plot-popup-body'),
       popupSearch: popup.querySelector('.asc-plot-popup-search'),
       popupClose: popup.querySelector('.asc-plot-popup-close'),
+      archiveOverlay: archive,
+      archiveHead: archive.querySelector('.asc-archive-head'),
+      archiveSubtitle: archive.querySelector('.asc-archive-subtitle'),
+      archiveList: archive.querySelector('.asc-archive-list'),
+      archiveEmpty: archive.querySelector('.asc-archive-empty'),
+      archiveNewBtn: archive.querySelector('.asc-archive-new-btn'),
+      archiveCloseBtn: archive.querySelector('.asc-archive-close'),
     };
 
     // 内部の操作がキャンバス側のジェスチャーに奪われないようにする
     overlay.querySelectorAll('button, input, [contenteditable]').forEach((el) => {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     });
+    archive.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     asEls.closeBtn.addEventListener('click', closeAstrometryScope);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAstrometryScope(); });
@@ -440,9 +539,19 @@
 
     asEls.popupClose.addEventListener('click', closePlotPopup);
     asEls.popupOverlay.addEventListener('click', (e) => { if (e.target === asEls.popupOverlay) closePlotPopup(); });
+
+    asEls.archiveOpenBtn.addEventListener('click', () => openArchiveOverlay(currentCard));
+    asEls.archiveCloseBtn.addEventListener('click', closeArchiveOverlay);
+    asEls.archiveOverlay.addEventListener('click', (e) => { if (e.target === asEls.archiveOverlay) closeArchiveOverlay(); });
+    asEls.archiveNewBtn.addEventListener('click', () => {
+      closeArchiveOverlay();
+      openAstrometryScope();
+    });
+
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
       if (asEls.popupOverlay.classList.contains('open')) { closePlotPopup(); return; }
+      if (asEls.archiveOverlay.classList.contains('open')) { closeArchiveOverlay(); return; }
       if (asEls.overlay.classList.contains('open')) closeAstrometryScope();
     });
 
@@ -456,6 +565,17 @@
       const dx = e.clientX - swipeStartX, dy = e.clientY - swipeStartY, dt = performance.now() - swipeStartT;
       swipeStartX = null;
       if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 500) closeAstrometryScope();
+    });
+
+    let archiveSwipeX = null, archiveSwipeY = null, archiveSwipeT = 0;
+    asEls.archiveHead.addEventListener('pointerdown', (e) => {
+      archiveSwipeX = e.clientX; archiveSwipeY = e.clientY; archiveSwipeT = performance.now();
+    });
+    archive.addEventListener('pointerup', (e) => {
+      if (archiveSwipeX === null) return;
+      const dx = e.clientX - archiveSwipeX, dy = e.clientY - archiveSwipeY, dt = performance.now() - archiveSwipeT;
+      archiveSwipeX = null;
+      if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 500) closeArchiveOverlay();
     });
   }
 
@@ -493,7 +613,9 @@
     setTargetImage('', false);
 
     if (currentCard) {
-      writeMetaFields(guessMetaFromMemo(currentCard.memo));
+      const meta = guessMetaFromMemo(currentCard.memo);
+      if (!meta.artist) meta.artist = guessArtistFromSession(currentCard);
+      writeMetaFields(meta);
       loadCardTargetImage(currentCard);
       const scans = Array.isArray(currentCard.astrometryScans) ? currentCard.astrometryScans : [];
       renderHistoryList();
@@ -531,6 +653,30 @@
     const artistLine = lines.slice(1).find((l) => l !== eraLine && l !== seriesLine && l.length <= 24);
     if (artistLine) result.artist = artistLine;
     return result;
+  }
+
+  /** 個展の場合、キャプションに作家名そのものが書かれていないことが多い(会場の
+   *  キャプションは作品名・年代のみで、作家名は展覧会全体のタイトルや看板側にしか
+   *  無いことが多いため)。guessMetaFromMemo()で作家名が推測できなかった場合の
+   *  フォールバックとして、そのカードが属するセッションのタイトルから作家名らしき
+   *  部分をヒューリスティックに抜き出す(例:「棟方志功展」「生誕120年 香月泰男」
+   *  →「棟方志功」「香月泰男」)。Geminiには問い合わせずクライアント側だけで完結
+   *  させる(無料枠を消費しないため、他の自動判定機能と同じ方針)。あくまでSCAN
+   *  INITIATE前の初期値で、ユーザーが自由に修正できる。 */
+  function guessArtistFromSession(card) {
+    if (!card || !card.sessionId || typeof getSessionById !== 'function') return '';
+    const session = getSessionById(card.sessionId);
+    if (!session || !session.name) return '';
+    let name = String(session.name).trim();
+    // サブタイトル区切り(「棟方志功展 —世界のムナカタ—」等)以降を切り落とす
+    name = name.split(/[—―\-–:：]/)[0].trim();
+    // 生誕/没後などの前置き句を除去(「生誕120年 香月泰男」→「香月泰男」)
+    name = name.replace(/^(生誕|没後|没|開館|開廊)\s*\d+\s*(周年|年)\s*/, '').trim();
+    // 展覧会を表す末尾の一般的な接尾辞を除去
+    name = name.replace(/(回顧|追悼)?展(覧会)?$/, '').trim();
+    name = name.replace(/[のと]?(すべて|全貌|軌跡|世界|仕事)$/, '').trim();
+    if (!name || name.length > 20) return '';
+    return name;
   }
 
   function readMetaFields() {
@@ -729,18 +875,76 @@
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
+  /** 過去の走査一覧は、件数が増えるとメインパネル内に並べるだけで画面が肥大化するため
+   *  (2026年9月、ユーザー指摘)、メインパネル側には件数入りのボタン1つだけを置き、
+   *  実際の一覧は別階層のオーバーレイ(asc-archive-overlay)に表示する。 */
   function renderHistoryList() {
     const scans = currentCard && Array.isArray(currentCard.astrometryScans) ? currentCard.astrometryScans : [];
     asEls.historyBlock.hidden = scans.length === 0;
-    asEls.historyRow.innerHTML = '';
-    scans.slice().reverse().forEach((rec) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'asc-history-btn' + (currentScanData && currentScanData.id === rec.id ? ' active' : '');
-      btn.textContent = formatScanTimeLabel(rec.createdAt);
-      btn.addEventListener('click', () => showScanRecord(rec));
-      asEls.historyRow.appendChild(btn);
+    asEls.archiveCount.textContent = scans.length ? `(${scans.length}件)` : '';
+  }
+
+  /** filterCardを指定すればそのカードのみ、省略(null)すれば全カード横断で走査結果を集める。
+   *  258番キーパッド起動時は後者(全セッション横断のアーカイブ)として使う。 */
+  function collectScanEntries(filterCard) {
+    const entries = [];
+    const cards = filterCard ? [filterCard] : (Array.isArray(state.cards) ? state.cards : []);
+    cards.forEach((card) => {
+      if (!Array.isArray(card.astrometryScans)) return;
+      card.astrometryScans.forEach((record) => entries.push({ card, record }));
     });
+    entries.sort((a, b) => new Date(b.record.createdAt) - new Date(a.record.createdAt));
+    return entries;
+  }
+
+  function renderArchiveList(filterCard) {
+    const entries = collectScanEntries(filterCard);
+    asEls.archiveList.innerHTML = '';
+    asEls.archiveEmpty.hidden = entries.length > 0;
+    asEls.archiveSubtitle.textContent = filterCard
+      ? `このカードの過去の走査 ・ 全${entries.length}件`
+      : `全セッション横断 ・ 全${entries.length}件`;
+    entries.forEach(({ card, record }) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'asc-archive-row';
+      const session = typeof getSessionById === 'function' ? getSessionById(card.sessionId) : null;
+      const sessionName = session && session.name ? session.name : '';
+      const meta = record.meta || {};
+      const subParts = [meta.artist, sessionName, formatScanTimeLabel(record.createdAt)].filter(Boolean);
+      const thumbHtml = card.thumbDataUrl
+        ? `<img class="asc-archive-thumb" src="${card.thumbDataUrl}" alt="">`
+        : '<span class="asc-archive-thumb asc-archive-thumb--empty"></span>';
+      row.innerHTML = (
+        thumbHtml +
+        '<span class="asc-archive-row-info">' +
+        `<span class="asc-archive-row-title">${escapeHtml(meta.object || '(無題)')}</span>` +
+        `<span class="asc-archive-row-sub">${escapeHtml(subParts.join(' ・ '))}</span>` +
+        '</span>'
+      );
+      row.addEventListener('click', () => openScanEntry(card, record));
+      asEls.archiveList.appendChild(row);
+    });
+  }
+
+  function openScanEntry(card, record) {
+    closeArchiveOverlay();
+    openAstrometryScope(card);
+    showScanRecord(record);
+  }
+
+  function openArchiveOverlay(filterCard) {
+    if (!stylesInjected) { injectStyles(); stylesInjected = true; }
+    if (!asEls) buildDom();
+    renderArchiveList(filterCard || null);
+    asEls.archiveOverlay.classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeArchiveOverlay() {
+    if (!asEls) return;
+    asEls.archiveOverlay.classList.remove('open');
+    if (!asEls.overlay.classList.contains('open')) document.body.style.overflow = '';
   }
 
   /** 保存済みの走査結果(または直後の走査結果)を、APIを呼ばずにそのままパネルへ表示する。 */
@@ -916,7 +1120,7 @@
   /* ==================== 起動登録 ==================== */
 
   if (window.registerModuleCode) {
-    registerModuleCode('258', () => openAstrometryScope());
+    registerModuleCode('258', () => openArchiveOverlay(null));
   }
   window.openAstrometryScope = openAstrometryScope;
 })();
