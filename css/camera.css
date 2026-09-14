@@ -101,12 +101,19 @@
 
 /* ---------- Frame Guide: 位置合わせ用の矩形を開閉するボタン(2026年9月追加) ----------
    実機で「素早くダブルタップしても反応しない」報告があり、ジェスチャー判定の
-   不確実性に頼らない確実な入口として、既存の#camera-close(閉じる、右上)と対称の
-   左上に常設した。 */
+   不確実性に頼らない確実な入口として設けた。当初は左上(#camera-closeと対称の位置)に
+   置いたが、「撮影ボタンの左横に」というユーザー要望で移動した。シャッター
+   (.cam-shutter-btn、bottom:26px、幅64px、中心が画面中央)と縦中心を揃え、
+   14pxの間隔を空けて左に並べる円形ボタン。 */
 .cam-frame-guide-toggle {
-  position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 8px; z-index: 20;
+  position: absolute;
+  bottom: calc(26px + 10px + env(safe-area-inset-bottom, 0px)); /* (64px-44px)/2=10pxずらして縦中心をシャッターに揃える */
+  right: calc(50% + 32px + 14px); /* シャッター半径32px + 間隔14px */
+  z-index: 8;
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.25); color: #fff;
-  font-family: inherit; font-size: 10px; padding: 7px 10px; border-radius: 14px; cursor: pointer;
+  font-size: 18px; line-height: 1; cursor: pointer; padding: 0;
 }
 .cam-frame-guide-toggle.active { background: rgba(255, 255, 255, 0.9); color: #000; }
 
