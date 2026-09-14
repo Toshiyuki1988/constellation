@@ -70,10 +70,10 @@ const AUTO_SHUTTER_JERK_THRESHOLD = 0.5; // m/s^2、前フレームとの加速�
 const AUTO_SHUTTER_TIMER_MS = 3000; // センサー非対応時のフォールバック: 単純な3秒タイマー
 const AUTO_SHUTTER_MOTION_WATCHDOG_MS = 1200; // この間に1件もdevicemotionが届かなければタイマーへ切り替える
 
-// Frame Guideの比率プリセット(2026年9月追加)。F/P/M/Sは油彩キャンバスの号数で使われる
+// Eclipse(比率プリセット、2026年9月追加)。F/P/M/Sは油彩キャンバスの号数で使われる
 // 「人物型・風景型・海景型・正方形」の4形状にちなむ近似比率(号数によって微妙に違うため、
 // 構図の目安として代表的な値に丸めている)。ratioはすべて「長辺/短辺」。
-const CAM_FRAME_RATIO_PRESETS = [
+const CAM_ECLIPSE_RATIO_PRESETS = [
   { key: 'F', ratio: 1.29, shape: 'rect' },
   { key: 'P', ratio: 1.50, shape: 'rect' },
   { key: 'M', ratio: 1.68, shape: 'rect' },
@@ -225,12 +225,12 @@ function ensureCameraDom() {
     focusLayerPhoto: document.getElementById('focus-layer-photo'),
     zoomBadgePhoto: document.getElementById('zoom-badge-photo'),
     shutterPhoto: document.getElementById('camera-shutter-photo'),
-    frameGuidePhoto: document.getElementById('frame-guide-photo'),
-    frameGuideTogglePhoto: document.getElementById('frame-guide-toggle-photo'),
-    frameRatioRowPhoto: document.getElementById('frame-ratio-row-photo'),
-    frameSizeSliderPhoto: document.getElementById('frame-size-slider-photo'),
-    frameZoomSliderPhoto: document.getElementById('frame-zoom-slider-photo'),
-    frameSymmetryTogglePhoto: document.getElementById('frame-symmetry-toggle-photo'),
+    eclipseGuidePhoto: document.getElementById('eclipse-guide-photo'),
+    eclipseGuideTogglePhoto: document.getElementById('eclipse-guide-toggle-photo'),
+    eclipseRatioRowPhoto: document.getElementById('eclipse-ratio-row-photo'),
+    eclipseSizeSliderPhoto: document.getElementById('eclipse-size-slider-photo'),
+    eclipseZoomSliderPhoto: document.getElementById('eclipse-zoom-slider-photo'),
+    eclipseSymmetryTogglePhoto: document.getElementById('eclipse-symmetry-toggle-photo'),
     exposureBtn: document.getElementById('cam-exposure-btn'),
     exposureLabel: document.getElementById('cam-exposure-label'),
     wbBtn: document.getElementById('cam-wb-btn'),
@@ -294,7 +294,7 @@ function wireCameraEvents() {
   wireTapFocus(camEls.photoScreen, camEls.focusLayerPhoto, () => camEls.videoPhoto);
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
 
-  wireFrameGuide(camEls.photoScreen, camEls.frameGuidePhoto, camEls.frameGuideTogglePhoto, camEls.videoPhoto, camEls.zoomBadgePhoto);
+  wireEclipseGuide(camEls.photoScreen, camEls.eclipseGuidePhoto, camEls.eclipseGuideTogglePhoto, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wireCameraControls();
   wireAutoShutterButton();
 
@@ -770,65 +770,69 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
   });
 }
 
-/* ---------------- Frame Guide: ダブルタップで出す位置合わせ用の矩形(2026年9月追加) ----------------
+/* ---------------- Eclipse: ダブルタップで出す位置合わせ用の矩形(2026年9月追加) ----------------
  * 絵画・写真の四隅に重ねて構図を整えるためだけのガイド。移動・リサイズできるが撮影結果には
  * 一切反映しない(capturePhoto()はこの矩形の状態を一切参照しない)。ダブルタップ検出は
  * js/canvas.jsの俯瞰ズーム判定(pointerdown/pointerupの間隔・距離を見るだけの自前実装)と
  * 同じ考え方。wireTapFocus()の既存のclick(シングルタップでピント)とは独立に動くため、
  * ダブルタップの1・2回目それぞれでピントも合わせにいくが実害はない(むしろ自然)。
  * **比率プリセット・スライダーリサイズ・対称/非対称トグルを追加(2026年9月)**:
- * F/P/M/S/○(油彩キャンバスの号数比率+円形、CAM_FRAME_RATIO_PRESETS)の選択チップと、
+ * F/P/M/S/○(油彩キャンバスの号数比率+円形、CAM_ECLIPSE_RATIO_PRESETS)の選択チップと、
  * 2本の縦スライダー(サイズ=選択中の比率を保ったままの拡縮、ズーム=既存のピンチズームと
  * 同じcamZoomScaleを動かす)を矩形に添えた。どちらも「ドラッグ量」ではなく「トラック上の
  * 絶対位置」で値を決める本物のスライダー。四隅ハンドルは引き続き比率を無視した自由リサイズ
  * 専用で、下辺の対称/非対称トグルがハンドル・サイズスライダー両方のリサイズの基準点
- * (中心固定 or 反対側固定)を切り替える。 */
-function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
+ * (中心固定 or 反対側固定)を切り替える。
+ * **命名(2026年9月追記)**: この矩形ガイド+比率プリセット+スライダー一式のUI総称を
+ * 「Eclipse」と名付けた(円形ガイドで暗い美術館を探る見た目が日食に近いことに由来)。
+ * 関数名・CSSクラス(`cam-eclipse-*`)・CSS変数(`--eclipse-*`)・要素ID(`eclipse-*`)は
+ * すべてこの名称に統一している。挙動自体はこの改名では変えていない。 */
+function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) {
   // 実機で「ダブルタップしても反応しない」報告(2026年9月)を受け、指のブレ・タップ間隔の
   // バラつきに強くなるよう、js/canvas.jsの俯瞰ズーム判定(350ms/10px/40px)より緩めた値にした。
   const DOUBLE_TAP_MS = 500;
   const DOUBLE_TAP_MOVE_TOLERANCE_PX = 20;
   const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 70;
-  const MIN_FRAME_SIZE = 60;
+  const MIN_ECLIPSE_SIZE = 60;
   let pressStart = null;
   let lastTapAt = 0;
   let lastTapPos = null;
   let visible = false;
-  let ratioIndex = 0; // CAM_FRAME_RATIO_PRESETSのどれを使っているか
+  let ratioIndex = 0; // CAM_ECLIPSE_RATIO_PRESETSのどれを使っているか
   let symmetric = false; // 対称/非対称リサイズ(下辺トグル)
 
-  const ratioRowEl = frameEl.querySelector('.cam-frame-ratio-row');
-  const sizeSliderEl = frameEl.querySelector('.cam-frame-slider--size');
-  const zoomSliderEl = frameEl.querySelector('.cam-frame-slider--zoom');
-  const symmetryBtn = frameEl.querySelector('.cam-frame-symmetry-toggle');
-  const sizeThumbEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-frame-slider-thumb');
-  const sizeTrackEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-frame-slider-track');
-  const zoomThumbEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-frame-slider-thumb');
-  const zoomTrackEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-frame-slider-track');
+  const ratioRowEl = eclipseEl.querySelector('.cam-eclipse-ratio-row');
+  const sizeSliderEl = eclipseEl.querySelector('.cam-eclipse-slider--size');
+  const zoomSliderEl = eclipseEl.querySelector('.cam-eclipse-slider--zoom');
+  const symmetryBtn = eclipseEl.querySelector('.cam-eclipse-symmetry-toggle');
+  const sizeThumbEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-eclipse-slider-thumb');
+  const sizeTrackEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-eclipse-slider-track');
+  const zoomThumbEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-eclipse-slider-thumb');
+  const zoomTrackEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-eclipse-slider-track');
 
-  function currentRatio() { return CAM_FRAME_RATIO_PRESETS[ratioIndex].ratio; }
-  function currentShape() { return CAM_FRAME_RATIO_PRESETS[ratioIndex].shape; }
+  function currentRatio() { return CAM_ECLIPSE_RATIO_PRESETS[ratioIndex].ratio; }
+  function currentShape() { return CAM_ECLIPSE_RATIO_PRESETS[ratioIndex].shape; }
 
   /** その比率で矩形の長辺が取りうる範囲。画面の94%以内に収まるよう都度計算する。 */
   function sizeBoundsForRatio(ratio) {
     const rect = screenEl.getBoundingClientRect();
     const maxByWidth = rect.width * 0.94;
     const maxByHeight = rect.height * 0.94 * ratio;
-    const max = Math.max(MIN_FRAME_SIZE + 20, Math.min(maxByWidth, maxByHeight));
-    return { min: MIN_FRAME_SIZE, max };
+    const max = Math.max(MIN_ECLIPSE_SIZE + 20, Math.min(maxByWidth, maxByHeight));
+    return { min: MIN_ECLIPSE_SIZE, max };
   }
 
   function applyRect(x, y, w, h) {
-    frameEl.style.left = `${x}px`;
-    frameEl.style.top = `${y}px`;
-    frameEl.style.width = `${w}px`;
-    frameEl.style.height = `${h}px`;
+    eclipseEl.style.left = `${x}px`;
+    eclipseEl.style.top = `${y}px`;
+    eclipseEl.style.width = `${w}px`;
+    eclipseEl.style.height = `${h}px`;
   }
 
   function applyShapeAndChips() {
-    frameEl.classList.toggle('shape-circle', currentShape() === 'circle');
+    eclipseEl.classList.toggle('shape-circle', currentShape() === 'circle');
     if (!ratioRowEl) return;
-    ratioRowEl.querySelectorAll('.cam-frame-ratio-chip').forEach((chip, i) => {
+    ratioRowEl.querySelectorAll('.cam-eclipse-ratio-chip').forEach((chip, i) => {
       chip.classList.toggle('active', i === ratioIndex);
     });
   }
@@ -838,20 +842,20 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
   function syncSizeSliderThumb() {
     if (!sizeThumbEl) return;
     const bounds = sizeBoundsForRatio(currentRatio());
-    const w = parseFloat(frameEl.style.width) || bounds.min;
+    const w = parseFloat(eclipseEl.style.width) || bounds.min;
     const frac = bounds.max > bounds.min ? Math.max(0, Math.min(1, (w - bounds.min) / (bounds.max - bounds.min))) : 0;
     sizeThumbEl.style.top = `${(1 - frac) * 100}%`;
   }
 
   /** ズームスライダーのつまみ位置を、現在のcamZoomScaleから合わせ直す。ピンチズーム側
-   *  (setCamZoom())からも呼べるよう、screenEl.__syncFrameZoomSliderとして橋渡しする。 */
+   *  (setCamZoom())からも呼べるよう、screenEl.__syncEclipseZoomSliderとして橋渡しする。 */
   function syncZoomSliderThumb() {
     if (!zoomThumbEl) return;
     const max = maxZoomForCurrentTrack();
     const frac = max > 1 ? Math.max(0, Math.min(1, (camZoomScale - 1) / (max - 1))) : 0;
     zoomThumbEl.style.top = `${(1 - frac) * 100}%`;
   }
-  screenEl.__syncFrameZoomSlider = syncZoomSliderThumb;
+  screenEl.__syncEclipseZoomSlider = syncZoomSliderThumb;
 
   function showDefault() {
     ratioIndex = 0;
@@ -863,15 +867,15 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
     const w = Math.min(bounds.max, Math.max(bounds.min, rect.width * 0.62));
     const h = w / currentRatio();
     applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h);
-    frameEl.classList.add('visible', 'appearing');
-    setTimeout(() => frameEl.classList.remove('appearing'), 200);
+    eclipseEl.classList.add('visible', 'appearing');
+    setTimeout(() => eclipseEl.classList.remove('appearing'), 200);
     visible = true;
     if (toggleBtn) toggleBtn.classList.add('active');
     syncSizeSliderThumb();
     syncZoomSliderThumb();
   }
   function hide() {
-    frameEl.classList.remove('visible');
+    eclipseEl.classList.remove('visible');
     visible = false;
     if (toggleBtn) toggleBtn.classList.remove('active');
   }
@@ -885,8 +889,8 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
     ratioIndex = index;
     applyShapeAndChips();
     const rect = {
-      x: parseFloat(frameEl.style.left) || 0, y: parseFloat(frameEl.style.top) || 0,
-      w: parseFloat(frameEl.style.width) || 200, h: parseFloat(frameEl.style.height) || 200,
+      x: parseFloat(eclipseEl.style.left) || 0, y: parseFloat(eclipseEl.style.top) || 0,
+      w: parseFloat(eclipseEl.style.width) || 200, h: parseFloat(eclipseEl.style.height) || 200,
     };
     const bounds = sizeBoundsForRatio(currentRatio());
     const longSide = Math.max(rect.w, rect.h);
@@ -899,7 +903,7 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
   }
 
   if (ratioRowEl) {
-    ratioRowEl.querySelectorAll('.cam-frame-ratio-chip').forEach((chip, i) => {
+    ratioRowEl.querySelectorAll('.cam-eclipse-ratio-chip').forEach((chip, i) => {
       chip.addEventListener('pointerdown', (e) => e.stopPropagation());
       chip.addEventListener('click', (e) => { e.stopPropagation(); applyPreset(i); });
     });
@@ -928,22 +932,22 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
   // 報告を受けて追加)。?debugパネルで、実際にpointerdown/upが届いているか、
   // どの条件で1回目・2回目の判定に落ちているかを確認できるようにしておく。
   screenEl.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.cam-frame-guide, button')) {
-      camDebugLog(`FrameGuide: pointerdown ignored(target=${e.target.tagName}.${e.target.className || ''})`);
+    if (e.target.closest('.cam-eclipse-guide, button')) {
+      camDebugLog(`Eclipse: pointerdown ignored(target=${e.target.tagName}.${e.target.className || ''})`);
       return;
     }
     pressStart = { x: e.clientX, y: e.clientY };
-    camDebugLog(`FrameGuide: pointerdown(${Math.round(e.clientX)},${Math.round(e.clientY)}) type=${e.pointerType}`);
+    camDebugLog(`Eclipse: pointerdown(${Math.round(e.clientX)},${Math.round(e.clientY)}) type=${e.pointerType}`);
   });
   screenEl.addEventListener('pointerup', (e) => {
     if (!pressStart) {
-      camDebugLog('FrameGuide: pointerup with no pressStart(ignored)');
+      camDebugLog('Eclipse: pointerup with no pressStart(ignored)');
       return;
     }
     const moved = Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y);
     pressStart = null;
     if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) {
-      camDebugLog(`FrameGuide: moved too much during tap(${moved.toFixed(1)}px > ${DOUBLE_TAP_MOVE_TOLERANCE_PX}px)`);
+      camDebugLog(`Eclipse: moved too much during tap(${moved.toFixed(1)}px > ${DOUBLE_TAP_MOVE_TOLERANCE_PX}px)`);
       return;
     }
     const now = Date.now();
@@ -953,14 +957,14 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
       now - lastTapAt < DOUBLE_TAP_MS &&
       Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < DOUBLE_TAP_DISTANCE_TOLERANCE_PX
     ) {
-      camDebugLog('FrameGuide: double tap detected -> toggle()');
+      camDebugLog('Eclipse: double tap detected -> toggle()');
       lastTapAt = 0;
       lastTapPos = null;
       toggle();
     } else {
       const gapMs = lastTapPos ? now - lastTapAt : null;
       const distPx = lastTapPos ? Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) : null;
-      camDebugLog(`FrameGuide: recorded as 1st tap(prevGapMs=${gapMs}, prevDistPx=${distPx != null ? distPx.toFixed(1) : 'n/a'})`);
+      camDebugLog(`Eclipse: recorded as 1st tap(prevGapMs=${gapMs}, prevDistPx=${distPx != null ? distPx.toFixed(1) : 'n/a'})`);
       lastTapAt = now;
       lastTapPos = pos;
     }
@@ -972,7 +976,7 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
 
   function beginDrag(mode, e) {
     dragMode = mode;
-    const r = frameEl.getBoundingClientRect();
+    const r = eclipseEl.getBoundingClientRect();
     const parentRect = screenEl.getBoundingClientRect();
     dragStart = {
       x: e.clientX, y: e.clientY,
@@ -992,8 +996,8 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
     try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
   }
 
-  frameEl.querySelector('.cam-frame-body').addEventListener('pointerdown', (e) => beginDrag('move', e));
-  frameEl.querySelectorAll('.cam-frame-handle').forEach((h) => {
+  eclipseEl.querySelector('.cam-eclipse-body').addEventListener('pointerdown', (e) => beginDrag('move', e));
+  eclipseEl.querySelectorAll('.cam-eclipse-handle').forEach((h) => {
     const mode = h.classList.contains('nw') ? 'nw' : h.classList.contains('ne') ? 'ne' : h.classList.contains('sw') ? 'sw' : 'se';
     h.addEventListener('pointerdown', (e) => beginDrag(mode, e));
   });
@@ -1048,16 +1052,16 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
       const signY = dragMode.includes('s') ? 1 : -1;
       const extX = dx * signX, extY = dy * signY;
       const cx = rx + rw / 2, cy = ry + rh / 2;
-      w = Math.max(MIN_FRAME_SIZE, rw + 2 * extX);
-      h = Math.max(MIN_FRAME_SIZE, rh + 2 * extY);
+      w = Math.max(MIN_ECLIPSE_SIZE, rw + 2 * extX);
+      h = Math.max(MIN_ECLIPSE_SIZE, rh + 2 * extY);
       x = cx - w / 2;
       y = cy - h / 2;
     } else {
       x = rx; y = ry; w = rw; h = rh;
-      if (dragMode.includes('e')) w = Math.max(MIN_FRAME_SIZE, rw + dx);
-      if (dragMode.includes('w')) { w = Math.max(MIN_FRAME_SIZE, rw - dx); x = rx + (rw - w); }
-      if (dragMode.includes('s')) h = Math.max(MIN_FRAME_SIZE, rh + dy);
-      if (dragMode.includes('n')) { h = Math.max(MIN_FRAME_SIZE, rh - dy); y = ry + (rh - h); }
+      if (dragMode.includes('e')) w = Math.max(MIN_ECLIPSE_SIZE, rw + dx);
+      if (dragMode.includes('w')) { w = Math.max(MIN_ECLIPSE_SIZE, rw - dx); x = rx + (rw - w); }
+      if (dragMode.includes('s')) h = Math.max(MIN_ECLIPSE_SIZE, rh + dy);
+      if (dragMode.includes('n')) { h = Math.max(MIN_ECLIPSE_SIZE, rh - dy); y = ry + (rh - h); }
     }
     applyRect(x, y, w, h);
   });
@@ -1070,7 +1074,7 @@ function wireFrameGuide(screenEl, frameEl, toggleBtn, videoEl, zoomBadgeEl) {
   document.addEventListener('pointercancel', () => { dragMode = null; dragStart = null; });
 
   // モードを抜けて戻ってきた時など、毎回ゼロから位置合わせできるよう非表示にリセットする。
-  screenEl.__resetFrameGuide = hide;
+  screenEl.__resetEclipseGuide = hide;
 }
 
 /* ---------------- ピンチズーム(2026年9月追加) ----------------
@@ -1160,10 +1164,10 @@ function setCamZoom(scale, videoEl, badgeEl) {
     videoEl.style.transform = `scale(${camZoomScale})`;
   }
   updateZoomBadge(badgeEl); // バッジは常に即座に最新の指の位置を反映する(ハードウェア追従待ちはしない)
-  // Frame Guideのズームスライダーのつまみも追従させる(ピンチズーム・スライダー操作のどちらで
+  // Eclipseのズームスライダーのつまみも追従させる(ピンチズーム・スライダー操作のどちらで
   // 変えても、もう片方の表示にすぐ反映される。2026年9月追加)。ガイドを持たない画面/非表示中でも
   // 単に見えないつまみの位置を更新するだけなので無害。
-  if (camEls && camEls.photoScreen && camEls.photoScreen.__syncFrameZoomSlider) camEls.photoScreen.__syncFrameZoomSlider();
+  if (camEls && camEls.photoScreen && camEls.photoScreen.__syncEclipseZoomSlider) camEls.photoScreen.__syncEclipseZoomSlider();
 }
 
 /** 現在の撮影に使うべきデジタルズーム倍率(ネイティブズーム中は1、それ以外はcamZoomScale) */
@@ -1763,8 +1767,8 @@ function teardownCamera() {
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });
   camEls.overlay.classList.remove('open');
   clearCameraError();
-  // Frame Guideは毎回まっさらな状態から位置合わせできるよう、カメラを閉じるたびに隠す。
-  if (camEls.photoScreen && camEls.photoScreen.__resetFrameGuide) camEls.photoScreen.__resetFrameGuide();
+  // Eclipseは毎回まっさらな状態から位置合わせできるよう、カメラを閉じるたびに隠す。
+  if (camEls.photoScreen && camEls.photoScreen.__resetEclipseGuide) camEls.photoScreen.__resetEclipseGuide();
 }
 
 /* ---------------- 効果音(Web Audio合成、音声ファイル不使用) ---------------- */

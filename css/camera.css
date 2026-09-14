@@ -32,15 +32,15 @@
   color: #fff;
   display: none;
   font-family: 'IBM Plex Mono', monospace;
-  /* Frame Guideのペーパークラフト調配色(2026年9月、ビジュアル刷新時に追加)。
-     暖色の紙+テラコッタのアクセントで、常時黒背景のカメラ画面に対して浮き上がって見える
-     ようにする。カメラ画面はテーマ切り替えの対象外の常時ダーク前提のため、
+  /* Eclipseのペーパークラフト調配色(2026年9月、ビジュアル刷新時に追加。UI総称「Eclipse」は
+     同月中に命名)。暖色の紙+テラコッタのアクセントで、常時黒背景のカメラ画面に対して
+     浮き上がって見えるようにする。カメラ画面はテーマ切り替えの対象外の常時ダーク前提のため、
      ここだけの固定トークンとして扱う(アプリ全体のライト/ダーク対応とは無関係)。 */
-  --frame-paper: #f8ecd9;
-  --frame-paper-dim: rgba(248, 236, 217, 0.55);
-  --frame-accent: #ff8f5e;
-  --frame-accent-deep: #d9663a;
-  --frame-shadow: rgba(52, 27, 15, 0.45);
+  --eclipse-paper: #f8ecd9;
+  --eclipse-paper-dim: rgba(248, 236, 217, 0.55);
+  --eclipse-accent: #ff8f5e;
+  --eclipse-accent-deep: #d9663a;
+  --eclipse-shadow: rgba(52, 27, 15, 0.45);
   -webkit-user-select: none;
   user-select: none;
   /* ピンチ操作を独自のズーム(js/camera.jsのwirePinchZoom())専用にするため、
@@ -90,7 +90,7 @@
 .cam-sun { position: absolute; left: 56px; top: -14px; width: 26px; height: 26px; }
 .cam-sun circle, .cam-sun line { stroke: #ffe27a; stroke-width: 1.6; fill: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
 
-/* ---------- Frame Guide: 位置合わせ用の矩形を開閉するボタン ----------
+/* ---------- Eclipse: 位置合わせ用の矩形を開閉するボタン ----------
    実機で「素早くダブルタップしても反応しない」報告があり、ジェスチャー判定の
    不確実性に頼らない確実な入口として設けた(2026年9月)。シャッター
    (.cam-shutter-btn、bottom:26px、幅64px、中心が画面中央)と縦中心を揃え、
@@ -100,13 +100,13 @@
    特注デザインにした。背景の黒い映像に対して、暖色の紙が1枚浮いているように見せるため、
    ::beforeで少し回転させた「奥の紙」を覗かせ、本体は木漏れ日のような柔らかいクリーム色にした。 */
 /* .cam-round-toggle: シャッターを挟んで左右対称に並ぶ丸ボタンの共通の見た目(2026年9月、
-   手ブレ検知オートシャッター追加時に.cam-frame-guide-toggle専用だったCSSを共通化した)。
+   手ブレ検知オートシャッター追加時に.cam-eclipse-toggle専用だったCSSを共通化した)。
    位置(bottom/left/right)だけ、使う場所ごとに個別クラス/ラッパーで指定する。 */
 .cam-round-toggle {
   position: relative;
   z-index: 8;
   width: 46px; height: 46px;
-  border: none; background: none; color: var(--frame-accent-deep);
+  border: none; background: none; color: var(--eclipse-accent-deep);
   cursor: pointer; padding: 0;
   transition: transform 0.12s ease;
 }
@@ -118,31 +118,31 @@
      という順序のため)不具合を実機確認で踏んだため、z-indexに頼らずDOM順序だけで重なりを制御している。 */
   content: '';
   position: absolute; inset: -3px; border-radius: 50%;
-  background: var(--frame-accent-deep);
+  background: var(--eclipse-accent-deep);
   transform: rotate(-9deg) translate(1px, 2px);
 }
 .cam-round-toggle-face {
   position: absolute; inset: 0; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  background: var(--frame-paper); color: var(--frame-accent-deep);
-  box-shadow: 0 3px 8px var(--frame-shadow), 0 1px 0 rgba(255, 255, 255, 0.4) inset;
+  background: var(--eclipse-paper); color: var(--eclipse-accent-deep);
+  box-shadow: 0 3px 8px var(--eclipse-shadow), 0 1px 0 rgba(255, 255, 255, 0.4) inset;
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .cam-round-toggle svg { width: 20px; height: 20px; }
 .cam-round-toggle:active { transform: translateY(1px) scale(0.96); }
 .cam-round-toggle.active .cam-round-toggle-face {
-  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
-  color: var(--frame-paper);
-  box-shadow: 0 1px 3px var(--frame-shadow) inset, 0 2px 6px var(--frame-shadow);
+  background: linear-gradient(155deg, var(--eclipse-accent), var(--eclipse-accent-deep));
+  color: var(--eclipse-paper);
+  box-shadow: 0 1px 3px var(--eclipse-shadow) inset, 0 2px 6px var(--eclipse-shadow);
 }
 
-.cam-frame-guide-toggle {
+.cam-eclipse-toggle {
   position: absolute;
   bottom: calc(26px + 10px + env(safe-area-inset-bottom, 0px)); /* (64px-44px)/2=10pxずらして縦中心をシャッターに揃える */
   right: calc(50% + 32px + 14px); /* シャッター半径32px + 間隔14px */
 }
 
-/* 手ブレ検知オートシャッター(2026年9月追加)。Frame Guideトグルと左右対称になるよう、
+/* 手ブレ検知オートシャッター(2026年9月追加)。Eclipseトグルと左右対称になるよう、
    シャッターの右横・同じ縦位置に置く。ラベル(状態表示)を下に添えるためラッパーで
    position:absoluteを持たせ、中のボタン自体はflow内(position:relative)に戻す。 */
 .cam-round-toggle-wrap {
@@ -154,157 +154,158 @@
 }
 .cam-round-toggle-wrap .cam-control-label { position: static; }
 
-/* ---------- Frame Guide: ダブルタップ/ボタンで出す位置合わせ用の矩形 ----------
+/* ---------- Eclipse: ダブルタップ/ボタンで出す位置合わせ用の矩形 ----------
    絵画・写真の四隅に重ねて構図の目安にするためだけのガイド。移動・リサイズできるが、
    撮影結果(capturePhoto())には一切反映しない(camera-rect-guide-artifact.htmlで検証済み)。
    **ビジュアル刷新(2026年9月)**: 単なる白枠から、印刷・製本のトリムマーク(断ち切り線)を
    モチーフにした四隅のブラケット+薄いクリーム色の本体へ作り直した。もともと別にあった
-   「傾きガイド(トンボ)」機能はこのタイミングで削除し、位置合わせの役割をFrame Guideへ一本化した。 */
-.cam-frame-guide {
+   「傾きガイド(トンボ)」機能はこのタイミングで削除し、位置合わせの役割をEclipseへ一本化した。
+   UI総称「Eclipse」は円形ガイドで暗い美術館を探る見た目が日食に近いことから命名した(2026年9月)。 */
+.cam-eclipse-guide {
   position: absolute; z-index: 5;
-  border: 1px solid var(--frame-paper-dim);
+  border: 1px solid var(--eclipse-paper-dim);
   background: rgba(248, 236, 217, 0.05);
-  box-shadow: 0 8px 24px var(--frame-shadow);
+  box-shadow: 0 8px 24px var(--eclipse-shadow);
   display: none; touch-action: none;
 }
-.cam-frame-guide.visible { display: block; }
-.cam-frame-guide::before {
+.cam-eclipse-guide.visible { display: block; }
+.cam-eclipse-guide::before {
   /* 三分割線(構図の目安)、暖色の紙のトーンに合わせた控えめな線 */
   content: '';
   position: absolute; inset: 0; pointer-events: none;
   background-image:
-    linear-gradient(to right, transparent calc(33.33% - 0.5px), var(--frame-paper-dim) calc(33.33% - 0.5px), var(--frame-paper-dim) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
-    linear-gradient(to right, transparent calc(66.66% - 0.5px), var(--frame-paper-dim) calc(66.66% - 0.5px), var(--frame-paper-dim) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
-    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), var(--frame-paper-dim) calc(33.33% - 0.5px), var(--frame-paper-dim) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
-    linear-gradient(to bottom, transparent calc(66.66% - 0.5px), var(--frame-paper-dim) calc(66.66% - 0.5px), var(--frame-paper-dim) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), var(--eclipse-paper-dim) calc(33.33% - 0.5px), var(--eclipse-paper-dim) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+    linear-gradient(to right, transparent calc(66.66% - 0.5px), var(--eclipse-paper-dim) calc(66.66% - 0.5px), var(--eclipse-paper-dim) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), var(--eclipse-paper-dim) calc(33.33% - 0.5px), var(--eclipse-paper-dim) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(66.66% - 0.5px), var(--eclipse-paper-dim) calc(66.66% - 0.5px), var(--eclipse-paper-dim) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
   opacity: 0.45;
 }
 /* 四隅のトリムマーク(断ち切り線)。矩形の角から外側へ短く伸びるL字ブラケット。
    ::beforeが横棒(width:100%)、::afterが縦棒(height:100%)で、それぞれ棒の長さと
    直交する軸(横棒ならtop/bottom、縦棒ならleft/right)だけを角ごとに明示的に指定する。 */
-.cam-frame-corner {
+.cam-eclipse-corner {
   position: absolute; width: 20px; height: 20px; pointer-events: none;
-  filter: drop-shadow(0 1px 2px var(--frame-shadow));
+  filter: drop-shadow(0 1px 2px var(--eclipse-shadow));
 }
-.cam-frame-corner::before, .cam-frame-corner::after { content: ''; position: absolute; background: var(--frame-accent); border-radius: 1px; }
-.cam-frame-corner::before { width: 100%; height: 2.5px; }
-.cam-frame-corner::after { width: 2.5px; height: 100%; }
-.cam-frame-corner.nw { top: -8px; left: -8px; }
-.cam-frame-corner.nw::before { top: 0; }
-.cam-frame-corner.nw::after { left: 0; }
-.cam-frame-corner.ne { top: -8px; right: -8px; }
-.cam-frame-corner.ne::before { top: 0; }
-.cam-frame-corner.ne::after { right: 0; }
-.cam-frame-corner.sw { bottom: -8px; left: -8px; }
-.cam-frame-corner.sw::before { bottom: 0; }
-.cam-frame-corner.sw::after { left: 0; }
-.cam-frame-corner.se { bottom: -8px; right: -8px; }
-.cam-frame-corner.se::before { bottom: 0; }
-.cam-frame-corner.se::after { right: 0; }
+.cam-eclipse-corner::before, .cam-eclipse-corner::after { content: ''; position: absolute; background: var(--eclipse-accent); border-radius: 1px; }
+.cam-eclipse-corner::before { width: 100%; height: 2.5px; }
+.cam-eclipse-corner::after { width: 2.5px; height: 100%; }
+.cam-eclipse-corner.nw { top: -8px; left: -8px; }
+.cam-eclipse-corner.nw::before { top: 0; }
+.cam-eclipse-corner.nw::after { left: 0; }
+.cam-eclipse-corner.ne { top: -8px; right: -8px; }
+.cam-eclipse-corner.ne::before { top: 0; }
+.cam-eclipse-corner.ne::after { right: 0; }
+.cam-eclipse-corner.sw { bottom: -8px; left: -8px; }
+.cam-eclipse-corner.sw::before { bottom: 0; }
+.cam-eclipse-corner.sw::after { left: 0; }
+.cam-eclipse-corner.se { bottom: -8px; right: -8px; }
+.cam-eclipse-corner.se::before { bottom: 0; }
+.cam-eclipse-corner.se::after { right: 0; }
 
 /* リサイズハンドル。実機で「つかみにくい」報告があったため(2026年9月)、実際に指で
    触れる当たり判定(この要素自体)を44px四方へ拡大し、見た目は中の<span>だけを
    紙のリベット(鳩目)風の小さな円で表現することで、判定だけ広く・見た目は繊細に両立させた。 */
-.cam-frame-handle {
+.cam-eclipse-handle {
   position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; touch-action: none;
   display: flex; align-items: center; justify-content: center;
 }
-.cam-frame-handle span {
+.cam-eclipse-handle span {
   display: block; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--frame-paper); border: 2.5px solid var(--frame-accent);
-  box-shadow: 0 2px 5px var(--frame-shadow);
+  background: var(--eclipse-paper); border: 2.5px solid var(--eclipse-accent);
+  box-shadow: 0 2px 5px var(--eclipse-shadow);
   transition: transform 0.1s ease;
 }
-.cam-frame-handle:active span { transform: scale(1.15); }
-.cam-frame-handle.nw { top: 0; left: 0; cursor: nwse-resize; }
-.cam-frame-handle.ne { top: 0; left: 100%; cursor: nesw-resize; }
-.cam-frame-handle.sw { top: 100%; left: 0; cursor: nesw-resize; }
-.cam-frame-handle.se { top: 100%; left: 100%; cursor: nwse-resize; }
-.cam-frame-body { position: absolute; inset: 0; cursor: move; }
+.cam-eclipse-handle:active span { transform: scale(1.15); }
+.cam-eclipse-handle.nw { top: 0; left: 0; cursor: nwse-resize; }
+.cam-eclipse-handle.ne { top: 0; left: 100%; cursor: nesw-resize; }
+.cam-eclipse-handle.sw { top: 100%; left: 0; cursor: nesw-resize; }
+.cam-eclipse-handle.se { top: 100%; left: 100%; cursor: nwse-resize; }
+.cam-eclipse-body { position: absolute; inset: 0; cursor: move; }
 
 /* 比率プリセット(F/P/M/S/円形)の選択チップ。矩形の上辺の外側に並べる(2026年9月追加)。
    F=人物型・P=風景型・M=海景型・S=正方形という、油彩キャンバスの号数で使われる4形状+円形。 */
-.cam-frame-ratio-row {
+.cam-eclipse-ratio-row {
   position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
   margin-bottom: 10px;
   display: flex; gap: 6px; touch-action: none;
 }
-.cam-frame-ratio-chip {
+.cam-eclipse-ratio-chip {
   width: 26px; height: 26px; border-radius: 50%;
-  border: 1.5px solid var(--frame-accent-deep);
-  background: var(--frame-paper); color: var(--frame-accent-deep);
+  border: 1.5px solid var(--eclipse-accent-deep);
+  background: var(--eclipse-paper); color: var(--eclipse-accent-deep);
   font: 700 10px/1 inherit; cursor: pointer; padding: 0;
-  box-shadow: 0 2px 5px var(--frame-shadow);
+  box-shadow: 0 2px 5px var(--eclipse-shadow);
   transition: transform 0.1s ease, background 0.15s ease, color 0.15s ease;
 }
-.cam-frame-ratio-chip:active { transform: scale(0.92); }
-.cam-frame-ratio-chip.active {
-  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
-  color: var(--frame-paper);
+.cam-eclipse-ratio-chip:active { transform: scale(0.92); }
+.cam-eclipse-ratio-chip.active {
+  background: linear-gradient(155deg, var(--eclipse-accent), var(--eclipse-accent-deep));
+  color: var(--eclipse-paper);
 }
 
 /* 縦スライダー2本、矩形の右横の外側に添える(2026年9月追加)。位置(高さの割合)がそのまま
    値を表す「本物のスライダー」で、ドラッグ中の相対量ではなくトラック上の絶対位置から
    毎回値を計算し直す(js/camera.jsのapplySizeSliderDrag()/applyZoomSliderDrag()参照)。
    内側(--size)=選択中の比率を保ったままのサイズ変更、外側(--zoom)=カメラズーム。 */
-.cam-frame-slider {
+.cam-eclipse-slider {
   position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
   width: 26px; height: 140px; touch-action: none;
 }
-.cam-frame-slider--size { margin-left: 16px; }
-.cam-frame-slider--zoom { margin-left: 56px; }
-.cam-frame-slider-track {
+.cam-eclipse-slider--size { margin-left: 16px; }
+.cam-eclipse-slider--zoom { margin-left: 56px; }
+.cam-eclipse-slider-track {
   position: absolute; left: 50%; top: 0; bottom: 0; width: 4px; transform: translateX(-50%);
-  background: var(--frame-paper-dim); border-radius: 2px;
+  background: var(--eclipse-paper-dim); border-radius: 2px;
 }
-.cam-frame-slider-thumb {
+.cam-eclipse-slider-thumb {
   position: absolute; left: 50%; top: 50%; width: 26px; height: 26px;
   transform: translate(-50%, -50%);
   display: flex; align-items: center; justify-content: center;
-  border-radius: 50%; background: var(--frame-paper); border: 2.5px solid var(--frame-accent);
-  box-shadow: 0 2px 5px var(--frame-shadow);
+  border-radius: 50%; background: var(--eclipse-paper); border: 2.5px solid var(--eclipse-accent);
+  box-shadow: 0 2px 5px var(--eclipse-shadow);
   font-size: 11px; line-height: 1;
 }
-.cam-frame-slider--zoom .cam-frame-slider-thumb { border-color: var(--frame-accent-deep); }
+.cam-eclipse-slider--zoom .cam-eclipse-slider-thumb { border-color: var(--eclipse-accent-deep); }
 
 /* 対称/非対称リサイズの切り替え。矩形の下辺の外側、中央に置く(2026年9月追加)。
    四隅ハンドル・サイズスライダーどちらのリサイズにも共通で効く
-   (js/camera.jsのframeSymmetricResize参照)。 */
-.cam-frame-symmetry-toggle {
+   (js/camera.jsのwireEclipseGuide()内symmetric参照)。 */
+.cam-eclipse-symmetry-toggle {
   position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
   margin-top: 10px;
   height: 22px; border-radius: 11px; padding: 0 10px;
-  border: 1.5px solid var(--frame-accent-deep);
-  background: var(--frame-paper); color: var(--frame-accent-deep);
+  border: 1.5px solid var(--eclipse-accent-deep);
+  background: var(--eclipse-paper); color: var(--eclipse-accent-deep);
   font-family: inherit; font-size: 9.5px; letter-spacing: 0.04em; white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 2px 5px var(--frame-shadow);
+  box-shadow: 0 2px 5px var(--eclipse-shadow);
   transition: background 0.15s ease, color 0.15s ease;
 }
-.cam-frame-symmetry-toggle.active {
-  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
-  color: var(--frame-paper);
+.cam-eclipse-symmetry-toggle.active {
+  background: linear-gradient(155deg, var(--eclipse-accent), var(--eclipse-accent-deep));
+  color: var(--eclipse-paper);
 }
 
 /* 円形プリセット(2026年9月追加): 矩形そのものを丸めるだけで、三分割線・トリムマークは
    円には合わないため非表示にする。リサイズハンドル・両スライダーは引き続き
    (見えないバウンディングボックスに対して)機能する。 */
-.cam-frame-guide.shape-circle { border-radius: 50%; }
-.cam-frame-guide.shape-circle::before { display: none; }
-.cam-frame-guide.shape-circle .cam-frame-corner { display: none; }
+.cam-eclipse-guide.shape-circle { border-radius: 50%; }
+.cam-eclipse-guide.shape-circle::before { display: none; }
+.cam-eclipse-guide.shape-circle .cam-eclipse-corner { display: none; }
 
-@keyframes camFrameAppear {
+@keyframes camEclipseAppear {
   0% { opacity: 0; transform: scale(0.92) rotate(-2.5deg); }
   100% { opacity: 1; transform: scale(1) rotate(0deg); }
 }
-.cam-frame-guide.appearing { animation: camFrameAppear 220ms cubic-bezier(0.22, 1.4, 0.36, 1); }
+.cam-eclipse-guide.appearing { animation: camEclipseAppear 220ms cubic-bezier(0.22, 1.4, 0.36, 1); }
 @media (prefers-reduced-motion: reduce) {
-  .cam-frame-guide.appearing { animation: none; }
+  .cam-eclipse-guide.appearing { animation: none; }
 }
 
 /* ---------- カメラのハードウェア制御: 露出補正・ホワイトバランス・トーチ(2026年9月追加) ----------
-   Frame Guideと同じ暖色パレットだが、主役のFrame Guideトグルより一段控えめな平面デザインに
-   している(紙の重なり演出はFrame Guide側だけの見せ場として残す)。タップのたびにプリセットを
+   Eclipseと同じ暖色パレットだが、主役のEclipseトグルより一段控えめな平面デザインに
+   している(紙の重なり演出はEclipse側だけの見せ場として残す)。タップのたびにプリセットを
    1つずつ巡回するだけの単純なボタンで、スライダーは持たない。対応していない端末では
    js/camera.jsのupdateCamControlAvailability()がボタンごとhiddenのまま隠す。 */
 .cam-control-row {
@@ -318,11 +319,11 @@
 .cam-control-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .cam-control-btn {
   width: 40px; height: 40px; border-radius: 50%;
-  border: 1.5px solid var(--frame-accent-deep);
-  background: var(--frame-paper); color: var(--frame-accent-deep);
+  border: 1.5px solid var(--eclipse-accent-deep);
+  background: var(--eclipse-paper); color: var(--eclipse-accent-deep);
   display: flex; align-items: center; justify-content: center;
   padding: 0; cursor: pointer;
-  box-shadow: 0 2px 6px var(--frame-shadow);
+  box-shadow: 0 2px 6px var(--eclipse-shadow);
   transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease;
 }
 .cam-control-btn[hidden] { display: none; }
@@ -330,12 +331,12 @@
 .cam-control-btn--text { font: 700 11px/1 inherit; letter-spacing: 0.02em; }
 .cam-control-btn:active { transform: scale(0.94); }
 .cam-control-btn.active {
-  background: linear-gradient(155deg, var(--frame-accent), var(--frame-accent-deep));
-  color: var(--frame-paper);
+  background: linear-gradient(155deg, var(--eclipse-accent), var(--eclipse-accent-deep));
+  color: var(--eclipse-paper);
 }
 .cam-control-label {
   font-family: inherit; font-size: 8.5px; letter-spacing: 0.05em;
-  color: var(--frame-paper); background: rgba(0, 0, 0, 0.4);
+  color: var(--eclipse-paper); background: rgba(0, 0, 0, 0.4);
   padding: 1px 6px; border-radius: 6px; white-space: nowrap;
 }
 .cam-control-label[hidden] { display: none; }

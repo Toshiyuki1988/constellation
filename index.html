@@ -174,17 +174,19 @@
           <span class="cam-control-label" id="cam-wb-label" hidden>オート</span>
         </div>
       </div>
-      <!-- Frame Guide(2026年9月追加、同月中にビジュアル刷新): 位置合わせ用の矩形。撮影結果には
-           一切影響しない見た目の目安専用(js/camera.jsのwireFrameGuide()参照)。ダブルタップでも
+      <!-- Eclipse(2026年9月追加、同月中にビジュアル刷新): 位置合わせ用の矩形。撮影結果には
+           一切影響しない見た目の目安専用(js/camera.jsのwireEclipseGuide()参照)。ダブルタップでも
            開閉できるが、実機でダブルタップ判定が安定しない報告を受け、確実な入口としてボタンを
            常設した(シャッターの左横、ユーザー要望による配置)。もともと別途あった「傾きガイド
-           (トンボ)」機能は、Frame Guideとの役割重複・実機での掴みにくさの指摘を機に削除した。
+           (トンボ)」機能は、Eclipseとの役割重複・実機での掴みにくさの指摘を機に削除した。
            **比率プリセット・スライダーリサイズ・対称/非対称トグルを追加(2026年9月)**:
            上辺外側にF/P/M/S/○(油彩キャンバスの号数比率+円形)の選択チップ、右横外側に
            2本の縦スライダー(内側=選択中の比率を保ったままのサイズ変更、外側=カメラズーム、
            どちらも位置マッピング式の本物のスライダー)、下辺外側に対称/非対称リサイズの
-           切り替えボタンを添えた。四隅ハンドルは引き続き比率を無視した自由リサイズ専用。 -->
-      <button class="cam-round-toggle cam-frame-guide-toggle" id="frame-guide-toggle-photo" title="位置合わせガイドの表示切り替え">
+           切り替えボタンを添えた。四隅ハンドルは引き続き比率を無視した自由リサイズ専用。
+           **命名(2026年9月追記)**: この一式のUI総称を「Eclipse」と名付けた(円形ガイドで
+           暗い美術館を探る見た目が日食に近いことに由来)。 -->
+      <button class="cam-round-toggle cam-eclipse-toggle" id="eclipse-guide-toggle-photo" title="位置合わせガイドの表示切り替え">
         <span class="cam-round-toggle-face">
           <svg viewBox="0 0 24 24" fill="none"><path d="M4 9V5.5C4 4.67 4.67 4 5.5 4H9M15 4H18.5C19.33 4 20 4.67 20 5.5V9M20 15V18.5C20 19.33 19.33 20 18.5 20H15M9 20H5.5C4.67 20 4 19.33 4 18.5V15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </span>
@@ -201,30 +203,30 @@
         </button>
         <span class="cam-control-label" id="cam-auto-shutter-label" hidden>OFF</span>
       </div>
-      <div class="cam-frame-guide" id="frame-guide-photo">
-        <div class="cam-frame-ratio-row" id="frame-ratio-row-photo">
-          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="F" title="F(人物型)">F</button>
-          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="P" title="P(風景型)">P</button>
-          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="M" title="M(海景型)">M</button>
-          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="S" title="S(正方形)">S</button>
-          <button class="cam-frame-ratio-chip" type="button" data-ratio-key="C" title="円形">○</button>
+      <div class="cam-eclipse-guide" id="eclipse-guide-photo">
+        <div class="cam-eclipse-ratio-row" id="eclipse-ratio-row-photo">
+          <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="F" title="F(人物型)">F</button>
+          <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="P" title="P(風景型)">P</button>
+          <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="M" title="M(海景型)">M</button>
+          <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="S" title="S(正方形)">S</button>
+          <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="C" title="円形">○</button>
         </div>
-        <div class="cam-frame-body"></div>
-        <div class="cam-frame-corner nw"></div>
-        <div class="cam-frame-corner ne"></div>
-        <div class="cam-frame-corner sw"></div>
-        <div class="cam-frame-corner se"></div>
-        <div class="cam-frame-handle nw"><span></span></div>
-        <div class="cam-frame-handle ne"><span></span></div>
-        <div class="cam-frame-handle sw"><span></span></div>
-        <div class="cam-frame-handle se"><span></span></div>
-        <div class="cam-frame-slider cam-frame-slider--size" id="frame-size-slider-photo" title="比率を保ったままサイズ変更">
-          <div class="cam-frame-slider-track"><div class="cam-frame-slider-thumb"></div></div>
+        <div class="cam-eclipse-body"></div>
+        <div class="cam-eclipse-corner nw"></div>
+        <div class="cam-eclipse-corner ne"></div>
+        <div class="cam-eclipse-corner sw"></div>
+        <div class="cam-eclipse-corner se"></div>
+        <div class="cam-eclipse-handle nw"><span></span></div>
+        <div class="cam-eclipse-handle ne"><span></span></div>
+        <div class="cam-eclipse-handle sw"><span></span></div>
+        <div class="cam-eclipse-handle se"><span></span></div>
+        <div class="cam-eclipse-slider cam-eclipse-slider--size" id="eclipse-size-slider-photo" title="比率を保ったままサイズ変更">
+          <div class="cam-eclipse-slider-track"><div class="cam-eclipse-slider-thumb"></div></div>
         </div>
-        <div class="cam-frame-slider cam-frame-slider--zoom" id="frame-zoom-slider-photo" title="カメラズーム">
-          <div class="cam-frame-slider-track"><div class="cam-frame-slider-thumb">🔍</div></div>
+        <div class="cam-eclipse-slider cam-eclipse-slider--zoom" id="eclipse-zoom-slider-photo" title="カメラズーム">
+          <div class="cam-eclipse-slider-track"><div class="cam-eclipse-slider-thumb">🔍</div></div>
         </div>
-        <button class="cam-frame-symmetry-toggle" id="frame-symmetry-toggle-photo" type="button" title="リサイズの基準点を切り替え">非対称</button>
+        <button class="cam-eclipse-symmetry-toggle" id="eclipse-symmetry-toggle-photo" type="button" title="リサイズの基準点を切り替え">非対称</button>
       </div>
       <button class="cam-shutter-btn" id="camera-shutter-photo" title="撮影"></button>
     </div>
