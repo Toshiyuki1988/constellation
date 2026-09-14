@@ -704,6 +704,27 @@ async function onSignedIn() {
     state.cards.forEach((card) => {
       if (!card.sessionId) card.sessionId = migrationTargetId;
     });
+    // イマジナリーカード(Star Pencil)の高さ破損の一度きりの修復(2026年9月)。
+    // renderCard()末尾のsyncCardHeight()が、中身が全てposition:absoluteのイマジナリー
+    // カードに対しても呼ばれてしまっていたバグ(修正済み)により、そのバグが直る前に
+    // 作られたカードはcard.heightがmin-height(100px)相当まで潰れた状態でDriveに
+    // 保存されてしまっていた。コード側を直しただけでは既に壊れて保存されたデータは
+    // 直らない(長押し判定・移動・削除の当たり判定がその縮んだ高さに基づくため、
+    // 「線は見えるのに操作できない」という実機報告があった)ため、ストローク自体の
+    // 座標(壊れていない)からbounding boxを逆算して復元する。
+    state.cards.forEach((card) => {
+      if (card.mediaType !== 'imaginary' || !Array.isArray(card.strokes) || card.strokes.length === 0) return;
+      let maxX = 0, maxY = 0;
+      card.strokes.forEach((s) => (s.points || []).forEach((p) => {
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }));
+      const STAR_PENCIL_BOUNDING_PAD = 24; // js/modules/star-pencil.jsのBOUNDING_PADと同じ値
+      const correctWidth = Math.max(60, maxX + STAR_PENCIL_BOUNDING_PAD);
+      const correctHeight = Math.max(60, maxY + STAR_PENCIL_BOUNDING_PAD);
+      if (Math.abs((card.width || 0) - correctWidth) > 2) card.width = correctWidth;
+      if (Math.abs((card.height || 0) - correctHeight) > 2) card.height = correctHeight;
+    });
     // 前回作業していた場所を復元する(2026年9月追加、ユーザー要望)。保存されたbreadcrumbの
     // 各IDが現在のsessionsに実在するかを先頭から検証し、削除されたセッションを指していた
     // 箇所で打ち切る(Flight Engineerのensure BreadcrumbValid()と同じ考え方)。復元できる
