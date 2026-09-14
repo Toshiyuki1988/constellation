@@ -526,9 +526,11 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
  * 同じ考え方。wireTapFocus()の既存のclick(シングルタップでピント)とは独立に動くため、
  * ダブルタップの1・2回目それぞれでピントも合わせにいくが実害はない(むしろ自然)。 */
 function wireFrameGuide(screenEl, frameEl) {
-  const DOUBLE_TAP_MS = 350;
-  const DOUBLE_TAP_MOVE_TOLERANCE_PX = 10;
-  const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 40;
+  // 実機で「ダブルタップしても反応しない」報告(2026年9月)を受け、指のブレ・タップ間隔の
+  // バラつきに強くなるよう、js/canvas.jsの俯瞰ズーム判定(350ms/10px/40px)より緩めた値にした。
+  const DOUBLE_TAP_MS = 500;
+  const DOUBLE_TAP_MOVE_TOLERANCE_PX = 20;
+  const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 70;
   let pressStart = null;
   let lastTapAt = 0;
   let lastTapPos = null;
@@ -558,15 +560,28 @@ function wireFrameGuide(screenEl, frameEl) {
     if (visible) hide(); else showDefault();
   }
 
+  // 実機での原因切り分け用のデバッグログ(2026年9月、「ダブルタップしても反応しない」
+  // 報告を受けて追加)。?debugパネルで、実際にpointerdown/upが届いているか、
+  // どの条件で1回目・2回目の判定に落ちているかを確認できるようにしておく。
   screenEl.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.cam-frame-guide, button')) return;
+    if (e.target.closest('.cam-frame-guide, button')) {
+      camDebugLog(`FrameGuide: pointerdown ignored(target=${e.target.tagName}.${e.target.className || ''})`);
+      return;
+    }
     pressStart = { x: e.clientX, y: e.clientY };
+    camDebugLog(`FrameGuide: pointerdown(${Math.round(e.clientX)},${Math.round(e.clientY)}) type=${e.pointerType}`);
   });
   screenEl.addEventListener('pointerup', (e) => {
-    if (!pressStart) return;
+    if (!pressStart) {
+      camDebugLog('FrameGuide: pointerup with no pressStart(ignored)');
+      return;
+    }
     const moved = Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y);
     pressStart = null;
-    if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) return;
+    if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) {
+      camDebugLog(`FrameGuide: moved too much during tap(${moved.toFixed(1)}px > ${DOUBLE_TAP_MOVE_TOLERANCE_PX}px)`);
+      return;
+    }
     const now = Date.now();
     const pos = { x: e.clientX, y: e.clientY };
     if (
@@ -574,10 +589,14 @@ function wireFrameGuide(screenEl, frameEl) {
       now - lastTapAt < DOUBLE_TAP_MS &&
       Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < DOUBLE_TAP_DISTANCE_TOLERANCE_PX
     ) {
+      camDebugLog('FrameGuide: double tap detected -> toggle()');
       lastTapAt = 0;
       lastTapPos = null;
       toggle();
     } else {
+      const gapMs = lastTapPos ? now - lastTapAt : null;
+      const distPx = lastTapPos ? Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) : null;
+      camDebugLog(`FrameGuide: recorded as 1st tap(prevGapMs=${gapMs}, prevDistPx=${distPx != null ? distPx.toFixed(1) : 'n/a'})`);
       lastTapAt = now;
       lastTapPos = pos;
     }

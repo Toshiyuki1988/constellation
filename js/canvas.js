@@ -333,20 +333,7 @@ function fitMediaToCardHeight(el) {
 
 let editGuideCard = null; // 現在編集ガイドが表示されているカード要素(同時に1枚のみ)
 
-/** 「掴む」演出(2026年9月追加): 長押し確定の瞬間、指を置いた場所(省略時はカード中心)に
- *  一度だけ広がって消える発光リングを出す。モックアップ(gesture-refresh-artifact.html)で
- *  検証した「パルスではなく単発」のアニメーション。ユーザー判断により、移動中の光の軌跡
- *  (ドラッグに追従して粒を残し続ける演出)は採用しなかった。 */
-function spawnGrabBurst(x, y) {
-  const burst = document.createElement('div');
-  burst.className = 'card-grab-burst';
-  burst.style.left = `${x}px`;
-  burst.style.top = `${y}px`;
-  document.body.appendChild(burst);
-  setTimeout(() => burst.remove(), 400);
-}
-
-function activateEditGuide(el, opts) {
+function activateEditGuide(el) {
   if (editGuideCard === el) return;
   if (editGuideCard) deactivateEditGuide(editGuideCard);
   editGuideCard = el;
@@ -354,10 +341,6 @@ function activateEditGuide(el, opts) {
   el.dataset.justLifted = '1'; // タップで開くカード種別が、直後のタップで誤って開かないようにする
   if (navigator.vibrate) navigator.vibrate(8);
   playGuideRevealSound();
-  const rect = el.getBoundingClientRect();
-  const x = opts && opts.clientX != null ? opts.clientX : rect.left + rect.width / 2;
-  const y = opts && opts.clientY != null ? opts.clientY : rect.top + rect.height / 2;
-  spawnGrabBurst(x, y);
 }
 
 function deactivateEditGuide(el) {
@@ -395,31 +378,12 @@ function attachCardGestures(el) {
 
   let handleResize = null; // { pointerId, edges, startClientX, startClientY, startWidth, startHeight, startCardX, startCardY }
   let pressTimer = null;
-  let pressRing = null; // 長押し中、指の位置に表示する集束リング(2026年9月追加、「掴む」演出)
 
   function clearPressTimer() {
     if (pressTimer) {
       clearTimeout(pressTimer);
       pressTimer = null;
     }
-    if (pressRing) {
-      pressRing.remove();
-      pressRing = null;
-    }
-  }
-
-  /** 長押し(CARD_LONG_PRESS_MS)にかけて、指の位置でリングが少しずつ閉じていくCSS
-   *  トランジション。「魔法をかけている」ような視覚的フィードバックで、押し切る前に
-   *  指を離す/動かすとclearPressTimer()で即座に消える。 */
-  function spawnPressRing(x, y) {
-    const ring = document.createElement('div');
-    ring.className = 'card-press-ring';
-    ring.style.left = `${x}px`;
-    ring.style.top = `${y}px`;
-    ring.innerHTML = '<svg viewBox="0 0 54 54"><circle cx="27" cy="27" r="24"></circle></svg>';
-    document.body.appendChild(ring);
-    requestAnimationFrame(() => ring.classList.add('animating'));
-    return ring;
   }
 
   function beginMove(clientX, clientY) {
@@ -505,11 +469,10 @@ function attachCardGestures(el) {
     // 未表示: 長押しで編集ガイドを表示する
     el.classList.add('star-card--pressing');
     clearPressTimer();
-    pressRing = spawnPressRing(event.clientX, event.clientY);
     pressTimer = setTimeout(() => {
-      clearPressTimer(); // pressTimerをnullに戻しつつ、集束し終えたリングを片付ける
+      pressTimer = null;
       el.classList.remove('star-card--pressing');
-      activateEditGuide(el, { clientX: event.clientX, clientY: event.clientY });
+      activateEditGuide(el);
       beginMove(event.clientX, event.clientY);
     }, CARD_LONG_PRESS_MS);
   });
