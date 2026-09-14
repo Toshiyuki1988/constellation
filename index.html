@@ -232,13 +232,19 @@
         <div class="cam-eclipse-handle ne"><span></span></div>
         <div class="cam-eclipse-handle sw"><span></span></div>
         <div class="cam-eclipse-handle se"><span></span></div>
-        <div class="cam-eclipse-slider cam-eclipse-slider--size" id="eclipse-size-slider-photo" title="比率を保ったままサイズ変更">
+        <div class="cam-eclipse-slider" id="eclipse-size-slider-photo" title="比率を保ったままサイズ変更">
           <div class="cam-eclipse-slider-track"><div class="cam-eclipse-slider-thumb"></div></div>
         </div>
-        <div class="cam-eclipse-slider cam-eclipse-slider--zoom" id="eclipse-zoom-slider-photo" title="カメラズーム">
-          <div class="cam-eclipse-slider-track"><div class="cam-eclipse-slider-thumb">🔍</div></div>
-        </div>
         <button class="cam-eclipse-symmetry-toggle" id="eclipse-symmetry-toggle-photo" type="button" title="リサイズの基準点を切り替え">非対称</button>
+      </div>
+      <!-- ズームスライダー(2026年9月、Eclipseから分離): 以前はEclipseガイドの右横に添えていたが、
+           ガイドを画面右へ寄せると2本のスライダー分の余白で窮屈になるという指摘を受け、ガイドの
+           開閉に関わらず常時表示される独立コントロールへ切り出した(js/camera.jsの
+           wireCamZoomSlider()参照)。ガイド表示中はガイド本体やサイズスライダーと重なることが
+           あるが意図的に許容している。見た目は宇宙船コックピットのスロットルレバー風。 -->
+      <div class="cam-zoom-slider" id="zoom-slider-photo" title="カメラズーム">
+        <span class="cam-zoom-slider-label">ZOOM</span>
+        <div class="cam-zoom-slider-track"><div class="cam-zoom-slider-thumb"><span></span></div></div>
       </div>
       <button class="cam-shutter-btn" id="camera-shutter-photo" title="撮影"></button>
     </div>

@@ -229,8 +229,8 @@ function ensureCameraDom() {
     eclipseGuideTogglePhoto: document.getElementById('eclipse-guide-toggle-photo'),
     eclipseRatioRowPhoto: document.getElementById('eclipse-ratio-row-photo'),
     eclipseSizeSliderPhoto: document.getElementById('eclipse-size-slider-photo'),
-    eclipseZoomSliderPhoto: document.getElementById('eclipse-zoom-slider-photo'),
     eclipseSymmetryTogglePhoto: document.getElementById('eclipse-symmetry-toggle-photo'),
+    zoomSliderPhoto: document.getElementById('zoom-slider-photo'), // Eclipseから分離した常時表示のズームスライダー
     exposureBtn: document.getElementById('cam-exposure-btn'),
     exposureLabel: document.getElementById('cam-exposure-label'),
     wbBtn: document.getElementById('cam-wb-btn'),
@@ -295,6 +295,7 @@ function wireCameraEvents() {
   wireTapFocus(camEls.captionScreen, camEls.focusLayerCaption, () => camEls.videoCaption);
 
   wireEclipseGuide(camEls.photoScreen, camEls.eclipseGuidePhoto, camEls.eclipseGuideTogglePhoto, camEls.videoPhoto, camEls.zoomBadgePhoto);
+  wireCamZoomSlider(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wireCameraControls();
   wireAutoShutterButton();
 
@@ -798,7 +799,20 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
  * 応じてサイズスライダーの拡縮基準点も切り替わり、既定(非対称)では左上が固定点になっていた。
  * スライダーで縮小するたびガイドが左上へ寄っていく挙動が分かりにくいという指摘を受け、
  * サイズスライダーでの拡縮は常にガイドの中心を固定点にするよう変更した(対称/非対称トグルは
- * 四隅ハンドルでの自由リサイズにのみ効く)。 */
+ * 四隅ハンドルでの自由リサイズにのみ効く)。
+ * **ズームスライダーをEclipseから分離(2026年9月)**: 「ガイドを画面右へ寄せるとスライダー
+ * 2本分の余白で窮屈になる」という指摘を受け、ズームスライダーをこのガイドの一部から
+ * 切り出し、Eclipseの開閉に関わらず常時表示される独立コントロール(下記wireCamZoomSlider()、
+ * css/camera.cssの`.cam-zoom-slider`)にした。ガイド表示中に見た目が重なることは意図的に
+ * 許容している。見た目も宇宙船コックピットのスロットルレバー風に作り直した(ユーザー指定)。 */
+
+/** トラック上のpointerY位置を0(下端)〜1(上端)の割合に変換する(位置マッピング式のスライダー
+ *  共通処理)。wireEclipseGuide()のサイズスライダーとwireCamZoomSlider()の両方から使う。 */
+function fracFromTrack(trackRect, clientY) {
+  const frac = 1 - (clientY - trackRect.top) / trackRect.height;
+  return Math.max(0, Math.min(1, frac));
+}
+
 function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) {
   // 実機で「ダブルタップしても反応しない」報告(2026年9月)を受け、指のブレ・タップ間隔の
   // バラつきに強くなるよう、js/canvas.jsの俯瞰ズーム判定(350ms/10px/40px)より緩めた値にした。
@@ -806,11 +820,13 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   const DOUBLE_TAP_MOVE_TOLERANCE_PX = 20;
   const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 70;
   const MIN_ECLIPSE_SIZE = 60;
-  // 付属要素(比率チップ行・四隅ハンドル・2本のスライダー・対称トグル・回転/中央リセットボタン)が
+  // 付属要素(比率チップ行・四隅ハンドル・サイズスライダー・対称トグル・回転/中央リセットボタン)が
   // ガイド本体の矩形からどれだけはみ出すかの固定量。css/camera.cssの対応する値と一致させること。
+  // ズームスライダーは2026年9月にEclipseから分離し常時表示の独立コントロールにしたため、
+  // ここでのクランプ計算からは除外している(画面右端に固定なので自分自身では動かない)。
   const RATIO_ROW_HALF_WIDTH = 77; // .cam-eclipse-ratio-row: 26px×5チップ+6px×4間隔=154の半分
   const HANDLE_OVERHANG = 22; // .cam-eclipse-handle: 44px角の当たり判定の半分
-  const SLIDER_RIGHT_OVERHANG = 82; // .cam-eclipse-slider--zoom: margin-left 56 + width 26
+  const SIZE_SLIDER_RIGHT_OVERHANG = 42; // .cam-eclipse-slider: margin-left 16 + width 26
   const SLIDER_HALF_HEIGHT = 70; // .cam-eclipse-slider: height 140の半分(ガイドの縦中心基準)
   const RATIO_ROW_TOP_OVERHANG = 36; // チップ高さ26 + margin-bottom 10
   const SYM_TOGGLE_BOTTOM_OVERHANG = 32; // margin-top 10 + height 22
@@ -824,13 +840,10 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   let symmetric = false; // 対称/非対称リサイズ(四隅ハンドルのみに効く。下辺トグル)
 
   const ratioRowEl = eclipseEl.querySelector('.cam-eclipse-ratio-row');
-  const sizeSliderEl = eclipseEl.querySelector('.cam-eclipse-slider--size');
-  const zoomSliderEl = eclipseEl.querySelector('.cam-eclipse-slider--zoom');
+  const sizeSliderEl = eclipseEl.querySelector('.cam-eclipse-slider');
   const symmetryBtn = eclipseEl.querySelector('.cam-eclipse-symmetry-toggle');
   const sizeThumbEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-eclipse-slider-thumb');
   const sizeTrackEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-eclipse-slider-track');
-  const zoomThumbEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-eclipse-slider-thumb');
-  const zoomTrackEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-eclipse-slider-track');
   const rotateBtn = eclipseEl.querySelector('.cam-eclipse-rotate-btn');
   const recenterBtn = eclipseEl.querySelector('.cam-eclipse-recenter-btn');
 
@@ -866,7 +879,7 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     return Math.max(HANDLE_OVERHANG, SIDE_BTNS_LEFT_OVERHANG, RATIO_ROW_HALF_WIDTH - w / 2, SYM_TOGGLE_HALF_WIDTH - w / 2);
   }
   function eclipsePadRight(w) {
-    return Math.max(HANDLE_OVERHANG, SLIDER_RIGHT_OVERHANG, RATIO_ROW_HALF_WIDTH - w / 2, SYM_TOGGLE_HALF_WIDTH - w / 2);
+    return Math.max(HANDLE_OVERHANG, SIZE_SLIDER_RIGHT_OVERHANG, RATIO_ROW_HALF_WIDTH - w / 2, SYM_TOGGLE_HALF_WIDTH - w / 2);
   }
   function eclipsePadTop(h) {
     return Math.max(RATIO_ROW_TOP_OVERHANG, SLIDER_HALF_HEIGHT - h / 2);
@@ -919,16 +932,6 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     sizeThumbEl.style.top = `${(1 - frac) * 100}%`;
   }
 
-  /** ズームスライダーのつまみ位置を、現在のcamZoomScaleから合わせ直す。ピンチズーム側
-   *  (setCamZoom())からも呼べるよう、screenEl.__syncEclipseZoomSliderとして橋渡しする。 */
-  function syncZoomSliderThumb() {
-    if (!zoomThumbEl) return;
-    const max = maxZoomForCurrentTrack();
-    const frac = max > 1 ? Math.max(0, Math.min(1, (camZoomScale - 1) / (max - 1))) : 0;
-    zoomThumbEl.style.top = `${(1 - frac) * 100}%`;
-  }
-  screenEl.__syncEclipseZoomSlider = syncZoomSliderThumb;
-
   function showDefault() {
     ratioIndex = 0;
     symmetric = false;
@@ -944,7 +947,6 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     visible = true;
     if (toggleBtn) toggleBtn.classList.add('active');
     syncSizeSliderThumb();
-    syncZoomSliderThumb();
   }
   function hide() {
     eclipseEl.classList.remove('visible');
@@ -1074,7 +1076,7 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   });
 
   /* ---- 矩形の移動・リサイズ(四隅ハンドル) ---- */
-  let dragMode = null; // 'move' | 'nw'|'ne'|'sw'|'se' | 'size-slider' | 'zoom-slider'
+  let dragMode = null; // 'move' | 'nw'|'ne'|'sw'|'se' | 'size-slider'
   let dragStart = null;
 
   function beginDrag(mode, e) {
@@ -1093,8 +1095,6 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     if (mode === 'size-slider' && sizeTrackEl) {
       dragStart.trackRect = sizeTrackEl.getBoundingClientRect();
       dragStart.sizeBounds = sizeBoundsForRatio(currentRatio(), isPortrait());
-    } else if (mode === 'zoom-slider' && zoomTrackEl) {
-      dragStart.trackRect = zoomTrackEl.getBoundingClientRect();
     }
     e.stopPropagation();
     try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
@@ -1106,13 +1106,6 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     h.addEventListener('pointerdown', (e) => beginDrag(mode, e));
   });
   if (sizeSliderEl) sizeSliderEl.addEventListener('pointerdown', (e) => beginDrag('size-slider', e));
-  if (zoomSliderEl) zoomSliderEl.addEventListener('pointerdown', (e) => beginDrag('zoom-slider', e));
-
-  /** トラック上のpointerY位置を0(下端)〜1(上端)の割合に変換する(位置マッピング式のスライダー共通処理) */
-  function fracFromTrack(trackRect, clientY) {
-    const frac = 1 - (clientY - trackRect.top) / trackRect.height;
-    return Math.max(0, Math.min(1, frac));
-  }
 
   document.addEventListener('pointermove', (e) => {
     if (!dragMode || !dragStart) return;
@@ -1138,14 +1131,6 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
       return;
     }
 
-    if (dragMode === 'zoom-slider') {
-      const frac = fracFromTrack(dragStart.trackRect, e.clientY);
-      const max = maxZoomForCurrentTrack();
-      setCamZoom(1 + frac * (max - 1), videoEl, zoomBadgeEl); // setCamZoom()自体がネイティブ/デジタルズームを仕切ってくれる
-      if (zoomThumbEl) zoomThumbEl.style.top = `${(1 - frac) * 100}%`;
-      return;
-    }
-
     // 四隅ハンドル: 比率を無視した自由リサイズ。下辺トグルで対称(中心固定)/非対称(対角固定)を切り替える。
     let x, y, w, h;
     if (symmetric) {
@@ -1167,7 +1152,7 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     applyRect(x, y, w, h, screenW, screenH);
   });
   document.addEventListener('pointerup', () => {
-    const wasHandleDrag = dragMode && dragMode !== 'move' && dragMode !== 'size-slider' && dragMode !== 'zoom-slider';
+    const wasHandleDrag = dragMode && dragMode !== 'move' && dragMode !== 'size-slider';
     dragMode = null;
     dragStart = null;
     if (wasHandleDrag) syncSizeSliderThumb(); // 四隅ハンドルでの自由リサイズ後、サイズスライダーのつまみを実際の大きさへ合わせ直す
@@ -1176,6 +1161,47 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
 
   // モードを抜けて戻ってきた時など、毎回ゼロから位置合わせできるよう非表示にリセットする。
   screenEl.__resetEclipseGuide = hide;
+}
+
+/* ---------------- ズームスライダー(2026年9月、Eclipseから分離) ----------------
+ * 以前はEclipseガイドの右横に添える2本目のスライダーとして実装していたが、「ガイドを
+ * 画面右へ寄せるとスライダー2本分の余白で窮屈になる」という指摘を受け、Eclipseの開閉状態に
+ * 関わらず常時表示される独立コントロールへ切り出した(ユーザー指定)。トラック上の絶対位置が
+ * そのまま値になる「本物のスライダー」という設計はwireEclipseGuide()のサイズスライダーと共通
+ * (fracFromTrack()を共有)。見た目は宇宙船コックピットのスロットルレバー風にした(ユーザー指定、
+ * css/camera.cssの.cam-zoom-slider参照)。画面右端の固定位置に常にあるため、Eclipse側のような
+ * 画面内クランプは不要(自分自身は動かない)。 */
+function wireCamZoomSlider(screenEl, videoEl, zoomBadgeEl) {
+  const sliderEl = screenEl.querySelector('.cam-zoom-slider');
+  if (!sliderEl) return;
+  const trackEl = sliderEl.querySelector('.cam-zoom-slider-track');
+  const thumbEl = sliderEl.querySelector('.cam-zoom-slider-thumb');
+  if (!trackEl || !thumbEl) return;
+
+  /** つまみ位置を、現在のcamZoomScaleから合わせ直す。ピンチズーム側(setCamZoom())からも
+   *  呼べるよう、screenEl.__syncCamZoomSliderとして橋渡しする。 */
+  function syncThumb() {
+    const max = maxZoomForCurrentTrack();
+    const frac = max > 1 ? Math.max(0, Math.min(1, (camZoomScale - 1) / (max - 1))) : 0;
+    thumbEl.style.top = `${(1 - frac) * 100}%`;
+  }
+  screenEl.__syncCamZoomSlider = syncThumb;
+
+  let dragStart = null;
+  sliderEl.addEventListener('pointerdown', (e) => {
+    e.stopPropagation(); // Eclipse側のダブルタップ判定・背景のタップフォーカスへ伝播させない
+    dragStart = { trackRect: trackEl.getBoundingClientRect() };
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (!dragStart) return;
+    const frac = fracFromTrack(dragStart.trackRect, e.clientY);
+    const max = maxZoomForCurrentTrack();
+    setCamZoom(1 + frac * (max - 1), videoEl, zoomBadgeEl); // setCamZoom()自体がネイティブ/デジタルズームを仕切ってくれる
+    thumbEl.style.top = `${(1 - frac) * 100}%`; // 自分のドラッグ中は逆算せず直接反映(軽量)
+  });
+  document.addEventListener('pointerup', () => { dragStart = null; });
+  document.addEventListener('pointercancel', () => { dragStart = null; });
 }
 
 /* ---------------- ピンチズーム(2026年9月追加) ----------------
@@ -1265,10 +1291,9 @@ function setCamZoom(scale, videoEl, badgeEl) {
     videoEl.style.transform = `scale(${camZoomScale})`;
   }
   updateZoomBadge(badgeEl); // バッジは常に即座に最新の指の位置を反映する(ハードウェア追従待ちはしない)
-  // Eclipseのズームスライダーのつまみも追従させる(ピンチズーム・スライダー操作のどちらで
-  // 変えても、もう片方の表示にすぐ反映される。2026年9月追加)。ガイドを持たない画面/非表示中でも
-  // 単に見えないつまみの位置を更新するだけなので無害。
-  if (camEls && camEls.photoScreen && camEls.photoScreen.__syncEclipseZoomSlider) camEls.photoScreen.__syncEclipseZoomSlider();
+  // ズームスライダーのつまみも追従させる(ピンチズーム・スライダー操作のどちらで変えても、
+  // もう片方の表示にすぐ反映される)。スライダーを持たない画面では単に無害に無視される。
+  if (camEls && camEls.photoScreen && camEls.photoScreen.__syncCamZoomSlider) camEls.photoScreen.__syncCamZoomSlider();
 }
 
 /** 現在の撮影に使うべきデジタルズーム倍率(ネイティブズーム中は1、それ以外はcamZoomScale) */

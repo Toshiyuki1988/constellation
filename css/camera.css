@@ -270,16 +270,16 @@
   color: var(--eclipse-paper);
 }
 
-/* 縦スライダー2本、矩形の右横の外側に添える(2026年9月追加)。位置(高さの割合)がそのまま
-   値を表す「本物のスライダー」で、ドラッグ中の相対量ではなくトラック上の絶対位置から
-   毎回値を計算し直す(js/camera.jsのapplySizeSliderDrag()/applyZoomSliderDrag()参照)。
-   内側(--size)=選択中の比率を保ったままのサイズ変更、外側(--zoom)=カメラズーム。 */
+/* サイズスライダー(比率を保ったままの拡縮)、矩形の右横の外側に添える(2026年9月追加)。
+   位置(高さの割合)がそのまま値を表す「本物のスライダー」で、ドラッグ中の相対量ではなく
+   トラック上の絶対位置から毎回値を計算し直す(js/camera.jsのwireEclipseGuide()参照)。
+   **ズームスライダーは同月中にEclipseから分離し常時表示の独立コントロールにしたため、
+   ここは1本(サイズのみ)になった(下の.cam-zoom-slider参照)。** */
 .cam-eclipse-slider {
   position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+  margin-left: 16px;
   width: 26px; height: 140px; touch-action: none;
 }
-.cam-eclipse-slider--size { margin-left: 16px; }
-.cam-eclipse-slider--zoom { margin-left: 56px; }
 .cam-eclipse-slider-track {
   position: absolute; left: 50%; top: 0; bottom: 0; width: 4px; transform: translateX(-50%);
   background: var(--eclipse-paper-dim); border-radius: 2px;
@@ -292,7 +292,64 @@
   box-shadow: 0 2px 5px var(--eclipse-shadow);
   font-size: 11px; line-height: 1;
 }
-.cam-eclipse-slider--zoom .cam-eclipse-slider-thumb { border-color: var(--eclipse-accent-deep); }
+
+/* ズームスライダー(2026年9月、Eclipseガイドから分離、常時表示) ----------
+   「ガイドを右へ寄せるとスライダー2本分で窮屈」という指摘を受け、ガイドの開閉状態に
+   関わらず常に画面右端に固定表示する独立コントロールへ切り出した(js/camera.jsの
+   wireCamZoomSlider()参照)。トラック上の絶対位置がそのまま値になる考え方はサイズ
+   スライダーと共通。ガイド表示中にガイド本体やサイズスライダーと重なることは意図的に
+   許容している(ユーザー指定)。
+   **見た目は宇宙船コックピットのスロットルレバー風にした(2026年9月、ユーザー指定)**:
+   Eclipse本体の暖色ペーパークラフト調から質感だけ切り離し、金属の溝(トラック)に
+   四角いレバーキャップ(つまみ)がはまり、握りの筋(グリップ)が入ったデザインにした。
+   色トークンは--eclipse-accent系を踏襲し、Eclipseとの血縁は保っている。 */
+.cam-zoom-slider {
+  position: absolute; right: calc(10px + env(safe-area-inset-right, 0px)); top: 50%;
+  transform: translateY(-50%);
+  width: 34px; height: 156px; touch-action: none; z-index: 7;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.cam-zoom-slider-label {
+  font-family: inherit; font-size: 8px; letter-spacing: 0.12em;
+  color: var(--eclipse-paper); background: rgba(0, 0, 0, 0.45);
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+}
+.cam-zoom-slider-track {
+  position: relative; width: 12px; flex: 1;
+  background: linear-gradient(180deg, #2a2a2e, #1a1a1d);
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  border-radius: 5px;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.7), inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+}
+/* スロットルの目盛り(上/中/下の3本の短い横線) */
+.cam-zoom-slider-track::before {
+  content: '';
+  position: absolute; left: -3px; right: -3px; top: 12%; bottom: 12%;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.3) 1.5px, transparent 1.5px),
+    linear-gradient(rgba(255, 255, 255, 0.3) 1.5px, transparent 1.5px),
+    linear-gradient(rgba(255, 255, 255, 0.3) 1.5px, transparent 1.5px);
+  background-size: 100% 1.5px;
+  background-repeat: no-repeat;
+  background-position: 0 0%, 0 50%, 0 100%;
+  opacity: 0.6;
+  pointer-events: none;
+}
+.cam-zoom-slider-thumb {
+  position: absolute; left: 50%; top: 50%; width: 30px; height: 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--eclipse-accent) 0%, var(--eclipse-accent-deep) 100%);
+  border: 1.5px solid rgba(0, 0, 0, 0.55);
+  box-shadow: 0 3px 7px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  transition: none; /* レバーらしい即応性のため、つまみ位置の追従に遅延を付けない */
+}
+/* 握りの筋(グリップ、縦3本の細い線) */
+.cam-zoom-slider-thumb::before, .cam-zoom-slider-thumb::after {
+  content: ''; width: 1.5px; height: 12px; background: rgba(0, 0, 0, 0.4); border-radius: 1px;
+}
+.cam-zoom-slider-thumb span { width: 1.5px; height: 12px; background: rgba(0, 0, 0, 0.4); border-radius: 1px; }
 
 /* 対称/非対称リサイズの切り替え。矩形の下辺の外側、中央に置く(2026年9月追加)。
    四隅ハンドル・サイズスライダーどちらのリサイズにも共通で効く
