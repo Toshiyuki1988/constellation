@@ -402,7 +402,10 @@ function attachCardGestures(el) {
     el.dataset.y = String(y);
     applyCardTransform(el);
     updateAutoPanPointer(clientX, clientY);
-    redrawAsterismLines(); // 繋がっている線をカードの移動に追従させる
+    // ドラッグ中はフル再構築(redrawAsterismLines())ではなく、このカードに関わる線だけを
+    // 動かす軽量パスにする(2026年9月、カード数・接続数が多いセッションでのドラッグの
+    // 重さの主因だったため)。フル再構築はendMove()で指を離した時に1回だけ行う。
+    updateAsterismLinesForCard(el.dataset.id);
 
     moveTickAccumDist += rawDist;
     if (moveTickAccumDist >= MOVE_TICK_DISTANCE_PX) {
@@ -418,6 +421,7 @@ function attachCardGestures(el) {
       card.x = parseFloat(el.dataset.x) || 0;
       card.y = parseFloat(el.dataset.y) || 0;
     }
+    redrawAsterismLines(); // ドラッグ中は軽量パスのみだったため、確定時にフル再構築で整合を取る
     // Flight Engineer起動中は背景パンをそのモジュールが占有しているため、ここで無条件に
     // 有効化すると(PCでShiftキー併用時にカード移動/ASTR接続の終了経路をここも通るため)
     // 矩形選択モードなのにパンが復活してしまう。そちらがアクティブな間はパンを有効化しない。
@@ -530,7 +534,9 @@ function attachCardGestures(el) {
     el.dataset.y = String(y);
     applyCardTransform(el);
     fitMediaToCardHeight(el);
-    redrawAsterismLines(); // 繋がっている線をカードのリサイズに追従させる
+    // リサイズ中も移動と同じ理由(2026年9月)で軽量パスにする。フル再構築は
+    // commitHandleResize()で指を離した時に1回だけ行う。
+    updateAsterismLinesForCard(el.dataset.id);
   }
 
   function commitHandleResize() {
@@ -541,6 +547,7 @@ function attachCardGestures(el) {
       card.x = parseFloat(el.dataset.x) || 0;
       card.y = parseFloat(el.dataset.y) || 0;
     }
+    redrawAsterismLines();
     scheduleAutoSave();
   }
 

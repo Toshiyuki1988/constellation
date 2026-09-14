@@ -939,6 +939,10 @@ function drawAsterismLine(elA, elB, className) {
   line.setAttribute('x2', b.x);
   line.setAttribute('y2', b.y);
   line.setAttribute('class', `asterism-line ${className}`);
+  // ドラッグ中の軽量追従(updateAsterismLinesForCard())が、フル再構築なしにこの線を
+  // 見つけて座標だけ更新できるよう、両端のカードIDを持たせておく(2026年9月追加)。
+  line.dataset.cardA = elA.dataset.id;
+  line.dataset.cardB = elB.dataset.id;
   asterismSvg.appendChild(line);
   return line;
 }
@@ -1017,6 +1021,33 @@ function redrawAsterismLines() {
       const line = drawDeletableAsterismLine(elA, elB, 'asterism-line--manual', () => removeAstrConnection(conn.id));
       line.dataset.connectionId = conn.id; // 接続直後の発光演出でこの線を後から特定するため
     });
+}
+
+/** カードのドラッグ移動・ハンドルリサイズ中(js/canvas.jsのupdateMove()/updateHandleResize())は
+ *  pointermoveのたびに高頻度で呼ばれるため、そのたびにredrawAsterismLines()のフル再構築
+ *  (SVG全要素の破棄・再生成、state.cards全体のフィルタ・ソート、カードごとのDOM探索と
+ *  getBoundingClientRect相当のレイアウト計算)を行うと、カード数・接続数が多いセッションほど
+ *  操作全体が重くなる(2026年9月、「全体的に若干重い」という実機報告を受けて特定)。
+ *  動いているカード1枚に関わる既存のline要素(drawAsterismLine()がdata-cardA/cardBを
+ *  持たせている)だけを探して座標を更新する軽量パスに切り出した。要素の生成・破棄を
+ *  行わないため、カード数・接続数に関わらずコストが一定。フル再構築は指を離した瞬間
+ *  (endMove()/commitHandleResize())にだけ1回行う。 */
+function updateAsterismLinesForCard(cardId) {
+  if (!asterismSvg) return;
+  const el = cardElById(cardId);
+  if (!el) return;
+  const center = getCardCenterFromEl(el);
+  const lines = asterismSvg.querySelectorAll(`[data-card-a="${CSS.escape(cardId)}"], [data-card-b="${CSS.escape(cardId)}"]`);
+  lines.forEach((line) => {
+    if (line.dataset.cardA === cardId) {
+      line.setAttribute('x1', center.x);
+      line.setAttribute('y1', center.y);
+    }
+    if (line.dataset.cardB === cardId) {
+      line.setAttribute('x2', center.x);
+      line.setAttribute('y2', center.y);
+    }
+  });
 }
 
 /** 接続が成立した瞬間、「ピーン」の発音に合わせてその線を一瞬明るく光らせる(CSSアニメーション任せ)。 */

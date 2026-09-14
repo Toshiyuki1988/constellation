@@ -357,6 +357,15 @@ Calendar APIの`calendar.app.created`スコープは、Google Cloud Consoleの�
 - `handleCreateSession()`・`createInfoCard()`・`createStreetviewCard()`・`createTextCard()`・`createCardFromCapture()`(x/y省略時)・`createSummaryCard()`(x/y省略時)の既定位置を、この関数に差し替えた
 - ドラッグ&ドロップ(`handleViewportDrop()`、`clientToContent(event.clientX, event.clientY)`でドロップ位置そのものを使う)や、サマリー出力・座談会カードなど「特定のカードの隣にポップアップする」設計のもの(`createSummaryCard(x, y)`に明示的な座標を渡す呼び出し)は元々正しく動いていたため変更していない
 
+## パフォーマンス: Asterism線をドラッグ中はフル再構築せず差分更新に(2026年9月)
+
+「全体的に若干重い」という実機報告を受けて調査した結果、カードのドラッグ移動(`js/canvas.js`の`updateMove()`)・ハンドルリサイズ(`updateHandleResize()`)が、**pointermoveイベントのたびに`redrawAsterismLines()`(Asterismの線を全部引き直す関数)を毎回フル実行していた**ことが主因と判明した。
+
+- `redrawAsterismLines()`は本来「線を全部引き直す」関数で、呼ばれるたびに (1) `asterismSvg.innerHTML = ''`でSVGの全line要素を破棄、(2) `state.cards`全体をフィルタ・`createdAt`でソート、(3) 隣接ペア・手動接続それぞれについて`cardElById()`(`querySelector`によるDOM探索)を呼び、(4) `drawDeletableAsterismLine()`が可視線+当たり判定線の2本のSVG要素を`document.createElementNS`で新規生成する、という一連の処理を行う。(3)(4)の中で呼ばれる`getCardCenterFromEl()`は`el.offsetWidth`/`offsetHeight`を読むため強制リフローも伴う。カード数・接続数が多いセッションでは、この一連の処理自体がそれなりに重い
+- これをドラッグ/リサイズ中、指を動かすたびに(60fps相当の頻度で)丸ごと実行していたため、カードが多いセッションほどドラッグ操作そのものがガクつく体感になっていた
+- **対応**: `drawAsterismLine()`が生成する各line要素に、両端のカードID(`dataset.cardA`/`cardB`)を持たせるようにした。新設した`updateAsterismLinesForCard(cardId)`(`js/app.js`)は、動いているカード1枚に関わる既存のline要素だけを`querySelectorAll('[data-card-a="..."], [data-card-b="..."]')`で見つけ、要素の生成・破棄を一切行わずに座標(x1/y1またはx2/y2)だけを更新する。ドラッグ中(`updateMove()`)・リサイズ中(`updateHandleResize()`)はこの軽量パスを呼び、フル再構築(`redrawAsterismLines()`)は指を離した瞬間(`endMove()`/`commitHandleResize()`)に1回だけ行うようにした
+- **教訓**: 「見た目を毎フレーム追従させたい」処理を実装する際、既存の「全部を引き直す」関数をそのまま高頻度イベント(pointermove等)から呼ぶと、データ量に比例して操作全体が重くなる典型的な落とし穴になる。高頻度に呼ぶ経路には、対象1件だけを更新する専用の軽量パスを別途用意し、フルの再構築は操作の区切り(pointerup等)まで遅らせること
+
 ## パフォーマンス: 画像・動画のBlobキャッシュにLRU上限を追加(2026年9月)
 
 「一日中PCで作業しても気づかなかったが、スマホ版が重くなっている。俯瞰でカードが多いとカクつく」という実機報告への対応。原因は2つに分けて考えている。
