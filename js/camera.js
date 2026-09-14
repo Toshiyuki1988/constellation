@@ -35,10 +35,6 @@ let camMode = 'photo';
 let camSwitching = false;
 let resolveCamera = null;
 
-let currentTiltLayer = null;
-let currentTiltPulse = null;
-let orientationEnabled = false;
-
 // ピンチズーム(2026年9月追加)。track.getCapabilities().zoomが公開されている端末では
 // 実際のセンサー/光学ズームをapplyConstraints()で制御し(camZoomNative=true)、非対応の
 // 端末(iOS Safari等、実機ではほぼこちら)ではCSSのtransform:scaleでプレビューを拡大し、
@@ -188,8 +184,6 @@ function ensureCameraDom() {
 
     photoScreen: document.getElementById('camera-screen-photo'),
     videoPhoto: document.getElementById('camera-video-photo'),
-    tiltLayerPhoto: document.getElementById('tilt-layer-photo'),
-    alignPulsePhoto: document.getElementById('align-pulse-photo'),
     focusLayerPhoto: document.getElementById('focus-layer-photo'),
     zoomBadgePhoto: document.getElementById('zoom-badge-photo'),
     shutterPhoto: document.getElementById('camera-shutter-photo'),
@@ -199,8 +193,6 @@ function ensureCameraDom() {
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
     captionHint: document.getElementById('caption-hint'),
-    tiltLayerCaption: document.getElementById('tilt-layer-caption'),
-    alignPulseCaption: document.getElementById('align-pulse-caption'),
     focusLayerCaption: document.getElementById('focus-layer-caption'),
     zoomBadgeCaption: document.getElementById('zoom-badge-caption'),
     capBtn: document.getElementById('camera-cap-btn'),
@@ -295,12 +287,10 @@ async function switchCameraMode(mode) {
       camEls.shutterPhoto.disabled = false; // 前回の撮影で無効化されたままにならないよう、モード開始時に必ずリセットする
       camEls.videoPhoto.srcObject = camStream;
       camEls.videoPhoto.play().catch(() => {});
-      enableTiltGuide(camEls.tiltLayerPhoto, camEls.alignPulsePhoto);
     } else if (mode === 'caption') {
       camEls.videoCaption.srcObject = camStream;
       camEls.videoCaption.play().catch(() => {});
       resetCaptionState();
-      enableTiltGuide(camEls.tiltLayerCaption, camEls.alignPulseCaption);
     } else if (mode === 'video') {
       camEls.videoVideo.srcObject = camStream;
       camEls.videoVideo.play().catch(() => {});
@@ -398,51 +388,10 @@ function stopCameraStream() {
 
 function teardownModeExtras() {
   teardownWaveform();
-  currentTiltLayer = null;
-  currentTiltPulse = null;
-  if (camEls) {
-    camEls.tiltLayerPhoto.classList.remove('enabled', 'aligned');
-    camEls.tiltLayerCaption.classList.remove('enabled', 'aligned');
-  }
 }
 
 function updateScreenVisibility() {
   camEls.screens.forEach((el) => el.classList.toggle('active', el.dataset.mode === camMode));
-}
-
-/* ---------------- 傾きガイド(実機のデバイス傾きセンサーを使用) ---------------- */
-
-async function enableTiltGuide(layerEl, pulseEl) {
-  currentTiltLayer = layerEl;
-  currentTiltPulse = pulseEl;
-  layerEl.classList.add('enabled');
-  if (orientationEnabled) return;
-  if (typeof DeviceOrientationEvent === 'undefined') return;
-  try {
-    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const perm = await DeviceOrientationEvent.requestPermission();
-      if (perm !== 'granted') return;
-    }
-    window.addEventListener('deviceorientation', onDeviceOrientation);
-    orientationEnabled = true;
-  } catch (err) {
-    // 非対応環境・権限拒否。傾きガイドなしで撮影自体は続行できる。
-  }
-}
-
-function onDeviceOrientation(e) {
-  if (!currentTiltLayer) return;
-  const gamma = e.gamma == null ? 0 : e.gamma; // 左右の傾き
-  const betaDev = e.beta == null ? 0 : e.beta - 90; // 縦持ち基準からの前後の傾き
-  const wobbleX = Math.max(-20, Math.min(20, gamma));
-  const wobbleY = Math.max(-20, Math.min(20, betaDev));
-  currentTiltLayer.querySelectorAll('.cam-tick').forEach((tick, i) => {
-    const dir = i % 2 === 0 ? 1 : -1;
-    tick.style.transform = `translate(${wobbleX * dir * 0.4}px, ${wobbleY * 0.5}px)`;
-  });
-  const aligned = Math.abs(gamma) < 4 && Math.abs(betaDev) < 6;
-  currentTiltLayer.classList.toggle('aligned', aligned);
-  if (currentTiltPulse) currentTiltPulse.classList.toggle('show', aligned);
 }
 
 /* ---------------- 手描きフォーカス(タップでピント) ---------------- */
@@ -934,8 +883,6 @@ function resetCaptionState() {
   camEls.selectActions.classList.remove('show');
   camEls.selectRunBtn.disabled = false;
   camEls.selectRetakeBtn.disabled = false;
-  camEls.tiltLayerCaption.style.visibility = '';
-  camEls.alignPulseCaption.style.visibility = '';
 }
 
 function camDebugLog(msg) {
@@ -967,8 +914,6 @@ function enterSelectionMode(canvas) {
   camEls.selectRect.hidden = true;
   camEls.selectActions.classList.add('show');
   camEls.capBtn.hidden = true;
-  camEls.tiltLayerCaption.style.visibility = 'hidden'; // 静止画には傾きガイド/正対インジケーターの意味が無い
-  camEls.alignPulseCaption.style.visibility = 'hidden';
   camEls.captionHint.textContent = '文字の範囲を指でなぞって選択(そのままなら全体を読み取ります)';
   updateSelectRunLabel();
 }
@@ -1346,8 +1291,6 @@ function teardownCamera() {
   resolveCamera = null;
   stopCameraStream();
   teardownWaveform();
-  currentTiltLayer = null;
-  currentTiltPulse = null;
   clearTimeout(camOrientationFadeTimer);
   camOrientationFadeTimer = null;
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });
