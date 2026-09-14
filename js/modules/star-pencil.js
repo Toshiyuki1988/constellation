@@ -183,6 +183,56 @@
       /* 描画中(未確定)のプレビュー線を乗せるSVG。キャンバス内容と同じ座標系(canvas-content
          の子)に置き、パン/ズームに自動追従させる。 */
       .sp-preview-svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+
+      .sp-layers-open-btn { width: 100%; margin-top: 8px; text-align: left; }
+
+      .sp-layers-overlay {
+        position: fixed; inset: 0; z-index: 165;
+        display: flex; align-items: center; justify-content: center;
+        padding: clamp(10px, 3vw, 26px);
+        background: rgba(2, 4, 7, 0.72);
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        opacity: 0; pointer-events: none; transition: opacity 0.2s ease-out;
+      }
+      .sp-layers-overlay.open { opacity: 1; pointer-events: auto; }
+      .sp-layers-panel {
+        width: 100%; max-width: 460px; max-height: 78vh; margin: auto; display: flex; flex-direction: column;
+        border: 1px solid rgba(37, 99, 235, 0.4); border-radius: 14px; background: rgba(14, 20, 30, 0.92);
+        box-shadow: 0 0 0 1px rgba(37,99,235,0.1), 0 40px 90px -40px rgba(0, 0, 0, 0.85);
+        color: #eef3f7; overflow: hidden;
+        transform: scale(0.96) translateY(6px); transition: transform 0.2s ease-out;
+      }
+      .sp-layers-overlay.open .sp-layers-panel { transform: scale(1) translateY(0); }
+      .sp-layers-head {
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+        padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.12); cursor: grab; flex-shrink: 0;
+      }
+      .sp-layers-title { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: 0.05em; margin: 0; color: #eef3f7; }
+      .sp-layers-title span { font-family: var(--sans); font-weight: 400; font-size: 11px; color: #8a97a6; margin-left: 8px; }
+      .sp-layers-subtitle { font-family: var(--mono); font-size: 9.5px; color: #8a97a6; letter-spacing: 0.03em; margin: 4px 0 0; }
+      .sp-layers-close {
+        width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.03);
+        color: #8a97a6; font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center; flex-shrink: 0;
+      }
+      .sp-layers-close:hover { color: #eef3f7; }
+      .sp-layers-list { overflow-y: auto; padding: 10px 14px 16px; }
+      .sp-layers-empty { font-family: var(--mono); font-size: 11px; color: #8a97a6; letter-spacing: 0.02em; line-height: 1.7; padding: 20px 20px 26px; }
+      .sp-layer-row {
+        display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; margin-bottom: 6px;
+        border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; background: rgba(255,255,255,0.015);
+      }
+      .sp-layer-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: contain; flex-shrink: 0; background: #fff; }
+      .sp-layer-thumb--empty { display: block; background: rgba(255,255,255,0.06); }
+      .sp-layer-info { min-width: 0; flex: 1; }
+      .sp-layer-title { display: block; font-family: var(--sans); font-size: 12.5px; color: #eef3f7; }
+      .sp-layer-sub { display: block; font-family: var(--mono); font-size: 9px; color: #8a97a6; margin-top: 2px; }
+      .sp-layer-jump, .sp-layer-delete {
+        width: 30px; height: 30px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.03); color: #eef3f7; font-size: 13px; cursor: pointer;
+        display: grid; place-items: center; flex-shrink: 0;
+      }
+      .sp-layer-jump:hover { border-color: #2563eb; background: rgba(37,99,235,0.15); }
+      .sp-layer-delete:hover { border-color: #e11d48; background: rgba(225,29,72,0.15); }
     `;
     document.head.appendChild(style);
   }
@@ -190,6 +240,7 @@
   /* ==================== DOM構築 ==================== */
 
   function buildDom() {
+    spEls = {};
     const palette = document.createElement('div');
     palette.className = 'sp-palette';
     palette.innerHTML = `
@@ -205,6 +256,7 @@
         <button type="button" class="sp-btn" id="sp-clear-btn">クリア</button>
         <button type="button" class="sp-btn sp-btn--done" id="sp-done-btn">✓ 完成</button>
       </div>
+      <button type="button" class="sp-btn sp-layers-open-btn" id="sp-layers-open-btn">📋 レイヤー一覧</button>
       <p class="sp-hint"><b>完成</b>を押すまで、描いた線は全部同じ1枚のイマジナリーカードにまとまります。</p>
     `;
     document.body.appendChild(palette);
@@ -218,17 +270,18 @@
     previewSvg.setAttribute('class', 'sp-preview-svg');
     els.content.appendChild(previewSvg);
 
-    spEls = {
-      palette,
-      head: palette.querySelector('.sp-palette-head'),
-      closeBtn: palette.querySelector('.sp-close'),
-      colorsEl: palette.querySelector('.sp-colors'),
-      shapesEl: palette.querySelector('.sp-shapes'),
-      clearBtn: palette.querySelector('#sp-clear-btn'),
-      doneBtn: palette.querySelector('#sp-done-btn'),
-      modeBadge,
-      previewSvg,
-    };
+    buildLayerViewerDom();
+
+    spEls.palette = palette;
+    spEls.head = palette.querySelector('.sp-palette-head');
+    spEls.closeBtn = palette.querySelector('.sp-close');
+    spEls.colorsEl = palette.querySelector('.sp-colors');
+    spEls.shapesEl = palette.querySelector('.sp-shapes');
+    spEls.clearBtn = palette.querySelector('#sp-clear-btn');
+    spEls.doneBtn = palette.querySelector('#sp-done-btn');
+    spEls.layersOpenBtn = palette.querySelector('#sp-layers-open-btn');
+    spEls.modeBadge = modeBadge;
+    spEls.previewSvg = previewSvg;
 
     COLORS.forEach((c) => {
       const sw = document.createElement('div');
@@ -264,6 +317,7 @@
     spEls.closeBtn.addEventListener('click', closeStarPencil);
     spEls.clearBtn.addEventListener('click', clearCurrentDrawing);
     spEls.doneBtn.addEventListener('click', commitDrawing);
+    spEls.layersOpenBtn.addEventListener('click', openLayerViewer);
 
     // スワイプで左右に閉じる(モジュール共通デザイン言語)。パレット上部の掴みバーから。
     let swipeStartX = null, swipeStartY = null, swipeStartT = 0;
@@ -279,8 +333,124 @@
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && spActive) closeStarPencil();
+      if (e.key === 'Escape') {
+        if (spEls.layersOverlay.classList.contains('open')) { closeLayerViewer(); return; }
+        if (spActive) closeStarPencil();
+      }
     });
+  }
+
+  /* ==================== レイヤービューア(一覧・削除・ジャンプ) ====================
+   * 「線は見えるのに長押しできず移動・削除できない」実機報告(高さ破損の既存データが
+   * 復旧しきれないケースへの保険、および単純に「イマジナリーが増えて画面が探しにくい」
+   * ケース双方への対応)を受け、キャンバス上を直接操作しなくてもイマジナリーカードを
+   * 一覧から削除・ジャンプできる入口を追加した(2026年9月)。Astrometry Scopeの
+   * Archive一覧と同じ「別階層のオーバーレイ」パターンを踏襲している。 */
+
+  function buildLayerViewerDom() {
+    const overlay = document.createElement('div');
+    overlay.className = 'sp-layers-overlay';
+    overlay.innerHTML = `
+      <div class="sp-layers-panel">
+        <div class="sp-layers-head">
+          <div>
+            <h3 class="sp-layers-title">LAYERS<span>イマジナリーカード一覧</span></h3>
+            <p class="sp-layers-subtitle">—</p>
+          </div>
+          <button type="button" class="sp-layers-close" aria-label="閉じる">✕</button>
+        </div>
+        <div class="sp-layers-list"></div>
+        <p class="sp-layers-empty" hidden>このセッションにイマジナリーカードはまだありません。</p>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    spEls.layersOverlay = overlay;
+    spEls.layersHead = overlay.querySelector('.sp-layers-head');
+    spEls.layersSubtitle = overlay.querySelector('.sp-layers-subtitle');
+    spEls.layersList = overlay.querySelector('.sp-layers-list');
+    spEls.layersEmpty = overlay.querySelector('.sp-layers-empty');
+    spEls.layersCloseBtn = overlay.querySelector('.sp-layers-close');
+
+    overlay.addEventListener('pointerdown', (e) => e.stopPropagation());
+    spEls.layersCloseBtn.addEventListener('click', closeLayerViewer);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeLayerViewer(); });
+
+    let swipeStartX = null, swipeStartY = null, swipeStartT = 0;
+    spEls.layersHead.addEventListener('pointerdown', (e) => {
+      swipeStartX = e.clientX; swipeStartY = e.clientY; swipeStartT = performance.now();
+    });
+    overlay.addEventListener('pointerup', (e) => {
+      if (swipeStartX === null) return;
+      const dx = e.clientX - swipeStartX, dy = e.clientY - swipeStartY, dt = performance.now() - swipeStartT;
+      swipeStartX = null;
+      if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 500) closeLayerViewer();
+    });
+  }
+
+  function formatLayerTimeLabel(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  function renderLayerList() {
+    const currentId = activeSessionId();
+    const cards = state.cards.filter((c) => c.mediaType === 'imaginary' && c.sessionId === currentId);
+    spEls.layersList.innerHTML = '';
+    spEls.layersEmpty.hidden = cards.length > 0;
+    spEls.layersSubtitle.textContent = `このセッション ・ 全${cards.length}件`;
+
+    cards.slice().reverse().forEach((card) => {
+      const row = document.createElement('div');
+      row.className = 'sp-layer-row';
+      const strokeCount = Array.isArray(card.strokes) ? card.strokes.length : 0;
+      const thumbHtml = card.thumbDataUrl
+        ? `<img class="sp-layer-thumb" src="${card.thumbDataUrl}" alt="">`
+        : '<span class="sp-layer-thumb sp-layer-thumb--empty"></span>';
+      row.innerHTML = (
+        thumbHtml +
+        '<span class="sp-layer-info">' +
+        `<span class="sp-layer-title">${formatLayerTimeLabel(card.createdAt)}</span>` +
+        `<span class="sp-layer-sub">${strokeCount}本のストローク ・ ${Math.round(card.width)}×${Math.round(card.height)}px</span>` +
+        '</span>' +
+        '<button type="button" class="sp-layer-jump" title="ここへ移動">📍</button>' +
+        '<button type="button" class="sp-layer-delete" title="削除">🗑</button>'
+      );
+      row.querySelector('.sp-layer-jump').addEventListener('click', (e) => {
+        e.stopPropagation();
+        jumpToImaginaryCard(card);
+      });
+      row.querySelector('.sp-layer-delete').addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteImaginaryCardFromViewer(card);
+      });
+      spEls.layersList.appendChild(row);
+    });
+  }
+
+  function jumpToImaginaryCard(card) {
+    const rect = viewportEl.getBoundingClientRect();
+    const centerX = card.x + card.width / 2;
+    const centerY = card.y + card.height / 2;
+    viewportState.x = rect.width / 2 - centerX * viewportState.scale;
+    viewportState.y = rect.height / 2 - centerY * viewportState.scale;
+    applyViewportTransform();
+  }
+
+  function deleteImaginaryCardFromViewer(card) {
+    const el = cardElById(card.id) || document.createElement('div'); // DOM上に見当たらなくても安全に削除できるよう保険
+    deleteCard(card, el);
+    renderLayerList();
+  }
+
+  function openLayerViewer() {
+    renderLayerList();
+    spEls.layersOverlay.classList.add('open');
+  }
+
+  function closeLayerViewer() {
+    if (spEls) spEls.layersOverlay.classList.remove('open');
   }
 
   /* ==================== 起動/終了 ==================== */
