@@ -249,6 +249,20 @@
   color: var(--eclipse-paper);
 }
 
+/* プリセット名称ラベル(2026年9月追加): 比率チップの選択チップ行よりさらに上に、選んだ
+   規格の名称(人物型/風景型/海景型/正方形/円形)を一瞬だけ出す(js/camera.jsのshowPresetLabel()、
+   1.4秒で自動的に消える)。既定は非表示(opacity:0、pointer-events:none)。 */
+.cam-eclipse-preset-label {
+  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+  margin-bottom: 42px; /* 比率チップ行の上辺(10+26)+このラベル自身の余白6px */
+  font-family: inherit; font-size: 10.5px; letter-spacing: 0.06em; white-space: nowrap;
+  color: var(--eclipse-paper); background: rgba(0, 0, 0, 0.5);
+  padding: 3px 10px; border-radius: 10px;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.cam-eclipse-preset-label.visible { opacity: 1; }
+
 /* 比率プリセット(F/P/M/S/円形)の選択チップ。矩形の上辺の外側に並べる(2026年9月追加)。
    F=人物型・P=風景型・M=海景型・S=正方形という、油彩キャンバスの号数で使われる4形状+円形。 */
 .cam-eclipse-ratio-row {
@@ -384,6 +398,26 @@
 .cam-eclipse-guide.appearing { animation: camEclipseAppear 220ms cubic-bezier(0.22, 1.4, 0.36, 1); }
 @media (prefers-reduced-motion: reduce) {
   .cam-eclipse-guide.appearing { animation: none; }
+}
+
+/* 隠し機能: 円形ガイドを2本指で長押しするとトーチが点灯する(2026年9月追加、ユーザー指定)。
+   .heating=長押し中(js/camera.jsのTORCH_HOLD_MS=2秒かけて発光が強まっていく「熱する」演出)、
+   .torch-on=実際に点灯した後の定常状態(js/camera.jsのsetTorch()参照)。誤操作防止のため
+   円形プリセット選択中のみ発火する(js/camera.jsのwireEclipseGuide()内トーチ関連コード参照)。 */
+.cam-eclipse-guide.heating {
+  box-shadow: 0 0 0 2px rgba(255, 143, 94, 0.5), 0 0 22px 6px rgba(255, 100, 40, 0.55);
+  transition: box-shadow 2s ease;
+}
+.cam-eclipse-guide.torch-on {
+  box-shadow: 0 0 0 2px var(--eclipse-accent), 0 0 26px 9px rgba(255, 100, 40, 0.75);
+  animation: eclipseTorchPulse 2.2s ease-in-out infinite;
+}
+@keyframes eclipseTorchPulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--eclipse-accent), 0 0 26px 9px rgba(255, 100, 40, 0.75); }
+  50% { box-shadow: 0 0 0 2px var(--eclipse-accent), 0 0 34px 13px rgba(255, 130, 60, 0.9); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-eclipse-guide.torch-on { animation: none; }
 }
 
 /* ---------- カメラのハードウェア制御: 露出補正・ホワイトバランス・トーチ(2026年9月追加) ----------

@@ -49,11 +49,16 @@ const CAM_ZOOM_DIGITAL_MAX = 4;
 // ズームと同様、対応状況は端末・ブラウザ次第(特にiOS Safariは対応が薄いと見られる)。
 // スライダーではなく「タップのたびにプリセットを1つずつ巡回する」ボタン方式にしている。
 // **トーチも同時期に一度実装したが、「誤って点灯させたままの意図しないフラッシュ撮影を
-// 避けたい」というユーザー判断により同月中に撤去した。**
+// 避けたい」というユーザー判断により同月中に撤去した。その後さらに同月、「誤操作の心配が
+// 無いなら復活させたい」というユーザー要望を受け、常設ボタンではなく円形Eclipseガイドを
+// 2本指で長押しした時だけ発動する隠しジェスチャーとして再実装した(下記wireEclipseGuide()
+// 内のトーチ関連コード参照)。**
 let camExposurePresets = null; // [{value,label}, ...] | null(非対応)
 let camExposureIndex = 0;
 let camWbPresets = null; // [{mode,temp?,label}, ...] | null(非対応)
 let camWbIndex = 0;
+let camTorchSupported = false; // caps.torch===trueの端末だけtrue(updateCamControlAvailability()参照)
+let camTorchOn = false; // 現在トーチが点灯しているか(setTorch()参照)
 
 // 手ブレ検知オートシャッター(2026年9月追加、トーチ撤去の代わり)。DeviceMotionで
 // 「構えて静止した瞬間」を検知して自動シャッターを切る。センサー非対応・権限拒否・
@@ -74,11 +79,11 @@ const AUTO_SHUTTER_MOTION_WATCHDOG_MS = 1200; // この間に1件もdevicemotion
 // 「人物型・風景型・海景型・正方形」の4形状にちなむ近似比率(号数によって微妙に違うため、
 // 構図の目安として代表的な値に丸めている)。ratioはすべて「長辺/短辺」。
 const CAM_ECLIPSE_RATIO_PRESETS = [
-  { key: 'F', ratio: 1.29, shape: 'rect' },
-  { key: 'P', ratio: 1.50, shape: 'rect' },
-  { key: 'M', ratio: 1.68, shape: 'rect' },
-  { key: 'S', ratio: 1.00, shape: 'rect' },
-  { key: 'C', ratio: 1.00, shape: 'circle' },
+  { key: 'F', ratio: 1.29, shape: 'rect', label: '人物型' },
+  { key: 'P', ratio: 1.50, shape: 'rect', label: '風景型' },
+  { key: 'M', ratio: 1.68, shape: 'rect', label: '海景型' },
+  { key: 'S', ratio: 1.00, shape: 'rect', label: '正方形' },
+  { key: 'C', ratio: 1.00, shape: 'circle', label: '円形' },
 ];
 
 let camMediaRecorder = null;
@@ -299,7 +304,10 @@ function wireCameraEvents() {
   wireCameraControls();
   wireAutoShutterButton();
 
-  wirePinchZoom(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
+  // 写真モードのピンチズームは2026年9月に撤去した(誤タップ防止のユーザー方針)。円形Eclipse
+  // ガイドの2本指長押しジェスチャー(トーチ点灯)と指の本数が競合するため、常時表示のズーム
+  // スライダー(wireCamZoomSlider())が既にあることも踏まえて外した。キャプション/動画モードは
+  // Eclipseを持たないため引き続きピンチズームを使える。
   wirePinchZoom(camEls.captionScreen, camEls.videoCaption, camEls.zoomBadgeCaption);
   wirePinchZoom(camEls.videoScreen, camEls.videoVideo, camEls.zoomBadgeVideo);
 
@@ -488,6 +496,8 @@ function resetCamControls() {
   camExposureIndex = 0;
   camWbPresets = null;
   camWbIndex = 0;
+  camTorchSupported = false;
+  camTorchOn = false; // 前のトラックが既に破棄されているはずなので、applyConstraints()は呼ばず状態だけ戻す
   if (!camEls) return;
   [camEls.exposureBtn, camEls.wbBtn].forEach((btn) => {
     if (btn) { btn.hidden = true; btn.classList.remove('active'); }
@@ -514,11 +524,31 @@ function updateCamControlAvailability(caps) {
     if (camWbPresets) camEls.wbLabel.textContent = camWbPresets[0].label;
   }
 
-  camDebugLog(`カメラ制御ボタン: 露出=${camExposurePresets ? 'あり' : 'なし'} / WB=${camWbPresets ? 'あり' : 'なし'}`);
+  camTorchSupported = caps.torch === true; // 常設ボタンは持たない(隠しジェスチャー専用)ため、ここでは対応可否を控えるだけ
+
+  camDebugLog(`カメラ制御ボタン: 露出=${camExposurePresets ? 'あり' : 'なし'} / WB=${camWbPresets ? 'あり' : 'なし'} / トーチ=${camTorchSupported ? 'あり' : 'なし'}`);
 }
 
 function currentVideoTrack() {
   return camStream && camStream.getVideoTracks()[0];
+}
+
+/** トーチ(フラッシュ)を点灯/消灯する。円形Eclipseガイドの隠しジェスチャー専用
+ *  (js/camera.jsのwireEclipseGuide()内トーチ関連コード参照)。非対応端末・トラック無しの
+ *  場合はONにはできない(OFFは常に安全側として受け付ける)。 */
+async function setTorch(on) {
+  if (on && !camTorchSupported) return false;
+  const track = currentVideoTrack();
+  if (!track) { camTorchOn = false; return false; }
+  try {
+    await track.applyConstraints({ advanced: [{ torch: on }] });
+    camTorchOn = on;
+    return true;
+  } catch (err) {
+    camDebugLog(`トーチapplyConstraints失敗: ${err && err.message ? err.message : err}`);
+    camTorchOn = false;
+    return false;
+  }
 }
 
 async function cycleExposure() {
@@ -690,6 +720,10 @@ function stopCameraStream() {
 function teardownModeExtras() {
   teardownWaveform();
   disarmAutoShutter(); // モードを抜けたら監視・タイマーを必ず止める(devicemotionリスナーの残留防止)
+  // トーチを点けたままモードを切り替える/カメラを閉じる事故を防ぐ(誤って点灯させたままの
+  // フラッシュ撮影を避けたいというユーザー方針、本ファイル上部の既存の注記を参照)。
+  if (camTorchOn) setTorch(false);
+  if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
 }
 
 function updateScreenVisibility() {
@@ -828,7 +862,7 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   const HANDLE_OVERHANG = 22; // .cam-eclipse-handle: 44px角の当たり判定の半分
   const SIZE_SLIDER_RIGHT_OVERHANG = 42; // .cam-eclipse-slider: margin-left 16 + width 26
   const SLIDER_HALF_HEIGHT = 70; // .cam-eclipse-slider: height 140の半分(ガイドの縦中心基準)
-  const RATIO_ROW_TOP_OVERHANG = 36; // チップ高さ26 + margin-bottom 10
+  const RATIO_ROW_TOP_OVERHANG = 62; // プリセット名称ラベル(margin-bottom42+高さ約20)。チップ行自体(26+10)は内側に収まる
   const SYM_TOGGLE_BOTTOM_OVERHANG = 32; // margin-top 10 + height 22
   const SYM_TOGGLE_HALF_WIDTH = 40; // 対称/非対称トグルの想定最大幅の半分(テキスト量に余裕を見た概算)
   const SIDE_BTNS_LEFT_OVERHANG = 38; // .cam-eclipse-side-btns: ボタン幅28 + margin-right 10
@@ -846,6 +880,17 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   const sizeTrackEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-eclipse-slider-track');
   const rotateBtn = eclipseEl.querySelector('.cam-eclipse-rotate-btn');
   const recenterBtn = eclipseEl.querySelector('.cam-eclipse-recenter-btn');
+  const presetLabelEl = eclipseEl.querySelector('.cam-eclipse-preset-label');
+  let presetLabelHideTimer = null;
+
+  /** 比率プリセットの名称(人物型・風景型など)を一瞬だけガイド上部に出す(2026年9月追加)。 */
+  function showPresetLabel(text) {
+    if (!presetLabelEl) return;
+    presetLabelEl.textContent = text;
+    presetLabelEl.classList.add('visible');
+    clearTimeout(presetLabelHideTimer);
+    presetLabelHideTimer = setTimeout(() => presetLabelEl.classList.remove('visible'), 1400);
+  }
 
   function currentRatio() { return CAM_ECLIPSE_RATIO_PRESETS[ratioIndex].ratio; }
   function currentShape() { return CAM_ECLIPSE_RATIO_PRESETS[ratioIndex].shape; }
@@ -935,6 +980,7 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   function showDefault() {
     ratioIndex = 0;
     symmetric = false;
+    turnOffTorchIfOn(); // 前回開いた時に点けっぱなしのままになっていないよう、毎回念のため
     applyShapeAndChips();
     if (symmetryBtn) { symmetryBtn.classList.remove('active'); symmetryBtn.textContent = '非対称'; }
     const bounds = sizeBoundsForRatio(currentRatio(), false); // 毎回、横長(非回転)の既定姿勢に戻す
@@ -947,21 +993,26 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     visible = true;
     if (toggleBtn) toggleBtn.classList.add('active');
     syncSizeSliderThumb();
+    playEclipseOpen();
   }
   function hide() {
     eclipseEl.classList.remove('visible');
     visible = false;
     if (toggleBtn) toggleBtn.classList.remove('active');
+    turnOffTorchIfOn(); // ガイドを閉じたまま点灯し続ける事故を防ぐ
   }
   function toggle() {
     if (visible) hide(); else showDefault();
   }
 
   /** 比率プリセットを切り替える。今の中心・今の長辺の長さ・今の向き(縦長/横長)をできるだけ
-   *  保ったまま、新しい比率に合わせて短辺だけ引き直す。 */
+   *  保ったまま、新しい比率に合わせて短辺だけ引き直す。プリセットを変える操作そのものが
+   *  トーチの安全弁を兼ねる(下記トーチ関連コードの説明を参照、ユーザー指定)。 */
   function applyPreset(index) {
     ratioIndex = index;
+    turnOffTorchIfOn();
     applyShapeAndChips();
+    showPresetLabel(CAM_ECLIPSE_RATIO_PRESETS[index].label);
     const rect = {
       x: parseFloat(eclipseEl.style.left) || 0, y: parseFloat(eclipseEl.style.top) || 0,
       w: parseFloat(eclipseEl.style.width) || 200, h: parseFloat(eclipseEl.style.height) || 200,
@@ -1158,6 +1209,74 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     if (wasHandleDrag) syncSizeSliderThumb(); // 四隅ハンドルでの自由リサイズ後、サイズスライダーのつまみを実際の大きさへ合わせ直す
   });
   document.addEventListener('pointercancel', () => { dragMode = null; dragStart = null; });
+
+  /* ---- 隠し機能: 円形ガイドを2本指で長押しするとトーチが点灯する(2026年9月追加、ユーザー指定) ----
+   * 「誤って点けっぱなしにする心配」から一度撤去したトーチを、確実な誤操作防止つきで復活させた
+   * もの。常設ボタンは持たず、**円形プリセット(currentShape()==='circle')を選んでいる間だけ**、
+   * ガイドの円の内側を2本の指でTORCH_HOLD_MS(2秒)押さえ続けると発動する。長押し中はガイドが
+   * じわじわオレンジに発光し(.heatingクラス、「熱する」演出)、しきい値に達するとトーチが
+   * トグルし、点灯中は.torch-onクラスで発光が定常化する。指を離す/2本以外になる/長辺プリセット
+   * を切り替えるといった操作でいつでも安全にキャンセル・消灯できる(applyPreset()内の
+   * turnOffTorchIfOn()呼び出しを参照)。 */
+  const TORCH_HOLD_MS = 2000;
+  const torchPointerIds = new Set();
+  let torchHoldTimer = null;
+
+  function cancelTorchHold() {
+    clearTimeout(torchHoldTimer);
+    torchHoldTimer = null;
+    eclipseEl.classList.remove('heating');
+  }
+
+  /** ガイド表示の切り替え・プリセット変更・カメラのモード切替など、安全のためトーチを
+   *  必ず消すべきタイミングで呼ぶ(showDefault()/hide()/applyPreset()から呼ぶ)。 */
+  function turnOffTorchIfOn() {
+    torchPointerIds.clear();
+    cancelTorchHold();
+    eclipseEl.classList.remove('torch-on');
+    if (camTorchOn) setTorch(false);
+  }
+
+  /** 指の座標(clientX/Y)がガイドの円の内側にあるか(矩形の内接円で判定)。 */
+  function isPointInEclipseCircle(clientX, clientY) {
+    const r = eclipseEl.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const radius = Math.min(r.width, r.height) / 2;
+    const dx = clientX - cx, dy = clientY - cy;
+    return dx * dx + dy * dy <= radius * radius;
+  }
+
+  // キャプチャフェーズで先取りする: ガイド本体(.cam-eclipse-body)の既存のドラッグ開始処理
+  // より先に、2本目の指が乗った瞬間を検知して進行中の移動ドラッグを打ち切り、ガイドの位置を
+  // その場に固定する(そうしないと2本目の指のpointerdownがbeginDrag('move')を再度呼び、
+  // ドラッグが暴れてしまう)。
+  eclipseEl.addEventListener('pointerdown', (e) => {
+    if (!visible || currentShape() !== 'circle') return;
+    if (!e.target.closest('.cam-eclipse-body')) return; // 回転/中央リセット等の他ボタンは対象外
+    if (!isPointInEclipseCircle(e.clientX, e.clientY)) return;
+    torchPointerIds.add(e.pointerId);
+    if (torchPointerIds.size === 2) {
+      dragMode = null; // 1本目の指で始まっていたかもしれない移動ドラッグをここで打ち切る
+      dragStart = null;
+      e.stopPropagation(); // 2本目の指ぶんのbeginDrag('move')が別途走らないようにする
+      eclipseEl.classList.add('heating');
+      torchHoldTimer = setTimeout(() => {
+        torchHoldTimer = null;
+        eclipseEl.classList.remove('heating');
+        setTorch(!camTorchOn).then(() => {
+          eclipseEl.classList.toggle('torch-on', camTorchOn);
+        });
+      }, TORCH_HOLD_MS);
+    } else if (torchPointerIds.size > 2) {
+      cancelTorchHold(); // 3本目以降が乗ったら誤操作とみなして取り消す
+    }
+  }, true);
+  function onTorchPointerEnd(e) {
+    torchPointerIds.delete(e.pointerId);
+    if (torchPointerIds.size < 2) cancelTorchHold();
+  }
+  eclipseEl.addEventListener('pointerup', onTorchPointerEnd, true);
+  eclipseEl.addEventListener('pointercancel', onTorchPointerEnd, true);
 
   // モードを抜けて戻ってきた時など、毎回ゼロから位置合わせできるよう非表示にリセットする。
   screenEl.__resetEclipseGuide = hide;
@@ -1885,7 +2004,9 @@ function closeCamera() {
 
 function teardownCamera() {
   resolveCamera = null;
-  stopCameraStream();
+  stopCameraStream(); // track.stop()がハードウェアを解放するため、トーチも自動的に消える
+  camTorchOn = false;
+  if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
   teardownWaveform();
   disarmAutoShutter();
   clearTimeout(camOrientationFadeTimer);
@@ -1953,4 +2074,15 @@ function playRecStop() {
   const now = ctx.currentTime;
   camTone(ctx, 660, now, 0.14, 'sine', 0.13);
   camTone(ctx, 440, now + 0.09, 0.2, 'sine', 0.13);
+}
+
+/** Eclipseガイド起動:「シュルルン↑」。2音の上昇チェイスに、それぞれわずかにデチューンした
+ *  ペアを重ねてコロナのようなシマーを出す(2026年9月追加、wireEclipseGuide()のshowDefault()から呼ぶ)。 */
+function playEclipseOpen() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const now = ctx.currentTime;
+  camTone(ctx, 523.25, now, 0.16, 'sine', 0.11);
+  camTone(ctx, 526.5, now, 0.16, 'sine', 0.07);
+  camTone(ctx, 784, now + 0.09, 0.22, 'sine', 0.12);
+  camTone(ctx, 790, now + 0.09, 0.22, 'sine', 0.07);
 }

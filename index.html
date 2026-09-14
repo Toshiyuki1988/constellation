@@ -204,6 +204,10 @@
         <span class="cam-control-label" id="cam-auto-shutter-label" hidden>OFF</span>
       </div>
       <div class="cam-eclipse-guide" id="eclipse-guide-photo">
+        <!-- プリセット名称ラベル(2026年9月追加): 比率チップをタップした直後、選んだ規格の
+             名称(人物型/風景型/海景型/正方形/円形)を一瞬だけガイド上部に出す
+             (js/camera.jsのshowPresetLabel()参照)。既定は非表示(opacity:0)。 -->
+        <div class="cam-eclipse-preset-label"></div>
         <div class="cam-eclipse-ratio-row" id="eclipse-ratio-row-photo">
           <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="F" title="F(人物型)">F</button>
           <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="P" title="P(風景型)">P</button>
