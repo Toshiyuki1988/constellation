@@ -146,6 +146,8 @@ function initCanvas(viewportElArg, contentElArg) {
     // Flight Engineer起動中は背景ドラッグが矩形選択に置き換わっているため、
     // 空振りの矩形選択(=タップ)を俯瞰ズームのダブルタップとして誤検知しないようにする。
     if (window.isFlightEngineerActive && window.isFlightEngineerActive()) return;
+    // Star Pencil起動中は背景ドラッグ/タップがドローに置き換わっているため、同じ理由で無視する。
+    if (window.isStarPencilActive && window.isStarPencilActive()) return;
     if (event.target !== viewportEl) return;
     if (!viewportPressStart) return;
     const moved = Math.hypot(event.clientX - viewportPressStart.x, event.clientY - viewportPressStart.y);
@@ -439,6 +441,10 @@ function attachCardGestures(el) {
     // Flight Engineerモジュール起動中(Shiftキーによる一時解除を除く)は、カード個別の
     // 長押し編集ガイド/移動を止め、矩形選択(js/modules/flight-engineer.js)に譲る。
     if (window.isFlightEngineerActive && window.isFlightEngineerActive() && !event.shiftKey) return;
+    // Star Pencilモジュール起動中は、カード個別の長押し編集ガイド/移動を止め、
+    // ドロー(js/modules/star-pencil.js)に専念させる(Shiftキーによる例外は無い。
+    // Shiftはこのモジュール中「パン」に割り当てているため)。
+    if (window.isStarPencilActive && window.isStarPencilActive()) return;
     if (pointerId !== null) return; // 既に1点を追跡中なら追加のポインタは無視
 
     // iOSなどはAudioContextの生成/再開がユーザー操作に直接紐づく同期呼び出しでないと

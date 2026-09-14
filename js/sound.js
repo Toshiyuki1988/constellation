@@ -27,6 +27,8 @@
 //   playConstellationMoveCardSound() Crews Constellationでカードのドラッグを始めた時の「ヒュウ…」
 //   playScopeScanSound()       Astrometry Scopeで走査(Gemini呼び出し)を開始した時の「ヒュイィィ…」
 //   playScopeCompleteSound()   Astrometry Scopeで走査結果が揃った時の3音の上昇チャイム
+//   playStarPencilBeginSound() Star Pencilでペン先を置いた(ストローク開始)瞬間の「キラッ」
+//   playStarPencilDrawTickSound() Star Pencilで線を引いている間の「ヒュウ」(呼ぶ間隔は呼び出し側が距離で間引いて決める)
 
 let soundCtx = null;
 function soundAudioCtx() {
@@ -679,4 +681,59 @@ function playScopeCompleteSound() {
     osc.start(t0);
     osc.stop(t0 + 0.42);
   });
+}
+
+/** Star Pencil: ペン先をキャンバスに置いた(ストローク開始)瞬間の「キラッ」。
+ *  高い倍音2つを一瞬だけ重ねる、playConstellationAddCardSound()に近い質感だが
+ *  より短く軽い(1ストロークごと、連続で描くたびに何度も鳴るため)。 */
+function playStarPencilBeginSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 1200;
+  const gain0 = c.createGain(); gain0.gain.value = 0.8;
+  highpass.connect(gain0).connect(c.destination);
+
+  [3200, 4800].forEach((freq, i) => {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const t0 = now + i * 0.015;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.1, t0 + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.1);
+    osc.connect(gain).connect(highpass);
+    osc.start(t0);
+    osc.stop(t0 + 0.11);
+  });
+}
+
+/** Star Pencil: 線を引いている間の「ヒュウ」(高いピッチからスッと下降する短いスイープ)。
+ *  カード移動音(playCardMoveTickSound)と同じ考え方で、呼び出し側が移動距離に応じて
+ *  間引いて呼ぶ想定(1ストロークの間ずっと鳴らすと展覧会場では耳障りかつ処理負荷も
+ *  増えるため)。 */
+function playStarPencilDrawTickSound() {
+  const c = soundAudioCtx();
+  const now = c.currentTime;
+
+  const highpass = c.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 800;
+  const gain0 = c.createGain(); gain0.gain.value = 0.7;
+  highpass.connect(gain0).connect(c.destination);
+
+  const sweep = c.createOscillator();
+  const sweepGain = c.createGain();
+  sweep.type = 'sine';
+  sweep.frequency.setValueAtTime(2800, now);
+  sweep.frequency.exponentialRampToValueAtTime(1400, now + 0.09);
+  sweepGain.gain.setValueAtTime(0.0001, now);
+  sweepGain.gain.exponentialRampToValueAtTime(0.07, now + 0.012);
+  sweepGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+  sweep.connect(sweepGain).connect(highpass);
+  sweep.start(now);
+  sweep.stop(now + 0.12);
 }

@@ -1092,7 +1092,10 @@ function removeAstrConnection(connectionId) {
 const CAPTIONABLE_MEDIA_TYPES = ['image', 'video'];
 // コメントカード(2026年9月追加)の「Comment」ヘックスを出すカード種別。info/session/summary等の
 // 「メタ」なカードは対象外にし、実際に記録・作品の内容を持つカードだけに絞っている。
-const COMMENTABLE_MEDIA_TYPES = ['image', 'video', 'audio', 'text'];
+// 'imaginary'(Star Pencilのイマジナリーカード、2026年9月追加)はfetchPersonaCommentOnCard()
+// 側でmediaType==='imaginary'の分岐によりthumbDataUrl(描いた線のラスタライズ)を画像として
+// 一緒に渡す。「絵を見せて一言もらう」というモジュール側のアイデアの実装。
+const COMMENTABLE_MEDIA_TYPES = ['image', 'video', 'audio', 'text', 'imaginary'];
 
 // セッションカードのタイトル編集欄に添えるOCR起動ボタンのアイコン(モノクロのカメラ)
 const CAMERA_ICON_SVG =
@@ -1160,6 +1163,13 @@ function editGuideHexHtml(mediaType) {
     // 受け、押すとこのカード自体を座談会カード(mediaType:'chat')へ変換する
     // (handleCommentReply()参照)。
     return hex('reply', 'Reply') + hex('edit', 'Edit') + hex('delete', 'Delete');
+  }
+  // イマジナリーカード(Star Pencil、2026年9月追加)は「ドロー以外透過」で、キャプション・
+  // メモ欄を持たないためCaption/Editは不要。ASTRで他のカードと手動接続でき、Depthで
+  // 意図的にぼかせる。Draw(描き足し)は他のカードには無いこのカード専用のアクションで、
+  // js/modules/star-pencil.jsのwindow.openStarPencilForCard()を呼ぶ。
+  if (mediaType === 'imaginary') {
+    return astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + hex('draw', 'Draw') + hex('comment', 'Comment');
   }
   const captionHex = CAPTIONABLE_MEDIA_TYPES.includes(mediaType) ? hex('caption', 'Caption') : '';
   // 写真の中の文字をOCRで抜き出す機能。画像のみ。「写真を残してメモに追記」「写真を破棄してテクストカード化」の2択
@@ -1334,6 +1344,7 @@ function renderCard(card) {
   const isStreetviewCard = mediaType === 'streetview';
   const isChatCard = mediaType === 'chat';
   const isCommentCard = mediaType === 'comment';
+  const isImaginaryCard = mediaType === 'imaginary'; // Star Pencil、2026年9月追加
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
@@ -1345,6 +1356,7 @@ function renderCard(card) {
     (isSummaryCard ? ' star-card--summary' : '') +
     (isStreetviewCard ? ' star-card--streetview' : '') +
     (isChatCard ? ' star-card--chat' : '') +
+    (isImaginaryCard ? ' star-card--imaginary' : '') +
     (isCommentCard ? ' star-card--comment' : '') +
     (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
@@ -1389,6 +1401,10 @@ function renderCard(card) {
     el.innerHTML = chatCardInnerHtml(card);
   } else if (isCommentCard) {
     el.innerHTML = commentCardInnerHtml(card);
+  } else if (isImaginaryCard) {
+    // 実際のHTML生成(SVG+編集ガイド)はモジュール側(js/modules/star-pencil.js)が担う。
+    // Mapping Storys/Astrometry Scopeと同じ「統合ポイントは薄いフックのみ」というパターン。
+    el.innerHTML = window.imaginaryCardInnerHtml ? window.imaginaryCardInnerHtml(card) : '';
   } else {
     const crewHeadHtml = card.crewPersonaId
       ? `<div class="star-card-crew-head">
@@ -1506,8 +1522,12 @@ function renderCard(card) {
         // Astrometry Scope本体はモジュール(js/modules/astrometry-scope.js)側の実装。
         // ここでは起動フックを呼ぶだけ(Mapping Storys等と同じ、window越しの薄い統合)。
         if (window.openAstrometryScope) window.openAstrometryScope(card);
+      } else if (action === 'draw') {
+        // Star Pencil本体はモジュール(js/modules/star-pencil.js)側の実装。ここでは
+        // 起動フックを呼ぶだけ(Astrometry Scopeのscopeと同じ、window越しの薄い統合)。
+        if (window.openStarPencilForCard) window.openStarPencilForCard(card);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply' && action !== 'scope') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply' && action !== 'scope' && action !== 'draw') scheduleAutoSave();
     });
   });
 
@@ -3054,7 +3074,10 @@ function createAstrConnectionSilent(cardIdA, cardIdB, sessionId) {
 
 /** 対象カードの内容(メモ・写真ならサムネイル)を1文でコメントさせる、共通のプロンプト組み立て。 */
 async function fetchPersonaCommentOnCard(persona, targetCard) {
-  const imagePart = targetCard.mediaType === 'image' && targetCard.thumbDataUrl
+  // 'imaginary'(Star Pencilのイマジナリーカード、2026年9月追加)も画像カードと同様、
+  // thumbDataUrl(描いた線のラスタライズ)があれば一緒に渡す。「絵を見せて一言もらう」
+  // という活用アイデアの実装。
+  const imagePart = (targetCard.mediaType === 'image' || targetCard.mediaType === 'imaginary') && targetCard.thumbDataUrl
     ? dataUrlToImagePart(targetCard.thumbDataUrl)
     : null;
   const targetText = targetCard.memo && targetCard.memo.trim()

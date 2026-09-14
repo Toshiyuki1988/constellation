@@ -741,6 +741,53 @@ html, body {
   filter: blur(3px);
 }
 
+/* ---------- Star Pencil: イマジナリーカード(mediaType:'imaginary'、2026年9月追加) ----------
+   「ドロー以外透過」の要求により背景・枠線・paddingを持たない(bounding box全体は
+   他のstar-cardと同じく当たり判定を持つ、ユーザー判断で「透明部分も長押し可能」を採用)。
+   常に他の全カードより手前に表示する(js/modules/star-pencil.js、「写真の上から線を描く」
+   使い方を想定した設計)。 */
+.star-card--imaginary {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  z-index: 8; /* .star-card--edit-guide(5)/.star-card--astr-glow(6)/各種hex(6-7)より常に手前 */
+}
+.star-card--imaginary.star-card--edit-guide,
+.star-card--imaginary.star-card--astr-glow {
+  z-index: 9; /* 自分自身の編集ガイド操作中は、他のimaginaryカードよりさらに手前にする */
+}
+.star-card--imaginary .star-card-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  overflow: visible;
+  pointer-events: none; /* 線そのものはクリックを奪わない。カード全体(bounding box)が当たり判定 */
+}
+
+.sp-stroke { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* このキャンバスの地色(白 + 薄いドットグリッド)向けの発光表現: まず極薄の白い縁取りで
+   線を背景のドットから浮かせ、そのあと同系色のグローを2段階重ねる。暗い背景を前提にした
+   「発光」の定石(色そのものをグローにするだけ)は白背景ではただの色滲みにしか見えなかった
+   ため、コントラストを作る縁取りを追加している(star-pencil-mockup.htmlで実機検証済み)。
+   ユーザー要望により、常時repaintが発生するパルス(明滅)アニメーションは付けない
+   (静的な発光のみ)。 */
+.sp-stroke--glow {
+  filter:
+    drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.9))
+    drop-shadow(0 0 5px currentColor)
+    drop-shadow(0 0 11px currentColor);
+}
+
+/* Draw(描き足し、Star Pencil専用): 他のカードには存在しないアクションのため
+   グローバルに定義してよい。caption/title等と同じ左辺・上寄りの位置を使う
+   (imaginaryカードはcaption/edit/titleを持たないため衝突しない)。 */
+.star-card-hex--draw { left: 0; top: 22%; transform: translate(-115%, -50%); }
+.star-card-hex-strut--draw { right: -20px; top: 50%; transform: translateY(-50%); }
+/* Comment(2026年9月にimaginaryカードでも対応): 既存の写真/動画/音声/テキストカードの
+   commentHexには位置指定が無い(既存の未整理)ため、他のカードへ影響させないよう
+   imaginaryカードに限定して位置を与える。edit等と同じ左辺・下寄りの位置を使う。 */
+.star-card--imaginary .star-card-hex--comment { left: 0; top: 78%; transform: translate(-115%, -50%); }
+.star-card--imaginary .star-card-hex-strut--comment { right: -20px; top: 50%; transform: translateY(-50%); }
+
 /* Driveへのアップロードがバックグラウンドで進行中(まだサムネイルだけ)であることを控えめに示す */
 .star-card--upload-pending {
   opacity: 0.7;
