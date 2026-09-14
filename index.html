@@ -134,6 +134,13 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v6M12 21v-4M4.5 8l5 3M19.5 8l-5 3M4.5 16l5-3M19.5 16l-5-3"/><circle cx="12" cy="12" r="2.4"/></svg>
       ストリートビュー
     </button>
+    <!-- モジュール共通キーパッド(js/module-launcher.js)への入口。以前はCONSTELLATION PIE
+         (長押しメニュー)にのみ置いていたが、PIE自体を使用頻度の低さから無効化した(2026年9月)
+         ため、ボトムツールバーに常設した。スマホは背景の2本指ダブルタップでも開ける。 -->
+    <button class="tool-btn" id="tool-keypad" disabled title="モジュール共通キーパッドを開く(WormGate・Crews・Mapping Storys・Flight Engineer・Astrometry Scope・Star Pencil)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="9" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="9" cy="16" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="16" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="16" r="0.6" fill="currentColor" stroke="none"/></svg>
+      キーパッド
+    </button>
   </footer>
 
   <input type="file" id="image-input" accept="image/*" multiple hidden>
@@ -315,7 +322,7 @@
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914b"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260914f"></script>
+  <script src="js/app.js?v=20260914g"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260914a"></script>

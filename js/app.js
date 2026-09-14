@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolInfo = document.getElementById('tool-info');
   els.toolSummary = document.getElementById('tool-summary');
   els.toolStreetview = document.getElementById('tool-streetview');
+  els.toolKeypad = document.getElementById('tool-keypad');
   els.status = document.getElementById('status');
   els.statusProgress = document.getElementById('statusProgress');
   els.statusProgressBar = document.getElementById('statusProgressBar');
@@ -146,12 +147,18 @@ document.addEventListener('DOMContentLoaded', () => {
   els.toolInfo.addEventListener('click', createInfoCard);
   els.toolSummary.addEventListener('click', () => createSummaryCard());
   els.toolStreetview.addEventListener('click', createStreetviewCard);
+  els.toolKeypad.addEventListener('click', () => { if (window.openModuleKeypad) window.openModuleKeypad(); });
   els.infoTicker.addEventListener('click', () => {
     const card = infoTickerItems[infoTickerIndex];
     if (card) jumpToInfoCard(card);
   });
 
-  initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled);
+  // CONSTELLATION PIE(長押しメニュー)は使用頻度が低いというユーザー判断により無効化した
+  // (2026年9月)。isEnabledを常にfalseにするだけで、コード自体は削除せず残してある
+  // (「また必要だと思ったら言う」とのことなので、いつでもtrueに戻せるようにしておく)。
+  // PIE内にしか無かった「キーパッド」項目は、上のtoolKeypadボタンとしてボトムツールバーへ
+  // 常設したため機能的な代替は確保済み。
+  initPieMenu(els.viewport, buildPieTools, () => false);
 
   els.viewport.addEventListener('dragover', (event) => {
     event.preventDefault();
@@ -162,17 +169,12 @@ document.addEventListener('DOMContentLoaded', () => {
   initTextSearchPopup();
 });
 
-/* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ---------------- */
-
-// モジュール共通のキーパッド(js/module-launcher.js)のHUD風アイコン。ツールバーには
-// 対応するボタンが無いため、他のようにボタンから拝借せずここに直接持つ。
-const MODULE_KEYPAD_PIE_ICON_SVG =
-  '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" ' +
-  'stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/>' +
-  '<circle cx="9" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="8" r="0.6" fill="currentColor" stroke="none"/>' +
-  '<circle cx="9" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="0.6" fill="currentColor" stroke="none"/>' +
-  '<circle cx="9" cy="16" r="0.6" fill="currentColor" stroke="none"/><circle cx="12" cy="16" r="0.6" fill="currentColor" stroke="none"/><circle cx="15" cy="16" r="0.6" fill="currentColor" stroke="none"/></svg>';
-
+/* ---------------- CONSTELLATION PIE用のツール一覧(既存ボトムバーの項目を流用) ----------------
+ * PIE自体は使用頻度が低いというユーザー判断により無効化されている(initPieMenu()の
+ * isEnabledを常にfalseにしているだけ、2026年9月)。buildPieTools()はその無効化されたPIEが
+ * 万一再度有効化された時のために残してある。かつてここにあった「キーパッド」項目は、
+ * ボトムツールバーの#tool-keypadへ常設で移設したため削除した(PCでの入口を失わないため)。
+ */
 function buildPieTools() {
   return [
     { label: 'アップロード', icon: els.toolUpload.querySelector('svg').outerHTML, action: () => els.imageInput.click() },
@@ -180,9 +182,6 @@ function buildPieTools() {
     { label: 'テクスト', icon: els.toolText.querySelector('svg').outerHTML, action: handleOpenTextTool },
     { label: '動画撮影', icon: els.toolVideo.querySelector('svg').outerHTML, action: () => handleOpenCamera('video') },
     { label: '音声録音', icon: els.toolAudio.querySelector('svg').outerHTML, action: () => handleOpenCamera('audio') },
-    // PCのマウスでは背景2本指ダブルタップが使えないため、モジュール共通キーパッドへの
-    // 確実な入口としてここにも置く(個々のモジュールへの専用項目は増やさない)
-    { label: 'キーパッド', icon: MODULE_KEYPAD_PIE_ICON_SVG, action: () => { if (window.openModuleKeypad) window.openModuleKeypad(); } },
   ];
 }
 
@@ -411,6 +410,7 @@ function toggleAuthUI(signedIn) {
   els.toolInfo.disabled = !signedIn;
   els.toolSummary.disabled = !signedIn;
   els.toolStreetview.disabled = !signedIn;
+  els.toolKeypad.disabled = !signedIn;
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの

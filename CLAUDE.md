@@ -332,6 +332,15 @@ Crewsたちと展覧会を「一緒に楽しむ」ための3機能。座談会(�
 - コメントカード自体(`mediaType:'comment'`)の編集ガイドはDeleteのみ。ASTRは持たない(生成時に既に接続済みで作られるため、自分から新しく繋ぐ運用は想定していない)。見た目はCrewsの水色(cyan)を踏襲した小さい読み取り専用カード(顔文字アバター・名前・コメント本文の3要素だけ)
 - コメントカードは`redrawAsterismLines()`の見た順自動線・`collectSessionTextContext()`(ラベル「コメント」で通常のメモとして文脈に混ぜ込まれる、要約・座談会からの参照を妨げない)双方で、他のカードと同様に扱われる(自動線だけ除外、文脈収集は含める)
 
+## CONSTELLATION PIE(長押しメニュー)を無効化し、キーパッドをボトムツールバーへ常設(基本機能、2026年9月)
+
+「PIEは意外に使用頻度が少ないからオフにしておいて、また必要だと思ったら言う」というユーザー判断。ただし、PIEの「キーパッド」項目は、PC(マウス)は背景の2本指ダブルタップができないため、モジュール共通キーパッド(WormGate・Crews・Mapping Storys・Flight Engineer・Astrometry Scope・Star Pencilの起動口)への唯一の入口になっていた。PIE全体をオフにするとPC版でこれら全モジュールが起動不能になる旨をユーザーに確認したところ、「キーパッドはボトムに置いておいて」との指示だったため、以下の対応にした。
+
+- `js/pie-menu.js`の`initPieMenu(viewportEl, getTools, isEnabled)`は元々`isEnabled`を毎回評価する設計だったため、`js/app.js`側の呼び出しを`initPieMenu(els.viewport, buildPieTools, () => !els.toolUpload.disabled)`から`initPieMenu(els.viewport, buildPieTools, () => false)`に変えるだけでPIE自体を無効化できた。**コード自体は削除していない**(「また必要だと思ったら言う」とのことなので、`() => false`を元の条件式に戻すだけでいつでも復活できるようにしてある)
+- `index.html`のボトムツールバーに、モジュール共通キーパッドと全く同じアイコン(3×3ドットのHUD風、旧`MODULE_KEYPAD_PIE_ICON_SVG`と同じ意匠)の「キーパッド」ボタン(`#tool-keypad`)を常設した。他のtool-btnと同じ扱いで`toggleAuthUI()`によるdisabled制御に組み込んである
+- `buildPieTools()`からは「キーパッド」項目を削除した(ボトムツールバーへ移設したため重複を解消。PIE自体は無効化されているが、関数自体は将来の再有効化に備えて残してある)
+- 実機シミュレーションで、ボトムツールバーの「キーパッド」ボタンから`window.openModuleKeypad()`相当のオーバーレイが開くこと、背景の長押し(pointerdown 500ms保持)ではPIEが一切開かないことを確認済み
+
 ## 編集ガイドのヘックス配置修正(基本機能、2026年9月)
 
 実機報告「Comment・Summonがガイドの内側寄りにあり、テキスト編集などの時に邪魔になる」への対応。`css/style.css`の`.star-card-hex--*`(編集ガイドのヘックスバッジの位置指定)を調査した結果、2つの問題が見つかった。
