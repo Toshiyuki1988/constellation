@@ -212,6 +212,18 @@
           <button class="cam-eclipse-ratio-chip" type="button" data-ratio-key="C" title="円形">○</button>
         </div>
         <div class="cam-eclipse-body"></div>
+        <!-- 回転・中央リセットボタン(2026年9月追加): ガイドの左側、右横のスライダーと対称的な
+             位置に縦に並べる。移動・リサイズでガイド+付属要素一式が画面外へはみ出さないよう、
+             この2ボタン分の左オーバーハングもjs/camera.jsのSIDE_BTNS_LEFT_OVERHANGとして
+             クランプ計算に含めている。 -->
+        <div class="cam-eclipse-side-btns">
+          <button class="cam-eclipse-side-btn cam-eclipse-rotate-btn" type="button" title="90度回転">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="cam-eclipse-side-btn cam-eclipse-recenter-btn" type="button" title="画面中央に戻す">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
         <div class="cam-eclipse-corner nw"></div>
         <div class="cam-eclipse-corner ne"></div>
         <div class="cam-eclipse-corner sw"></div>

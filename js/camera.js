@@ -786,7 +786,19 @@ function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
  * **命名(2026年9月追記)**: この矩形ガイド+比率プリセット+スライダー一式のUI総称を
  * 「Eclipse」と名付けた(円形ガイドで暗い美術館を探る見た目が日食に近いことに由来)。
  * 関数名・CSSクラス(`cam-eclipse-*`)・CSS変数(`--eclipse-*`)・要素ID(`eclipse-*`)は
- * すべてこの名称に統一している。挙動自体はこの改名では変えていない。 */
+ * すべてこの名称に統一している。挙動自体はこの改名では変えていない。
+ * **画面内クランプ・回転・中央リセットを追加(2026年9月)**: ガイドを画面端付近まで移動すると、
+ * 右横のスライダー・上のチップ行・下のトグルなど、ガイド本体の外側に付く要素が画面外へ
+ * 見切れることがあった。CSSレイアウト(margin/幅/高さ)から算出した固定オーバーハング量を元に、
+ * これら付属要素を含めた全体が画面内に収まるようapplyRect()内で位置をクランプするようにした
+ * (DOM計測は行わず、CSSの値と一致させた定数のみで判定する軽量な実装。CSSの値を変える場合は
+ * 下記の定数も合わせて調整すること)。あわせて、ガイド左側に90度回転ボタンと画面中央への
+ * リセットボタンを追加した(四隅ハンドルの当たり判定・右横のスライダーと重ならない位置)。
+ * **サイズスライダーの拡縮基準点の修正(2026年9月)**: 以前は対称/非対称トグルの状態に
+ * 応じてサイズスライダーの拡縮基準点も切り替わり、既定(非対称)では左上が固定点になっていた。
+ * スライダーで縮小するたびガイドが左上へ寄っていく挙動が分かりにくいという指摘を受け、
+ * サイズスライダーでの拡縮は常にガイドの中心を固定点にするよう変更した(対称/非対称トグルは
+ * 四隅ハンドルでの自由リサイズにのみ効く)。 */
 function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) {
   // 実機で「ダブルタップしても反応しない」報告(2026年9月)を受け、指のブレ・タップ間隔の
   // バラつきに強くなるよう、js/canvas.jsの俯瞰ズーム判定(350ms/10px/40px)より緩めた値にした。
@@ -794,12 +806,22 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   const DOUBLE_TAP_MOVE_TOLERANCE_PX = 20;
   const DOUBLE_TAP_DISTANCE_TOLERANCE_PX = 70;
   const MIN_ECLIPSE_SIZE = 60;
+  // 付属要素(比率チップ行・四隅ハンドル・2本のスライダー・対称トグル・回転/中央リセットボタン)が
+  // ガイド本体の矩形からどれだけはみ出すかの固定量。css/camera.cssの対応する値と一致させること。
+  const RATIO_ROW_HALF_WIDTH = 77; // .cam-eclipse-ratio-row: 26px×5チップ+6px×4間隔=154の半分
+  const HANDLE_OVERHANG = 22; // .cam-eclipse-handle: 44px角の当たり判定の半分
+  const SLIDER_RIGHT_OVERHANG = 82; // .cam-eclipse-slider--zoom: margin-left 56 + width 26
+  const SLIDER_HALF_HEIGHT = 70; // .cam-eclipse-slider: height 140の半分(ガイドの縦中心基準)
+  const RATIO_ROW_TOP_OVERHANG = 36; // チップ高さ26 + margin-bottom 10
+  const SYM_TOGGLE_BOTTOM_OVERHANG = 32; // margin-top 10 + height 22
+  const SYM_TOGGLE_HALF_WIDTH = 40; // 対称/非対称トグルの想定最大幅の半分(テキスト量に余裕を見た概算)
+  const SIDE_BTNS_LEFT_OVERHANG = 38; // .cam-eclipse-side-btns: ボタン幅28 + margin-right 10
   let pressStart = null;
   let lastTapAt = 0;
   let lastTapPos = null;
   let visible = false;
   let ratioIndex = 0; // CAM_ECLIPSE_RATIO_PRESETSのどれを使っているか
-  let symmetric = false; // 対称/非対称リサイズ(下辺トグル)
+  let symmetric = false; // 対称/非対称リサイズ(四隅ハンドルのみに効く。下辺トグル)
 
   const ratioRowEl = eclipseEl.querySelector('.cam-eclipse-ratio-row');
   const sizeSliderEl = eclipseEl.querySelector('.cam-eclipse-slider--size');
@@ -809,24 +831,71 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
   const sizeTrackEl = sizeSliderEl && sizeSliderEl.querySelector('.cam-eclipse-slider-track');
   const zoomThumbEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-eclipse-slider-thumb');
   const zoomTrackEl = zoomSliderEl && zoomSliderEl.querySelector('.cam-eclipse-slider-track');
+  const rotateBtn = eclipseEl.querySelector('.cam-eclipse-rotate-btn');
+  const recenterBtn = eclipseEl.querySelector('.cam-eclipse-recenter-btn');
 
   function currentRatio() { return CAM_ECLIPSE_RATIO_PRESETS[ratioIndex].ratio; }
   function currentShape() { return CAM_ECLIPSE_RATIO_PRESETS[ratioIndex].shape; }
 
-  /** その比率で矩形の長辺が取りうる範囲。画面の94%以内に収まるよう都度計算する。 */
-  function sizeBoundsForRatio(ratio) {
+  /** 今のガイドが縦長(portrait、90度回転後の状態)かどうか。回転後も専用のフラグを持たず、
+   *  実際に描画中のwidth/heightから都度判定する(フリーハンドの四隅リサイズで向きが変わっても
+   *  自動的に追従する)。 */
+  function isPortrait() {
+    const w = parseFloat(eclipseEl.style.width) || 0;
+    const h = parseFloat(eclipseEl.style.height) || 0;
+    return h > w;
+  }
+
+  /** その比率・向きで矩形の長辺が取りうる範囲。画面の94%以内に収まるよう都度計算する。
+   *  portrait=trueの時は幅と高さの役割(どちらが「長辺」か)が入れ替わる。 */
+  function sizeBoundsForRatio(ratio, portrait) {
     const rect = screenEl.getBoundingClientRect();
-    const maxByWidth = rect.width * 0.94;
-    const maxByHeight = rect.height * 0.94 * ratio;
+    const maxByWidth = portrait ? rect.width * 0.94 * ratio : rect.width * 0.94;
+    const maxByHeight = portrait ? rect.height * 0.94 : rect.height * 0.94 * ratio;
     const max = Math.max(MIN_ECLIPSE_SIZE + 20, Math.min(maxByWidth, maxByHeight));
     return { min: MIN_ECLIPSE_SIZE, max };
   }
 
-  function applyRect(x, y, w, h) {
+  /** 長辺の長さ(longSide)から、今の向き(isPortrait())に応じたw/hを組み立てる。 */
+  function dimsFromLongSide(longSide) {
+    const ratio = currentRatio();
+    return isPortrait() ? { w: longSide / ratio, h: longSide } : { w: longSide, h: longSide / ratio };
+  }
+
+  function eclipsePadLeft(w) {
+    return Math.max(HANDLE_OVERHANG, SIDE_BTNS_LEFT_OVERHANG, RATIO_ROW_HALF_WIDTH - w / 2, SYM_TOGGLE_HALF_WIDTH - w / 2);
+  }
+  function eclipsePadRight(w) {
+    return Math.max(HANDLE_OVERHANG, SLIDER_RIGHT_OVERHANG, RATIO_ROW_HALF_WIDTH - w / 2, SYM_TOGGLE_HALF_WIDTH - w / 2);
+  }
+  function eclipsePadTop(h) {
+    return Math.max(RATIO_ROW_TOP_OVERHANG, SLIDER_HALF_HEIGHT - h / 2);
+  }
+  function eclipsePadBottom(h) {
+    return Math.max(SYM_TOGGLE_BOTTOM_OVERHANG, SLIDER_HALF_HEIGHT - h / 2);
+  }
+
+  /** ガイド本体+付属要素(チップ行・ハンドル・スライダー・トグル・回転/中央リセットボタン)
+   *  一式が画面(screenW×screenH)からはみ出さないよう、x/yをクランプしてからスタイルを適用する。
+   *  screenW/screenHは呼び出し側で用意する(ドラッグ中の高頻度呼び出しでは、この関数自身が
+   *  毎回getBoundingClientRect()し直さないようにするため。Asterism線のドラッグ最適化と同じ考え方、
+   *  本ファイル上部CLAUDE.mdの既存の教訓を踏襲)。 */
+  function applyRect(x, y, w, h, screenW, screenH) {
+    const padL = eclipsePadLeft(w);
+    const padR = eclipsePadRight(w);
+    const padT = eclipsePadTop(h);
+    const padB = eclipsePadBottom(h);
+    const minX = padL;
+    const maxX = Math.max(minX, screenW - w - padR);
+    const minY = padT;
+    const maxY = Math.max(minY, screenH - h - padB);
+    x = Math.min(Math.max(x, minX), maxX);
+    y = Math.min(Math.max(y, minY), maxY);
     eclipseEl.style.left = `${x}px`;
     eclipseEl.style.top = `${y}px`;
     eclipseEl.style.width = `${w}px`;
     eclipseEl.style.height = `${h}px`;
+    if (rotateBtn) rotateBtn.classList.toggle('active', h > w);
   }
 
   function applyShapeAndChips() {
@@ -837,13 +906,16 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     });
   }
 
-  /** サイズスライダーのつまみ位置を、今の矩形の幅から逆算して合わせ直す(重い処理では
+  /** サイズスライダーのつまみ位置を、今の矩形の長辺から逆算して合わせ直す(重い処理では
    *  ないが毎pointermoveでは呼ばない。プリセット切替・ハンドルドラッグ終了時などに使う)。 */
   function syncSizeSliderThumb() {
     if (!sizeThumbEl) return;
-    const bounds = sizeBoundsForRatio(currentRatio());
-    const w = parseFloat(eclipseEl.style.width) || bounds.min;
-    const frac = bounds.max > bounds.min ? Math.max(0, Math.min(1, (w - bounds.min) / (bounds.max - bounds.min))) : 0;
+    const portrait = isPortrait();
+    const bounds = sizeBoundsForRatio(currentRatio(), portrait);
+    const curW = parseFloat(eclipseEl.style.width) || 0;
+    const curH = parseFloat(eclipseEl.style.height) || 0;
+    const longSide = Math.max(curW, curH) || bounds.min;
+    const frac = bounds.max > bounds.min ? Math.max(0, Math.min(1, (longSide - bounds.min) / (bounds.max - bounds.min))) : 0;
     sizeThumbEl.style.top = `${(1 - frac) * 100}%`;
   }
 
@@ -862,11 +934,11 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     symmetric = false;
     applyShapeAndChips();
     if (symmetryBtn) { symmetryBtn.classList.remove('active'); symmetryBtn.textContent = '非対称'; }
-    const bounds = sizeBoundsForRatio(currentRatio());
+    const bounds = sizeBoundsForRatio(currentRatio(), false); // 毎回、横長(非回転)の既定姿勢に戻す
     const rect = screenEl.getBoundingClientRect();
     const w = Math.min(bounds.max, Math.max(bounds.min, rect.width * 0.62));
     const h = w / currentRatio();
-    applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h);
+    applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h, rect.width, rect.height);
     eclipseEl.classList.add('visible', 'appearing');
     setTimeout(() => eclipseEl.classList.remove('appearing'), 200);
     visible = true;
@@ -883,8 +955,8 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     if (visible) hide(); else showDefault();
   }
 
-  /** 比率プリセットを切り替える。今の中心・今の長辺の長さをできるだけ保ったまま、
-   *  新しい比率に合わせて短辺だけ引き直す。 */
+  /** 比率プリセットを切り替える。今の中心・今の長辺の長さ・今の向き(縦長/横長)をできるだけ
+   *  保ったまま、新しい比率に合わせて短辺だけ引き直す。 */
   function applyPreset(index) {
     ratioIndex = index;
     applyShapeAndChips();
@@ -892,14 +964,37 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
       x: parseFloat(eclipseEl.style.left) || 0, y: parseFloat(eclipseEl.style.top) || 0,
       w: parseFloat(eclipseEl.style.width) || 200, h: parseFloat(eclipseEl.style.height) || 200,
     };
-    const bounds = sizeBoundsForRatio(currentRatio());
+    const portrait = isPortrait();
+    const bounds = sizeBoundsForRatio(currentRatio(), portrait);
     const longSide = Math.max(rect.w, rect.h);
-    const w = Math.max(bounds.min, Math.min(bounds.max, longSide));
-    const h = w / currentRatio();
+    const clampedLong = Math.max(bounds.min, Math.min(bounds.max, longSide));
+    const dims = dimsFromLongSide(clampedLong);
     const centerX = rect.x + rect.w / 2;
     const centerY = rect.y + rect.h / 2;
-    applyRect(centerX - w / 2, centerY - h / 2, w, h);
+    const screenRect = screenEl.getBoundingClientRect();
+    applyRect(centerX - dims.w / 2, centerY - dims.h / 2, dims.w, dims.h, screenRect.width, screenRect.height);
     syncSizeSliderThumb();
+  }
+
+  /** ガイドを90度回転する(現在の中心を保ったままw/hを入れ替えるだけ)。四隅ハンドルの
+   *  自由リサイズと同様、比率チェックはしない(スワップ後の値をそのまま使う)。 */
+  function rotate90() {
+    const x = parseFloat(eclipseEl.style.left) || 0;
+    const y = parseFloat(eclipseEl.style.top) || 0;
+    const w = parseFloat(eclipseEl.style.width) || 200;
+    const h = parseFloat(eclipseEl.style.height) || 200;
+    const cx = x + w / 2, cy = y + h / 2;
+    const rect = screenEl.getBoundingClientRect();
+    applyRect(cx - h / 2, cy - w / 2, h, w, rect.width, rect.height);
+    syncSizeSliderThumb();
+  }
+
+  /** ガイドの中心を画面(screenEl)の中心へ戻す。サイズ・比率・向きは変えない、位置だけ戻す。 */
+  function recenterToScreen() {
+    const w = parseFloat(eclipseEl.style.width) || 200;
+    const h = parseFloat(eclipseEl.style.height) || 200;
+    const rect = screenEl.getBoundingClientRect();
+    applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h, rect.width, rect.height);
   }
 
   if (ratioRowEl) {
@@ -916,6 +1011,14 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
       symmetryBtn.classList.toggle('active', symmetric);
       symmetryBtn.textContent = symmetric ? '対称' : '非対称';
     });
+  }
+  if (rotateBtn) {
+    rotateBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    rotateBtn.addEventListener('click', (e) => { e.stopPropagation(); rotate90(); });
+  }
+  if (recenterBtn) {
+    recenterBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    recenterBtn.addEventListener('click', (e) => { e.stopPropagation(); recenterToScreen(); });
   }
 
   // ジェスチャー判定の不確実性に頼らない確実な入口(2026年9月追加)。実機で「素早く
@@ -982,13 +1085,14 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
       x: e.clientX, y: e.clientY,
       rx: r.left - parentRect.left, ry: r.top - parentRect.top,
       rw: r.width, rh: r.height,
+      screenW: parentRect.width, screenH: parentRect.height, // 画面内クランプ用(applyRect参照)。ドラッグ中は再計測しない
     };
     // スライダーのトラック位置・その比率での可動範囲は、ドラッグ中(pointermoveのたび)に
     // getBoundingClientRect()し直すと重いため、開始時に1回だけ計算して使い回す
     // (Asterism線のドラッグ最適化と同じ考え方、本ファイル上部CLAUDE.mdの既存の教訓)。
     if (mode === 'size-slider' && sizeTrackEl) {
       dragStart.trackRect = sizeTrackEl.getBoundingClientRect();
-      dragStart.sizeBounds = sizeBoundsForRatio(currentRatio());
+      dragStart.sizeBounds = sizeBoundsForRatio(currentRatio(), isPortrait());
     } else if (mode === 'zoom-slider' && zoomTrackEl) {
       dragStart.trackRect = zoomTrackEl.getBoundingClientRect();
     }
@@ -1014,25 +1118,22 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     if (!dragMode || !dragStart) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
-    const { rx, ry, rw, rh } = dragStart;
+    const { rx, ry, rw, rh, screenW, screenH } = dragStart;
 
     if (dragMode === 'move') {
-      applyRect(rx + dx, ry + dy, rw, rh);
+      applyRect(rx + dx, ry + dy, rw, rh, screenW, screenH);
       return;
     }
 
     if (dragMode === 'size-slider') {
       // 「スライダー」= ドラッグ量ではなくトラック上の絶対位置がそのまま値になる(2026年9月追加)。
+      // 拡縮の基準点は対称/非対称トグルに関わらず常にガイドの中心(2026年9月修正、上記コメント参照)。
       const frac = fracFromTrack(dragStart.trackRect, e.clientY);
       const { min, max } = dragStart.sizeBounds;
-      const w = min + frac * (max - min);
-      const h = w / currentRatio();
-      if (symmetric) {
-        const cx = rx + rw / 2, cy = ry + rh / 2;
-        applyRect(cx - w / 2, cy - h / 2, w, h);
-      } else {
-        applyRect(rx, ry, w, h); // 非対称: 左上を固定したまま右・下へ伸び縮みする
-      }
+      const longSide = min + frac * (max - min);
+      const dims = dimsFromLongSide(longSide);
+      const cx = rx + rw / 2, cy = ry + rh / 2;
+      applyRect(cx - dims.w / 2, cy - dims.h / 2, dims.w, dims.h, screenW, screenH);
       if (sizeThumbEl) sizeThumbEl.style.top = `${(1 - frac) * 100}%`; // 自分のドラッグ中は逆算せず直接反映(軽量)
       return;
     }
@@ -1063,7 +1164,7 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
       if (dragMode.includes('s')) h = Math.max(MIN_ECLIPSE_SIZE, rh + dy);
       if (dragMode.includes('n')) { h = Math.max(MIN_ECLIPSE_SIZE, rh - dy); y = ry + (rh - h); }
     }
-    applyRect(x, y, w, h);
+    applyRect(x, y, w, h, screenW, screenH);
   });
   document.addEventListener('pointerup', () => {
     const wasHandleDrag = dragMode && dragMode !== 'move' && dragMode !== 'size-slider' && dragMode !== 'zoom-slider';

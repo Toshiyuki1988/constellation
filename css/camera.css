@@ -223,6 +223,32 @@
 .cam-eclipse-handle.se { top: 100%; left: 100%; cursor: nwse-resize; }
 .cam-eclipse-body { position: absolute; inset: 0; cursor: move; }
 
+/* 回転・中央リセットボタン(2026年9月追加)。ガイドの左側、上寄りに縦に並べる
+   (右横のスライダーと対称的な配置)。四隅ハンドル(左上は-22px)・比率チップ行(上に伸びる)
+   とは重ならない位置。 */
+.cam-eclipse-side-btns {
+  position: absolute; right: 100%; top: 0;
+  margin-right: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  touch-action: none;
+}
+.cam-eclipse-side-btn {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 1.5px solid var(--eclipse-accent-deep);
+  background: var(--eclipse-paper); color: var(--eclipse-accent-deep);
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: pointer;
+  box-shadow: 0 2px 5px var(--eclipse-shadow);
+  transition: transform 0.1s ease, background 0.15s ease, color 0.15s ease;
+}
+.cam-eclipse-side-btn svg { width: 15px; height: 15px; }
+.cam-eclipse-side-btn:active { transform: scale(0.9); }
+/* 回転ボタンは、ガイドが縦長(90度回転後)の間だけアクティブ色にする(js/camera.jsのapplyRect()参照)。 */
+.cam-eclipse-rotate-btn.active {
+  background: linear-gradient(155deg, var(--eclipse-accent), var(--eclipse-accent-deep));
+  color: var(--eclipse-paper);
+}
+
 /* 比率プリセット(F/P/M/S/円形)の選択チップ。矩形の上辺の外側に並べる(2026年9月追加)。
    F=人物型・P=風景型・M=海景型・S=正方形という、油彩キャンバスの号数で使われる4形状+円形。 */
 .cam-eclipse-ratio-row {
