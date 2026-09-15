@@ -933,8 +933,11 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
    */
   function sizeBoundsForRatio(ratio, portrait) {
     const rect = screenEl.getBoundingClientRect();
-    const availW = Math.max(MIN_ECLIPSE_SIZE, rect.width - SIZE_BOUNDS_PAD_LEFT - SIZE_BOUNDS_PAD_RIGHT) * 0.97;
-    const availH = Math.max(MIN_ECLIPSE_SIZE, rect.height - SIZE_BOUNDS_PAD_TOP - SIZE_BOUNDS_PAD_BOTTOM) * 0.97;
+    // 2026年9月: 付属要素の余白を引いた直後の値ぴったりまで許すと、常時表示のズーム
+    // スライダー(.cam-zoom-slider、画面右端固定)との近さも相まって窮屈に見える/わずかな
+    // 誤差で見切れるとの実機報告があったため、0.97→0.88へ余裕を広げた。
+    const availW = Math.max(MIN_ECLIPSE_SIZE, rect.width - SIZE_BOUNDS_PAD_LEFT - SIZE_BOUNDS_PAD_RIGHT) * 0.88;
+    const availH = Math.max(MIN_ECLIPSE_SIZE, rect.height - SIZE_BOUNDS_PAD_TOP - SIZE_BOUNDS_PAD_BOTTOM) * 0.88;
     const maxByWidth = portrait ? availW * ratio : availW;
     const maxByHeight = portrait ? availH : availH * ratio;
     const max = Math.max(MIN_ECLIPSE_SIZE + 20, Math.min(maxByWidth, maxByHeight));
@@ -1010,11 +1013,13 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     turnOffTorchIfOn(); // 前回開いた時に点けっぱなしのままになっていないよう、毎回念のため
     applyShapeAndChips();
     if (symmetryBtn) { symmetryBtn.classList.add('active'); symmetryBtn.textContent = '対称'; }
-    // 2026年9月: 既定の向きを横長→縦型に、既定サイズを画面いっぱいに近い大きめのサイズに変更
-    // (ユーザー要望)。bounds.maxは既に画面の94%以内に収まる上限なので、そのまま使えばよい。
+    // 2026年9月: 既定の向きを横長→縦型に、既定サイズを大きめに変更(ユーザー要望)。
+    // ただし上限(bounds.max)ぴったりまで広げると常時表示のズームスライダー(画面右端固定)に
+    // 迫って窮屈に見える/わずかな計算誤差で見切れるとの実機報告があったため、上限の85%を
+    // 既定値にして目に見える余白を残す(スライダーで100%まで広げるのはユーザーの任意)。
     const bounds = sizeBoundsForRatio(currentRatio(), true); // 毎回、縦型(portrait)の既定姿勢に戻す
     const rect = screenEl.getBoundingClientRect();
-    const h = bounds.max;
+    const h = bounds.min + (bounds.max - bounds.min) * 0.85;
     const w = h / currentRatio();
     applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h, rect.width, rect.height);
     eclipseEl.classList.add('visible', 'appearing');
