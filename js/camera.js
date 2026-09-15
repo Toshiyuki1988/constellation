@@ -913,12 +913,30 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     return h > w;
   }
 
-  /** その比率・向きで矩形の長辺が取りうる範囲。画面の94%以内に収まるよう都度計算する。
-   *  portrait=trueの時は幅と高さの役割(どちらが「長辺」か)が入れ替わる。 */
+  // sizeBoundsForRatio()が予約する左右・上下の余白(2026年9月追加)。ガイド本体がある程度
+  // 大きい時、各付属要素のオーバーハング(eclipsePadLeft/Right/Top/Bottom参照)は
+  // 「RATIO_ROW_HALF_WIDTH - w/2」等の項が負になって効かなくなり、実質この固定値だけに
+  // 収束する。既定サイズ(画面いっぱいに近い大きめのサイズ)は必ずこの収束後の領域に入るため、
+  // ここではその収束値をそのまま予約に使う(w/h依存の循環参照を避けるための単純化)。
+  const SIZE_BOUNDS_PAD_LEFT = Math.max(HANDLE_OVERHANG, SIDE_BTNS_LEFT_OVERHANG);
+  const SIZE_BOUNDS_PAD_RIGHT = Math.max(HANDLE_OVERHANG, SIZE_SLIDER_RIGHT_OVERHANG);
+  const SIZE_BOUNDS_PAD_TOP = RATIO_ROW_TOP_OVERHANG;
+  const SIZE_BOUNDS_PAD_BOTTOM = SYM_TOGGLE_BOTTOM_OVERHANG;
+
+  /**
+   * その比率・向きで矩形の長辺が取りうる範囲。**2026年9月修正**: 以前は画面の94%という
+   * ガイド本体(w×h)だけの制約で計算しており、比率チップ行・サイズスライダー・回転/中央
+   * リセットボタンなど本体からはみ出す付属要素の分を考慮していなかった。既定サイズを
+   * 画面いっぱいに近い大きさに変更した際、この付属要素の見切れ(特に右横のサイズスライダー)
+   * が実機で顕在化したため、付属要素の固定オーバーハング(SIZE_BOUNDS_PAD_*)をあらかじめ
+   * 画面サイズから差し引いてから比率変換するようにした。
+   */
   function sizeBoundsForRatio(ratio, portrait) {
     const rect = screenEl.getBoundingClientRect();
-    const maxByWidth = portrait ? rect.width * 0.94 * ratio : rect.width * 0.94;
-    const maxByHeight = portrait ? rect.height * 0.94 : rect.height * 0.94 * ratio;
+    const availW = Math.max(MIN_ECLIPSE_SIZE, rect.width - SIZE_BOUNDS_PAD_LEFT - SIZE_BOUNDS_PAD_RIGHT) * 0.97;
+    const availH = Math.max(MIN_ECLIPSE_SIZE, rect.height - SIZE_BOUNDS_PAD_TOP - SIZE_BOUNDS_PAD_BOTTOM) * 0.97;
+    const maxByWidth = portrait ? availW * ratio : availW;
+    const maxByHeight = portrait ? availH : availH * ratio;
     const max = Math.max(MIN_ECLIPSE_SIZE + 20, Math.min(maxByWidth, maxByHeight));
     return { min: MIN_ECLIPSE_SIZE, max };
   }
