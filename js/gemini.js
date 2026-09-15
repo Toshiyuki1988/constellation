@@ -38,13 +38,16 @@ function withTimeoutSignal(externalSignal, ms) {
 
 /**
  * @param {{prompt: string, imageBase64?: string, mimeType?: string,
- *   images?: {base64: string, mimeType?: string}[], tools?: object[], signal?: AbortSignal}} params
+ *   images?: {base64: string, mimeType?: string}[], tools?: object[], signal?: AbortSignal,
+ *   maxOutputTokens?: number}} params
  *   imageBase64/mimeTypeは画像1枚だけの場合の簡易指定。複数枚送りたい場合はimagesを使う
  *   (両方指定した場合はimageBase64側が先に追加される)。
  *   signal: 呼び出し元が明示的にキャンセルしたい場合に渡す(例: OCRのPiP表示の✕ボタン)。
+ *   maxOutputTokens: 既定(モデルのデフォルト)より長い応答を確実に返してほしい場合に指定する
+ *   (例: 書籍1ページ分のような長文OCR)。
  * @returns {Promise<string>} 生成されたテキスト
  */
-async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal }) {
+async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal, maxOutputTokens }) {
   const parts = [{ text: prompt }];
   if (imageBase64) {
     parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } });
@@ -55,6 +58,7 @@ async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal 
 
   const body = { contents: [{ parts }] };
   if (tools) body.tools = tools;
+  if (maxOutputTokens) body.generationConfig = { maxOutputTokens };
 
   const { signal: fetchSignal, cleanup } = withTimeoutSignal(signal, GEMINI_TIMEOUT_MS);
   let res;
@@ -89,17 +93,31 @@ async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal 
   return data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') ?? '';
 }
 
-/** 画像内のキャプション文字(作品名・作者名など)をOCR的に抽出する */
+/**
+ * 画像内の文字をOCR的に書き写す。展覧会キャプション(作品名・作者名・年代程度の短文)にも、
+ * Almagest(書物モジュール)向けに書籍・記事のページ全体を撮影/アップロードした長文にも
+ * 同じ関数を使う。**2026年9月修正**: 以前のプロンプトが「作品名・作者名・年代などのテキストを
+ * 抜き出す」という特定の短い項目の抽出を想定した書き方だったため、長文の本文ページを渡すと
+ * Geminiが(明示的な要約指示は無いにもかかわらず)重要そうな断片だけを拾って残りを省略して
+ * しまい、「長文だと一部しか読み取れない」という実機報告があった。「抜き出す」ではなく
+ * 「一字一句省略せず書き写す」という指示に変更し、短文/長文どちらのケースも同じ言い回しで
+ * カバーできるようにした。あわせて、長文でも応答が途中で切れないようmaxOutputTokensを
+ * 明示的に大きく確保している。
+ */
 async function ocrImage(blob, { signal } = {}) {
   const imageBase64 = await blobToBase64(blob);
   const raw = await askGemini({
     prompt:
-      'この画像は美術館・展覧会のキャプションや作品の写真です。' +
-      '写っている作品名・作者名・年代などのテキストを、書かれている通りに抜き出してください。' +
-      '前置き・説明・「以下の通りです」のような一言も一切付けず、抽出した文字だけをそのまま返してください。' +
+      'この画像に写っている文字を、一字一句省略せず、書かれている通りに全て書き写してください。' +
+      '展覧会のキャプション(作品名・作者名・年代など)のような短い文章のこともあれば、' +
+      '書籍・記事のページのような長い文章のこともあります。どちらの場合も、要約したり' +
+      '重要そうな部分だけを選んで抜き出したりせず、視認できる文字を最初から最後まで漏れなく' +
+      '書き写してください。' +
+      '前置き・説明・「以下の通りです」のような一言も一切付けず、書き写した文字だけをそのまま返してください。' +
       'テキストが見当たらない場合は「(テキストなし)」とだけ返してください。',
     imageBase64,
     mimeType: blob.type,
+    maxOutputTokens: 8192,
     signal,
   });
   return raw.trim();

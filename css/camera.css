@@ -582,6 +582,18 @@
 }
 .cam-upload-ocr-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* ドラッグ&ドロップでも画像ファイルを渡せる(2026年9月追加)。ドラッグ中は画面全体を
+   薄くハイライトして、ここへ落とせることを示す。 */
+#camera-screen-caption.cam-caption-dragover::after {
+  content: '画像をドロップして読み取る';
+  position: absolute; inset: 0; z-index: 12;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(85, 230, 247, 0.14);
+  border: 2px dashed rgba(85, 230, 247, 0.7);
+  color: #fff; font-family: inherit; font-size: 13px;
+  pointer-events: none;
+}
+
 /* ---------- テクスト:撮影後、範囲を選んでからOCRする ----------
    撮影直後は静止フレーム(cam-freeze-wrap、実体のcanvasはJSが差し込む)を表示し、
    その上でドラッグして選択した範囲だけを切り出してGeminiへ送る。選択しなければ

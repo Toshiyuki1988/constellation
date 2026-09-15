@@ -292,6 +292,7 @@ function wireCameraEvents() {
     camEls.uploadFile.value = ''; // 同じファイルを続けて選び直せるようにする
     if (file) handleUploadForSelection(file);
   });
+  wireCaptionDragDrop();
   camEls.selectRetakeBtn.addEventListener('click', resetCaptionState);
   camEls.selectRunBtn.addEventListener('click', handleSelectionRun);
   wireSelectionLayer();
@@ -1873,7 +1874,11 @@ async function captureForSelection() {
 async function handleUploadForSelection(file) {
   camEls.uploadBtn.disabled = true;
   try {
-    const canvas = await loadImageFileToCanvas(file, 2400);
+    // アップロードされたファイル(特にスクリーンショット)は、カメラのライブ映像と違って
+    // 元々デジタルにシャープなことが多く、撮影時の2400pxという上限に縛られる理由が無い。
+    // 書籍ページのような小さい密な文字を潰さないよう、写真撮影(capturePhoto())と同じ
+    // 3840pxまで許容する。
+    const canvas = await loadImageFileToCanvas(file, 3840);
     enterSelectionMode(canvas);
   } catch (err) {
     console.error(err);
@@ -1881,6 +1886,35 @@ async function handleUploadForSelection(file) {
   } finally {
     camEls.uploadBtn.disabled = false;
   }
+}
+
+/** 「📁 アップロード」ボタンの他に、画面へ直接ドラッグ&ドロップでも画像ファイルを渡せる
+ *  ようにする(2026年9月追加、PCでの使い勝手向上)。画像以外のドロップは無視する。 */
+function wireCaptionDragDrop() {
+  const screenEl = camEls.captionScreen;
+  let dragDepth = 0; // dragenter/dragleaveは子要素の出入りでも発火するため、深さで数える
+  screenEl.addEventListener('dragover', (e) => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  screenEl.addEventListener('dragenter', (e) => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    dragDepth++;
+    screenEl.classList.add('cam-caption-dragover');
+  });
+  screenEl.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) screenEl.classList.remove('cam-caption-dragover');
+  });
+  screenEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    screenEl.classList.remove('cam-caption-dragover');
+    const file = Array.from(e.dataTransfer.files || []).find((f) => f.type.startsWith('image/'));
+    if (file) handleUploadForSelection(file);
+  });
 }
 
 /** 画像ファイルを、長辺maxEdge以下に縮小したcanvasへ読み込む(captureFrameToCanvas()の
