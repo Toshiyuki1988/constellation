@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260915a">
-<link rel="stylesheet" href="css/camera.css?v=20260915f">
+<link rel="stylesheet" href="css/camera.css?v=20260915g">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -182,21 +182,30 @@
           <span class="cam-control-label" id="cam-wb-label" hidden>オート</span>
         </div>
       </div>
-      <!-- ライブコメント(2026年9月追加): ユーザーが質問するのではなく逆に、今カメラに映っている
-           けれど撮影するほどでもないものへ、Gemini(ランダムに選んだ座談会の顔ぶれの1人)が
-           その場で一言コメントする機能。撮影・カード化は一切行わず、フレームは使い捨て
-           (js/camera.jsのhandleLiveComment()、js/app.jsのfetchLiveSceneComment()参照)。
-           無料枠(1日250)を消費するため自動化はせず、必ずこのボタンでの明示的な手動トリガーのみ。 -->
-      <button class="cam-live-comment-btn" id="cam-live-comment-btn-photo" type="button" title="今見えているものにコメントをもらう">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9A1.5 1.5 0 0 1 18.5 16H9l-4 3.5V16H5.5A1.5 1.5 0 0 1 4 14.5v-9Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <!-- ターゲッティングスコープ(2026年9月、ライブコメント機能を刷新): 「美術版ジャーヴィスUI」
+           というユーザー構想。十字の照準をドラッグで対象物の上に載せ、再タップするとProfessorが
+           呼ばれ、建築様式・文様の意匠・衣服のスタイルなど対象の種類に応じた美術的要素を
+           解説する(js/camera.jsのwireTargetScope()、js/app.jsのfetchArtTargetAnalysis()参照)。
+           撮影・カード化は一切行わず、フレームは使い捨て。無料枠(1日250)を消費するため
+           自動化はせず、必ず明示的な再タップでの手動トリガーのみ。 -->
+      <button class="cam-target-toggle-btn" id="cam-target-toggle-btn-photo" type="button" title="十字照準を出す/しまう">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.6"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
       </button>
-      <div class="cam-live-comment" id="cam-live-comment-panel">
-        <div class="cam-live-comment-avatar" id="cam-live-comment-avatar"></div>
-        <div class="cam-live-comment-body">
-          <div class="cam-live-comment-name" id="cam-live-comment-name"></div>
-          <div class="cam-live-comment-text" id="cam-live-comment-text"></div>
+      <div class="cam-target-reticle" id="cam-target-reticle-photo">
+        <svg viewBox="0 0 76 76" fill="none">
+          <circle cx="38" cy="38" r="26" stroke="currentColor" stroke-width="1.4" opacity="0.85"/>
+          <circle cx="38" cy="38" r="2.4" fill="currentColor"/>
+          <path d="M38 4v12M38 60v12M4 38h12M60 38h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M2 14V4h10M74 14V4H64M2 62v10h10M74 62v10H64" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="cam-target-panel" id="cam-target-panel">
+        <div class="cam-target-avatar" id="cam-target-avatar">🎓</div>
+        <div class="cam-target-body">
+          <div class="cam-target-name" id="cam-target-name">Professor</div>
+          <div class="cam-target-text" id="cam-target-text"></div>
         </div>
-        <button class="cam-live-comment-close" id="cam-live-comment-close" type="button" title="閉じる">✕</button>
+        <button class="cam-target-close" id="cam-target-close" type="button" title="閉じる">✕</button>
       </div>
       <!-- Eclipse(2026年9月追加、同月中にビジュアル刷新): 位置合わせ用の矩形。撮影結果には
            一切影響しない見た目の目安専用(js/camera.jsのwireEclipseGuide()参照)。ダブルタップでも
@@ -421,11 +430,11 @@
   <script src="js/upload-queue.js?v=20260915a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911e"></script>
-  <script src="js/camera.js?v=20260915f"></script>
+  <script src="js/camera.js?v=20260915g"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260915b"></script>
+  <script src="js/app.js?v=20260915c"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260914b"></script>

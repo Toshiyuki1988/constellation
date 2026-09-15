@@ -242,12 +242,13 @@ function ensureCameraDom() {
     wbLabel: document.getElementById('cam-wb-label'),
     autoShutterBtn: document.getElementById('cam-auto-shutter-btn'),
     autoShutterLabel: document.getElementById('cam-auto-shutter-label'),
-    liveCommentBtnPhoto: document.getElementById('cam-live-comment-btn-photo'),
-    liveCommentPanel: document.getElementById('cam-live-comment-panel'),
-    liveCommentAvatar: document.getElementById('cam-live-comment-avatar'),
-    liveCommentName: document.getElementById('cam-live-comment-name'),
-    liveCommentText: document.getElementById('cam-live-comment-text'),
-    liveCommentClose: document.getElementById('cam-live-comment-close'),
+    targetToggleBtnPhoto: document.getElementById('cam-target-toggle-btn-photo'),
+    targetReticlePhoto: document.getElementById('cam-target-reticle-photo'),
+    targetPanel: document.getElementById('cam-target-panel'),
+    targetAvatar: document.getElementById('cam-target-avatar'),
+    targetName: document.getElementById('cam-target-name'),
+    targetText: document.getElementById('cam-target-text'),
+    targetClose: document.getElementById('cam-target-close'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
@@ -309,8 +310,7 @@ function wireCameraEvents() {
   wireCamZoomSlider(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wireCameraControls();
   wireAutoShutterButton();
-  if (camEls.liveCommentBtnPhoto) camEls.liveCommentBtnPhoto.addEventListener('click', handleLiveComment);
-  if (camEls.liveCommentClose) camEls.liveCommentClose.addEventListener('click', hideLiveComment);
+  wireTargetScope();
 
   // 写真モードのピンチズームは2026年9月に撤去した(誤タップ防止のユーザー方針)。円形Eclipse
   // ガイドの2本指長押しジェスチャー(トーチ点灯)と指の本数が競合するため、常時表示のズーム
@@ -732,7 +732,7 @@ function teardownModeExtras() {
   // フラッシュ撮影を避けたいというユーザー方針、本ファイル上部の既存の注記を参照)。
   if (camTorchOn) setTorch(false);
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
-  hideLiveComment(); // モードを抜ける/カメラを閉じるたび、前回の結果パネルも片付ける(2026年9月追加)
+  closeTargetScope(); // モードを抜ける/カメラを閉じるたび、照準・結果パネルも片付ける(2026年9月追加)
 }
 
 function updateScreenVisibility() {
@@ -1005,9 +1005,9 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     if (toggleBtn) toggleBtn.classList.add('active');
     syncSizeSliderThumb();
     playEclipseOpen();
-    // 2026年9月: 既定でカメラズームも最大にする(ユーザー要望)。その時点で分かっている
-    // ネイティブ/デジタルズームの上限まで、setCamZoom()自身が安全にクランプしてくれる。
-    setCamZoom(maxZoomForCurrentTrack(), videoEl, zoomBadgeEl);
+    // 2026年9月: 既定でカメラズームも最小(1倍、無ズーム)に戻す(ユーザー要望。
+    // 一度「最大」で実装したが「最小の間違い」と訂正が入った)。
+    setCamZoom(1, videoEl, zoomBadgeEl);
   }
   function hide() {
     eclipseEl.classList.remove('visible');
@@ -1585,77 +1585,201 @@ async function capturePhoto() {
   }
 }
 
-/* ---------------- ライブコメント(2026年9月追加) ----------------
- * 「見えているが撮影するほどでもないもの」に、その場でGeminiが一言コメントする機能。
- * ユーザーが質問するのではなく逆に、座談会・コメントカードと同じ顔ぶれ(js/app.jsの
- * buildRoundtableParticipants())からランダムに選んだ1人が、今プレビューに映っている
- * フレームを見て自発的につぶやく、という向き。撮影・カード化は一切行わず、フレームは
- * 使い捨て(保存しない)。無料枠(1日250)を消費するため、自動化はせず必ずこのボタンでの
- * 明示的な手動トリガーのみにしている。参加者選定・プロンプト組み立てはjs/app.jsの
- * pickRandomPersona()/fetchLiveSceneComment()(座談会・コメントカードと同じ共通関数を
- * 再利用)に任せ、camera.js側はフレームの切り出しと結果パネルの表示だけを担当する。 */
-let liveCommentHideTimer = null;
+/* ---------------- ターゲッティングスコープ(2026年9月、ライブコメント機能を刷新) ----------------
+ * 「美術版ジャーヴィスUI」というユーザー構想。十字の照準を指でドラッグして対象物の上へ載せ
+ * (動かしている間は「ピッ」)、動かさずに再タップすると(「ピコッ」)、Professorが呼ばれ、
+ * 照準を中心にクロップしたフレームを見て、建築様式・文様の意匠・衣服のスタイルなど対象の
+ * 種類に応じた美術的要素を解説する。撮影・カード化は一切行わず、フレームは使い捨て。
+ * 無料枠(1日250)を消費するため自動化はせず、必ず明示的な再タップでの手動トリガーのみ。
+ * ペルソナは常にProfessor固定(座談会のような参加者選択は行わない、js/app.jsの
+ * fetchArtTargetAnalysis()参照)。 */
+const TARGET_TAP_MOVE_TOLERANCE_PX = 6; // Crews Constellationの写真カード(クリックorドラッグ判定)と同じ閾値
+const TARGET_MOVE_TICK_DISTANCE_PX = 26; // 「ピッ」を間引く距離(Star Pencilの描画tickと同じ考え方)
+const TARGET_RETICLE_HALF = 38; // .cam-target-reticleの半径(76pxの半分)、画面内クランプに使う
 
-function showLiveCommentThinking(persona) {
-  if (!camEls.liveCommentPanel) return;
-  camEls.liveCommentAvatar.textContent = persona.avatar || '👤';
-  camEls.liveCommentName.textContent = persona.name || '';
-  camEls.liveCommentText.textContent = '考え中…';
-  camEls.liveCommentPanel.classList.add('show', 'thinking');
-  clearTimeout(liveCommentHideTimer);
+let targetScopeOpen = false;
+let targetDrag = null; // {pointerId, startClientX, startClientY, startLeft, startTop, moved, lastTickX, lastTickY}
+let targetResultHideTimer = null;
+let targetRequestInFlight = false;
+
+function openTargetScope() {
+  if (!camEls.targetReticlePhoto || !camStream) return;
+  const rect = camEls.photoScreen.getBoundingClientRect();
+  camEls.targetReticlePhoto.style.left = `${rect.width / 2}px`;
+  camEls.targetReticlePhoto.style.top = `${rect.height / 2}px`;
+  camEls.targetReticlePhoto.classList.add('show');
+  if (camEls.targetToggleBtnPhoto) camEls.targetToggleBtnPhoto.classList.add('active');
+  targetScopeOpen = true;
 }
 
-function showLiveCommentResult(persona, text) {
-  if (!camEls.liveCommentPanel) return;
-  camEls.liveCommentAvatar.textContent = persona.avatar || '👤';
-  camEls.liveCommentName.textContent = persona.name || '';
-  camEls.liveCommentText.textContent = text;
-  camEls.liveCommentPanel.classList.remove('thinking');
-  camEls.liveCommentPanel.classList.add('show');
+function closeTargetScope() {
+  targetScopeOpen = false;
+  targetDrag = null;
+  if (camEls && camEls.targetReticlePhoto) camEls.targetReticlePhoto.classList.remove('show', 'locking');
+  if (camEls && camEls.targetToggleBtnPhoto) camEls.targetToggleBtnPhoto.classList.remove('active');
+  hideTargetPanel();
+}
+
+function toggleTargetScope() {
+  if (targetScopeOpen) closeTargetScope(); else openTargetScope();
+}
+
+function showTargetThinking() {
+  if (!camEls.targetPanel) return;
+  camEls.targetAvatar.textContent = '🎓';
+  camEls.targetName.textContent = 'Professor';
+  camEls.targetText.textContent = '鑑定中…';
+  camEls.targetPanel.classList.add('show', 'thinking');
+  clearTimeout(targetResultHideTimer);
+}
+
+function showTargetResult(text) {
+  if (!camEls.targetPanel) return;
+  camEls.targetText.textContent = text;
+  camEls.targetPanel.classList.remove('thinking');
+  camEls.targetPanel.classList.add('show');
   if (typeof playChatReplySound === 'function') playChatReplySound(); // 座談会の自動返信と同じ「シュコッ」
-  clearTimeout(liveCommentHideTimer);
-  liveCommentHideTimer = setTimeout(hideLiveComment, 10000);
+  clearTimeout(targetResultHideTimer);
+  targetResultHideTimer = setTimeout(hideTargetPanel, 12000);
 }
 
-function showLiveCommentError(message) {
-  if (!camEls.liveCommentPanel) return;
-  camEls.liveCommentAvatar.textContent = '⚠';
-  camEls.liveCommentName.textContent = '';
-  camEls.liveCommentText.textContent = message;
-  camEls.liveCommentPanel.classList.remove('thinking');
-  camEls.liveCommentPanel.classList.add('show');
-  clearTimeout(liveCommentHideTimer);
-  liveCommentHideTimer = setTimeout(hideLiveComment, 6000);
+function showTargetError(message) {
+  if (!camEls.targetPanel) return;
+  camEls.targetAvatar.textContent = '⚠';
+  camEls.targetName.textContent = '';
+  camEls.targetText.textContent = message;
+  camEls.targetPanel.classList.remove('thinking');
+  camEls.targetPanel.classList.add('show');
+  clearTimeout(targetResultHideTimer);
+  targetResultHideTimer = setTimeout(hideTargetPanel, 6000);
 }
 
-function hideLiveComment() {
-  clearTimeout(liveCommentHideTimer);
-  if (camEls && camEls.liveCommentPanel) camEls.liveCommentPanel.classList.remove('show', 'thinking');
+function hideTargetPanel() {
+  clearTimeout(targetResultHideTimer);
+  if (camEls && camEls.targetPanel) camEls.targetPanel.classList.remove('show', 'thinking');
 }
 
-async function handleLiveComment() {
-  if (!camStream || !camEls.videoPhoto.videoWidth) return;
-  if (camEls.liveCommentBtnPhoto.disabled) return;
-  if (typeof window.pickRandomPersona !== 'function' || typeof window.fetchLiveSceneComment !== 'function') {
-    showLiveCommentError('コメント機能の準備ができていません');
+/**
+ * 照準の画面位置(cam-screen基準のCSSピクセル)を中心に、映像ソース側の一部だけを切り出した
+ * canvasを作る。captureFrameToCanvas()と同じcover基準のクロップ(computeCoverCropRect())を
+ * まず求め、そこからさらに照準位置を中心にした正方形の領域だけを狭めて取り出す(対象へ寄った
+ * 構図にすることで、文様や建築の細部をGeminiが判別しやすくする)。
+ */
+function captureTargetedFrameToCanvas(videoEl, screenEl, targetX, targetY, maxEdge) {
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  if (!vw || !vh) throw new Error('カメラ映像の準備ができていません');
+  const rect = screenEl.getBoundingClientRect();
+  const cover = (rect.width > 0 && rect.height > 0)
+    ? computeCoverCropRect(rect.width, rect.height, vw, vh)
+    : { sx: 0, sy: 0, sw: vw, sh: vh };
+
+  const fx = Math.max(0, Math.min(1, targetX / rect.width));
+  const fy = Math.max(0, Math.min(1, targetY / rect.height));
+  const centerX = cover.sx + fx * cover.sw;
+  const centerY = cover.sy + fy * cover.sh;
+
+  // 照準を中心に、ソース側の短辺の45%を一辺とする正方形を切り出す。
+  const size = Math.min(cover.sw, cover.sh) * 0.45;
+  let sx = centerX - size / 2;
+  let sy = centerY - size / 2;
+  sx = Math.max(cover.sx, Math.min(sx, cover.sx + cover.sw - size));
+  sy = Math.max(cover.sy, Math.min(sy, cover.sy + cover.sh - size));
+
+  let w = size;
+  let h = size;
+  if (w > maxEdge) { h *= maxEdge / w; w = maxEdge; }
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(w);
+  canvas.height = Math.round(h);
+  canvas.getContext('2d').drawImage(videoEl, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function handleTargetTrigger(targetX, targetY) {
+  if (targetRequestInFlight) return;
+  if (typeof window.fetchArtTargetAnalysis !== 'function') {
+    showTargetError('鑑定機能の準備ができていません');
     return;
   }
-  const persona = window.pickRandomPersona();
-  camEls.liveCommentBtnPhoto.disabled = true;
-  showLiveCommentThinking(persona);
+  playTargetLock();
+  const reticle = camEls.targetReticlePhoto;
+  reticle.classList.remove('locking');
+  void reticle.offsetWidth; // 毎回確実にアニメーションを再生させるための強制リフロー
+  reticle.classList.add('locking');
+  targetRequestInFlight = true;
+  showTargetThinking();
   try {
-    const canvas = captureFrameToCanvas(camEls.videoPhoto, 900, currentDigitalZoomForCapture());
-    const blob = await canvasToBlob(canvas, 0.82);
+    const canvas = captureTargetedFrameToCanvas(camEls.videoPhoto, camEls.photoScreen, targetX, targetY, 900);
+    const blob = await canvasToBlob(canvas, 0.85);
     const base64 = await blobToBase64(blob);
-    const text = await window.fetchLiveSceneComment(persona, base64, 'image/jpeg');
-    showLiveCommentResult(persona, text || '(…特に言うことがないようです)');
+    const text = await window.fetchArtTargetAnalysis(base64, 'image/jpeg');
+    showTargetResult(text || '(判別できませんでした)');
   } catch (err) {
     console.error(err);
-    camDebugLog(`ライブコメント失敗: ${err && err.message ? err.message : err}`);
-    showLiveCommentError(`コメントの取得に失敗しました: ${err && err.message ? err.message : err}`);
+    camDebugLog(`ターゲッティングスコープ失敗: ${err && err.message ? err.message : err}`);
+    showTargetError(`鑑定に失敗しました: ${err && err.message ? err.message : err}`);
   } finally {
-    camEls.liveCommentBtnPhoto.disabled = false;
+    targetRequestInFlight = false;
   }
+}
+
+/** 十字照準のドラッグ(移動 or タップ判定)・トグルボタン・結果パネルの配線をまとめて行う。
+ *  ドラッグ判定はEclipse同様、pointerdown起点からの移動距離で「動かした」か「タップだけ」かを
+ *  判定する(TARGET_TAP_MOVE_TOLERANCE_PX)。動かしていなければ再タップとみなし鑑定を呼ぶ。 */
+function wireTargetScope() {
+  if (!camEls.targetToggleBtnPhoto || !camEls.targetReticlePhoto) return;
+  camEls.targetToggleBtnPhoto.addEventListener('click', toggleTargetScope);
+  if (camEls.targetClose) camEls.targetClose.addEventListener('click', hideTargetPanel);
+  if (camEls.targetPanel) camEls.targetPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+  const reticle = camEls.targetReticlePhoto;
+  // click(pointerdown+pointerupから合成されるイベント)がphotoScreenまでバブリングすると
+  // wireTapFocus()のタップフォーカスも同時に発火してしまうため、ここで止める。
+  reticle.addEventListener('click', (e) => e.stopPropagation());
+  reticle.addEventListener('pointerdown', (e) => {
+    if (!targetScopeOpen) return;
+    e.stopPropagation();
+    const left = parseFloat(reticle.style.left) || 0;
+    const top = parseFloat(reticle.style.top) || 0;
+    targetDrag = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX, startClientY: e.clientY,
+      startLeft: left, startTop: top,
+      moved: false,
+      lastTickX: left, lastTickY: top,
+    };
+    try { reticle.setPointerCapture(e.pointerId); } catch (err) { /* no-op */ }
+  });
+  reticle.addEventListener('pointermove', (e) => {
+    if (!targetDrag || e.pointerId !== targetDrag.pointerId) return;
+    const dx = e.clientX - targetDrag.startClientX;
+    const dy = e.clientY - targetDrag.startClientY;
+    if (!targetDrag.moved && Math.hypot(dx, dy) > TARGET_TAP_MOVE_TOLERANCE_PX) targetDrag.moved = true;
+    if (!targetDrag.moved) return;
+    const rect = camEls.photoScreen.getBoundingClientRect();
+    let left = targetDrag.startLeft + dx;
+    let top = targetDrag.startTop + dy;
+    left = Math.max(TARGET_RETICLE_HALF, Math.min(rect.width - TARGET_RETICLE_HALF, left));
+    top = Math.max(TARGET_RETICLE_HALF, Math.min(rect.height - TARGET_RETICLE_HALF, top));
+    reticle.style.left = `${left}px`;
+    reticle.style.top = `${top}px`;
+    if (Math.hypot(left - targetDrag.lastTickX, top - targetDrag.lastTickY) >= TARGET_MOVE_TICK_DISTANCE_PX) {
+      targetDrag.lastTickX = left;
+      targetDrag.lastTickY = top;
+      playTargetMoveTick();
+    }
+  });
+  const endDrag = (e) => {
+    if (!targetDrag || e.pointerId !== targetDrag.pointerId) return;
+    const wasMoved = targetDrag.moved;
+    const left = parseFloat(reticle.style.left) || 0;
+    const top = parseFloat(reticle.style.top) || 0;
+    targetDrag = null;
+    if (!wasMoved) handleTargetTrigger(left, top);
+  };
+  reticle.addEventListener('pointerup', endDrag);
+  reticle.addEventListener('pointercancel', endDrag);
 }
 
 /* ---------------- テクストモード(キャプションだけをその場で読み取る) ----------------
@@ -2172,4 +2296,31 @@ function playEclipseOpen() {
   camTone(ctx, 526.5, now, 0.16, 'sine', 0.07);
   camTone(ctx, 784, now + 0.09, 0.22, 'sine', 0.12);
   camTone(ctx, 790, now + 0.09, 0.22, 'sine', 0.07);
+}
+
+// ターゲッティングスコープの「ピッ」(照準の移動中、距離で間引いて呼ばれる)は、ドラッグ中に
+// 何度も鳴らすため、他の単発効果音(shutter等)のように呼ぶたびに新しいAudioContextを作ると、
+// ドラッグ1回で大量のコンテキストが生成されてしまう(ブラウザによっては同時に持てる数に
+// 上限があり、超えると音が鳴らなくなる恐れがある)。この2音(ピッ/ピコッ)だけは
+// 1つのAudioContextを使い回す(js/sound.jsのsoundAudioCtx()と同じ考え方)。
+let camTargetTickCtx = null;
+function camTargetTickAudioCtx() {
+  if (!camTargetTickCtx) camTargetTickCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (camTargetTickCtx.state === 'suspended') camTargetTickCtx.resume();
+  return camTargetTickCtx;
+}
+
+/** ターゲッティングスコープの照準を動かしている間の「ピッ」。 */
+function playTargetMoveTick() {
+  const ctx = camTargetTickAudioCtx();
+  const now = ctx.currentTime;
+  camTone(ctx, 2000, now, 0.05, 'sine', 0.1);
+}
+
+/** ターゲッティングスコープで対象へ照準を合わせて再タップ(鑑定を呼び出す)した瞬間の「ピコッ」。 */
+function playTargetLock() {
+  const ctx = camTargetTickAudioCtx();
+  const now = ctx.currentTime;
+  camTone(ctx, 1200, now, 0.05, 'sine', 0.14);
+  camTone(ctx, 1900, now + 0.05, 0.08, 'sine', 0.16);
 }

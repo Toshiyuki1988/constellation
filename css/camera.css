@@ -458,11 +458,13 @@
 }
 .cam-control-label[hidden] { display: none; }
 
-/* ---------- ライブコメント(2026年9月追加) ----------
-   「見えているが撮影するほどでもないもの」に、その場でGeminiが一言コメントする機能。
-   #camera-closeの真下、画面右上に置く(.cam-control-btnと同じ40px丸ボタンの意匠)。
-   結果パネルはその下に、Eclipseと同じ暖色パレットのダーク吹き出しとして表示する。 */
-.cam-live-comment-btn {
+/* ---------- ターゲッティングスコープ(2026年9月、ライブコメント機能を刷新) ----------
+   「美術版ジャーヴィスUI」というユーザー構想。十字の照準をドラッグで対象物の上に載せ、
+   再タップするとProfessorが建築様式・文様の意匠・衣服のスタイルなど美術的要素を解説する
+   (js/camera.jsのwireTargetScope()参照)。トグルボタンは#camera-closeの真下、画面右上
+   (.cam-control-btnと同じ40px丸ボタンの意匠)。結果パネルはその下に、Eclipseと同じ
+   暖色パレットのダーク吹き出しとして表示する。 */
+.cam-target-toggle-btn {
   position: absolute;
   top: calc(10px + env(safe-area-inset-top, 0px) + 46px);
   right: 8px;
@@ -475,11 +477,43 @@
   box-shadow: 0 2px 6px var(--eclipse-shadow);
   transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease;
 }
-.cam-live-comment-btn svg { width: 18px; height: 18px; }
-.cam-live-comment-btn:active { transform: scale(0.94); }
-.cam-live-comment-btn:disabled { opacity: 0.5; cursor: default; }
+.cam-target-toggle-btn svg { width: 18px; height: 18px; }
+.cam-target-toggle-btn:active { transform: scale(0.94); }
+.cam-target-toggle-btn.active {
+  background: linear-gradient(155deg, var(--eclipse-accent), var(--eclipse-accent-deep));
+  color: var(--eclipse-paper);
+}
 
-.cam-live-comment {
+/* 十字照準本体。left/topは常にjs/camera.js側がpx指定で書き込む(初期位置は画面中央)。
+   ドラッグ中はcursor:grabbing、対象へ合わせて再タップした瞬間だけ一過性の収縮パルスを
+   掛ける(常時アニメーションは「重くならない程度に」というプロジェクト方針により避けている)。 */
+.cam-target-reticle {
+  position: absolute;
+  width: 76px; height: 76px;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9;
+  color: var(--eclipse-accent);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  touch-action: none;
+  cursor: grab;
+}
+.cam-target-reticle.show { opacity: 1; pointer-events: auto; }
+.cam-target-reticle:active { cursor: grabbing; }
+.cam-target-reticle.locking { animation: cam-target-lock-pulse 0.4s ease; }
+@keyframes cam-target-lock-pulse {
+  0% { transform: translate(-50%, -50%) scale(1); }
+  40% { transform: translate(-50%, -50%) scale(0.8); }
+  100% { transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-target-reticle.locking { animation: none; }
+}
+
+.cam-target-panel {
   position: absolute;
   top: calc(10px + env(safe-area-inset-top, 0px) + 92px);
   right: 8px;
@@ -498,30 +532,30 @@
   transition: opacity 0.25s ease, transform 0.25s ease;
   pointer-events: none;
 }
-.cam-live-comment.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
-.cam-live-comment.thinking .cam-live-comment-text { animation: cam-live-comment-pulse 1s ease-in-out infinite; }
-.cam-live-comment-avatar {
+.cam-target-panel.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.cam-target-panel.thinking .cam-target-text { animation: cam-target-panel-pulse 1s ease-in-out infinite; }
+.cam-target-avatar {
   width: 28px; height: 28px; border-radius: 50%; flex: none;
   display: flex; align-items: center; justify-content: center; font-size: 15px;
   background: rgba(255, 143, 94, 0.22); border: 1px solid var(--eclipse-accent);
 }
-.cam-live-comment-body { flex: 1; min-width: 0; }
-.cam-live-comment-name {
+.cam-target-body { flex: 1; min-width: 0; }
+.cam-target-name {
   font-family: inherit; font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
   color: var(--eclipse-accent); margin-bottom: 3px;
 }
-.cam-live-comment-text { font-size: 12px; line-height: 1.55; color: var(--eclipse-paper); }
-.cam-live-comment-close {
+.cam-target-text { font-size: 12px; line-height: 1.55; color: var(--eclipse-paper); }
+.cam-target-close {
   align-self: flex-start; width: 18px; height: 18px; border-radius: 50%; flex: none;
   border: 1px solid rgba(248, 236, 217, 0.4); background: none; color: var(--eclipse-paper-dim);
   font-size: 9px; line-height: 1; cursor: pointer; padding: 0;
 }
-@keyframes cam-live-comment-pulse {
+@keyframes cam-target-panel-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cam-live-comment.thinking .cam-live-comment-text { animation: none; }
+  .cam-target-panel.thinking .cam-target-text { animation: none; }
 }
 
 /* ---------- 写真:シャッター ---------- */
