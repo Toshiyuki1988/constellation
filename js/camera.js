@@ -256,6 +256,8 @@ function ensureCameraDom() {
     focusLayerCaption: document.getElementById('focus-layer-caption'),
     zoomBadgeCaption: document.getElementById('zoom-badge-caption'),
     capBtn: document.getElementById('camera-cap-btn'),
+    uploadBtn: document.getElementById('caption-upload-btn'),
+    uploadFile: document.getElementById('caption-upload-file'),
     freezeWrap: document.getElementById('caption-freeze-wrap'),
     selectLayer: document.getElementById('caption-select-layer'),
     selectRect: document.getElementById('caption-select-rect'),
@@ -284,6 +286,12 @@ function wireCameraEvents() {
 
   camEls.shutterPhoto.addEventListener('click', capturePhoto);
   camEls.capBtn.addEventListener('click', captureForSelection);
+  camEls.uploadBtn.addEventListener('click', () => camEls.uploadFile.click());
+  camEls.uploadFile.addEventListener('change', () => {
+    const file = camEls.uploadFile.files && camEls.uploadFile.files[0];
+    camEls.uploadFile.value = ''; // 同じファイルを続けて選び直せるようにする
+    if (file) handleUploadForSelection(file);
+  });
   camEls.selectRetakeBtn.addEventListener('click', resetCaptionState);
   camEls.selectRunBtn.addEventListener('click', handleSelectionRun);
   wireSelectionLayer();
@@ -1822,6 +1830,8 @@ let selectStartY = 0;
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
   camEls.capBtn.disabled = false;
+  camEls.uploadBtn.hidden = false;
+  camEls.uploadBtn.disabled = false;
   camEls.captionHint.textContent = '画面にキャプションを収めてタップ';
   captionFreezeCanvas = null;
   captionSelection = null;
@@ -1853,6 +1863,49 @@ async function captureForSelection() {
   }
 }
 
+/**
+ * 「📁 アップロード」(2026年9月追加): カメラで撮る代わりに、既に端末にある画像ファイルから
+ * OCRしたい場合の入口。アプリ全体で使われるopenCamera('caption')の入り口はこの1画面
+ * (#camera-screen-caption)だけなので、ここを拡張するだけで呼び出し元(テクストツール・
+ * セッション名OCR・Crews・Almagest等)全てに自動的に行き渡る。選んだ画像は撮影時と全く同じ
+ * enterSelectionMode()へ合流するため、自由範囲選択も同様に使える。
+ */
+async function handleUploadForSelection(file) {
+  camEls.uploadBtn.disabled = true;
+  try {
+    const canvas = await loadImageFileToCanvas(file, 2400);
+    enterSelectionMode(canvas);
+  } catch (err) {
+    console.error(err);
+    showCameraError('画像の読み込みに失敗しました');
+  } finally {
+    camEls.uploadBtn.disabled = false;
+  }
+}
+
+/** 画像ファイルを、長辺maxEdge以下に縮小したcanvasへ読み込む(captureFrameToCanvas()の
+ *  ファイル版。カメラ映像ではなくImage要素から描画する点だけが違う)。 */
+function loadImageFileToCanvas(file, maxEdge) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('画像を読み込めませんでした'));
+    };
+    img.src = objectUrl;
+  });
+}
+
 function enterSelectionMode(canvas) {
   captionFreezeCanvas = canvas;
   captionSelection = null;
@@ -1863,6 +1916,7 @@ function enterSelectionMode(canvas) {
   camEls.selectRect.hidden = true;
   camEls.selectActions.classList.add('show');
   camEls.capBtn.hidden = true;
+  camEls.uploadBtn.hidden = true;
   camEls.captionHint.textContent = '文字の範囲を指でなぞって選択(そのままなら全体を読み取ります)';
   updateSelectRunLabel();
 }

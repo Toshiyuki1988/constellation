@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260916a">
-<link rel="stylesheet" href="css/camera.css?v=20260915g">
+<link rel="stylesheet" href="css/camera.css?v=20260916a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -291,6 +291,11 @@
       <div class="cam-hint" id="caption-hint">画面にキャプションを収めてタップ</div>
       <div class="cam-focus-layer" id="focus-layer-caption"></div>
       <div class="cam-zoom-badge" id="zoom-badge-caption" hidden></div>
+      <!-- ファイルからのOCR(2026年9月追加): カメラで撮る代わりに、既にある画像ファイルから
+           読み取りたい場合の入口。選んだ後は撮影時と全く同じ選択モード(enterSelectionMode())へ
+           合流するため、自由範囲選択も同様に使える。 -->
+      <button class="cam-upload-ocr-btn" id="caption-upload-btn" type="button" title="画像ファイルから読み取る">📁 アップロード</button>
+      <input type="file" accept="image/*" id="caption-upload-file" hidden>
       <button class="cam-cap-btn" id="camera-cap-btn">タップして読み取る</button>
       <!-- 撮影直後の静止フレーム(選択モード中だけ表示、実体のcanvasはJSから注入する) -->
       <div class="cam-freeze-wrap" id="caption-freeze-wrap"></div>
@@ -430,7 +435,7 @@
   <script src="js/upload-queue.js?v=20260915a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260915a"></script>
-  <script src="js/camera.js?v=20260915i"></script>
+  <script src="js/camera.js?v=20260916a"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
