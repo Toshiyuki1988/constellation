@@ -31,6 +31,12 @@
 
 const UPLOAD_QUEUE_DB_NAME = 'constellation-upload-queue';
 const UPLOAD_QUEUE_STORE = 'pending';
+// オートセーブOFF中のローカルバックアップ用store(2026年9月追加、下記「ローカルデータ
+// バックアップ」セクション参照)。DBバージョンを2へ上げ、既存のpending storeはそのまま
+// 引き継ぐ(onupgradeneededは既存store作成済みならスキップする作りのため、既存ユーザーの
+// 待機列データも失われない)。
+const DATA_BACKUP_STORE = 'dataBackup';
+const UPLOAD_QUEUE_DB_VERSION = 2;
 const UPLOAD_QUEUE_CONCURRENCY = 2;
 
 let uploadQueueDbPromise = null;
@@ -44,10 +50,13 @@ let uploadAbortController = null;
 function openUploadQueueDb() {
   if (uploadQueueDbPromise) return uploadQueueDbPromise;
   uploadQueueDbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(UPLOAD_QUEUE_DB_NAME, 1);
+    const req = indexedDB.open(UPLOAD_QUEUE_DB_NAME, UPLOAD_QUEUE_DB_VERSION);
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(UPLOAD_QUEUE_STORE)) {
         req.result.createObjectStore(UPLOAD_QUEUE_STORE, { keyPath: 'cardId' });
+      }
+      if (!req.result.objectStoreNames.contains(DATA_BACKUP_STORE)) {
+        req.result.createObjectStore(DATA_BACKUP_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -367,4 +376,50 @@ async function restoreUploadQueueOnLoad() {
     }
   });
   if (typeof updateDriveUploadButton === 'function') updateDriveUploadButton();
+}
+
+/* ---------------- オートセーブOFF中のローカルデータバックアップ(2026年9月追加) ---------------- */
+//
+// メディアのアップロードは既に完全手動化していたが、カードの位置・メモ編集などの
+// メタデータ(constellation-data.json全体)を保存するオートセーブは自動のままで、変更の
+// たびにサムネイル込みのJSON全体をDriveへ書き戻していた。これがモバイル通信量の実質的な
+// 主因と判明したため、オートセーブ自体にもON/OFFトグル(js/app.jsのhandleAutoSaveToggleClick())
+// を設け、OFF中はDriveへ送らずここ(IndexedDB)へだけ保存するようにした。
+//
+// **ブラウザを閉じるとメモリ上のstateは消えるため、OFF中の変更を保護する必要がある**
+// (アップロード待機列と同じ「成功していないのに確定的な状態遷移を行わない」という設計を
+// 踏襲: OFF中は「Driveへ送っていない」という状態を保ったまま、実データは必ずどこかに残す)。
+// 単一キー('latest')で1件だけを保持する単純な作りで、ONに切り替えた瞬間に
+// js/app.jsのhandleAutoSaveToggleClick()がDriveへ即座に保存し、成功すればclearLocalDataBackup()
+// で消す。次回起動時はonSignedIn()がDrive側のupdatedAtとこちらのupdatedAtを比較し、こちらの
+// 方が新しければ復元する(=Driveへ送れないまま終了したブラウザセッションがあった場合の保険)。
+
+function saveLocalDataBackup(data) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(DATA_BACKUP_STORE, 'readwrite');
+    tx.objectStore(DATA_BACKUP_STORE).put({ id: 'latest', data, updatedAt: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function loadLocalDataBackup() {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(DATA_BACKUP_STORE, 'readonly');
+    const req = tx.objectStore(DATA_BACKUP_STORE).get('latest');
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  })).catch((err) => {
+    console.error('ローカルバックアップの読み込みに失敗', err);
+    return null;
+  });
+}
+
+function clearLocalDataBackup() {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(DATA_BACKUP_STORE, 'readwrite');
+    tx.objectStore(DATA_BACKUP_STORE).delete('latest');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  })).catch(() => {});
 }

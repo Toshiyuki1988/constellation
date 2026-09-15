@@ -134,6 +134,13 @@ html, body {
   color: #06282c;
 }
 
+/* オートセーブ切り替えボタン(js/app.jsのhandleAutoSaveToggleClick()、2026年9月追加)。
+   ONの間だけ緑系にして、Driveへ自動送信中であることを一目で分かるようにする。 */
+#autosave-toggle-btn.autosave-toggle-btn--on {
+  background: rgba(110, 230, 150, 0.9);
+  color: #0a2c14;
+}
+
 /* コメント履歴モーダル(js/app.jsのopenCommentHistory()、2026年9月追加)。既存の.modal-overlay/
    .modalを流用しつつ、リスト部分だけ専用のスタイルを足す。 */
 .comment-history-modal { max-width: 460px; }

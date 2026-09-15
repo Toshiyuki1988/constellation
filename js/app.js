@@ -40,6 +40,11 @@ const state = {
   // グループビューイングモード(js/app.jsのgroupViewingTick())のコメント間隔(秒)。
   // js/modules/crews.jsのペルソナ管理パネルから設定できる。既定60秒。
   groupViewingIntervalSec: 60,
+  // オートセーブ(constellation-data.json全体のDrive自動保存)のON/OFF(2026年9月追加)。
+  // Driveへ送るかどうかだけを切り替える端末ローカルの設定のため、Driveへは保存せず
+  // localStorageに持つ(loadAutoSaveEnabledPref()参照)。既定はOFF(通信量節約を優先する
+  // 安全側、js/upload-queue.jsの通信種別自動判定撤去と同じ考え方)。
+  autoSaveEnabled: false,
 };
 
 const FIRST_YEAR = 2025;
@@ -90,6 +95,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (els.commentHistoryBtn) els.commentHistoryBtn.addEventListener('click', openCommentHistory);
   els.driveQuotaBtn = document.getElementById('drive-quota-btn');
   if (els.driveQuotaBtn) els.driveQuotaBtn.addEventListener('click', () => refreshDriveQuota());
+  els.autoSaveToggleBtn = document.getElementById('autosave-toggle-btn');
+  if (els.autoSaveToggleBtn) els.autoSaveToggleBtn.addEventListener('click', handleAutoSaveToggleClick);
+  state.autoSaveEnabled = loadAutoSaveEnabledPref();
+  updateAutoSaveToggleButton();
 
   initCanvas(els.viewport, els.content);
   initExtractRegionPicker();
@@ -411,6 +420,7 @@ function toggleAuthUI(signedIn) {
   els.toolSummary.disabled = !signedIn;
   els.toolStreetview.disabled = !signedIn;
   els.toolKeypad.disabled = !signedIn;
+  if (els.autoSaveToggleBtn) els.autoSaveToggleBtn.disabled = !signedIn;
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
@@ -631,8 +641,49 @@ async function refreshDriveQuota() {
 const AUTO_SAVE_DELAY_MS = 1200; // 連続した変更(タイピング等)をまとめて1回の保存にする
 let autoSaveTimer = null;
 let pendingSave = false; // まだDriveへ反映されていない変更があるか
-let saveInFlight = false; // handleSave()が今まさに実行中か
+let saveInFlight = false; // handleSave()/handleLocalBackupSave()が今まさに実行中か
 let saveQueued = false; // 実行中の保存が終わったら、最新stateでもう一度保存すべきか
+
+const AUTOSAVE_ENABLED_STORAGE_KEY = 'constellation-autosave-enabled';
+
+/** オートセーブON/OFFは端末ローカルの通信ポリシーなのでDriveへは保存せずlocalStorageに持つ。
+ *  読み取れない/未設定の場合は既定でOFF(通信量節約を優先する安全側)。 */
+function loadAutoSaveEnabledPref() {
+  try {
+    return localStorage.getItem(AUTOSAVE_ENABLED_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+function persistAutoSaveEnabledPref(enabled) {
+  try {
+    localStorage.setItem(AUTOSAVE_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
+  } catch (err) {
+    // localStorageが使えない環境でも致命的ではないため無視する
+  }
+}
+
+function updateAutoSaveToggleButton() {
+  const btn = els.autoSaveToggleBtn;
+  if (!btn) return;
+  btn.textContent = state.autoSaveEnabled ? '📡 オートセーブ: ON' : '📡 オートセーブ: OFF';
+  btn.classList.toggle('autosave-toggle-btn--on', state.autoSaveEnabled);
+  btn.title = state.autoSaveEnabled
+    ? 'ONの間、変更のたびにDriveへ自動保存します。タップでOFFにできます'
+    : 'OFFの間は端末内にのみ保存し、Driveへは送信しません。Wi-Fi接続時などにタップしてONにしてください';
+}
+
+function handleAutoSaveToggleClick() {
+  state.autoSaveEnabled = !state.autoSaveEnabled;
+  persistAutoSaveEnabledPref(state.autoSaveEnabled);
+  updateAutoSaveToggleButton();
+  if (state.autoSaveEnabled) {
+    // ONにした瞬間、それまで端末内にだけ溜まっていた変更を即座にDriveへ反映する
+    // (「☁ Driveへ送信」ボタンと同じ、ユーザーが明示的にONにした操作をきっかけに送る作法)。
+    saveImmediately();
+  }
+}
 
 function scheduleAutoSave() {
   if (!state.folderId) return; // サインイン前は何もしない
@@ -642,7 +693,7 @@ function scheduleAutoSave() {
 }
 
 /** デバウンスを待たず、今すぐ保存する(新規カード追加など、タブが閉じられる前に必ず
- *  Driveへ残しておきたい変更で使う)。 */
+ *  残しておきたい変更で使う)。 */
 function saveImmediately() {
   if (!state.folderId) return;
   pendingSave = true;
@@ -657,7 +708,13 @@ async function runScheduledSave() {
   }
   saveInFlight = true;
   try {
-    await handleSave();
+    // オートセーブOFF中はDriveへ送らず、端末内(IndexedDB)へのバックアップに留める
+    // (js/upload-queue.jsのsaveLocalDataBackup()参照、モバイル通信量節約のため2026年9月追加)。
+    if (state.autoSaveEnabled) {
+      await handleSave();
+    } else {
+      await handleLocalBackupSave();
+    }
   } finally {
     saveInFlight = false;
     if (saveQueued) {
@@ -693,8 +750,23 @@ async function onSignedIn() {
   try {
     state.folderId = await findOrCreateAppFolder();
     state.mediaFolderId = await findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId);
-    const { fileId, data } = await loadData(state.folderId);
+    const { fileId, data: driveData } = await loadData(state.folderId);
     state.fileId = fileId;
+    // オートセーブOFF中に端末内だけへ保存された変更(js/upload-queue.jsのsaveLocalDataBackup())が
+    // Drive側より新しければ、そちらを採用する(2026年9月追加。Driveへ送れないままブラウザが
+    // 閉じられた場合の保険)。
+    let data = driveData;
+    if (typeof loadLocalDataBackup === 'function') {
+      try {
+        const backup = await loadLocalDataBackup();
+        if (backup && backup.data && (backup.updatedAt || 0) > (driveData.updatedAt || 0)) {
+          data = backup.data;
+          setStatus('端末に残っていた未送信の変更を復元しました', { important: true });
+        }
+      } catch (err) {
+        console.error('ローカルバックアップの確認に失敗', err);
+      }
+    }
     state.cards = data.cards || [];
     state.sessions = data.sessions || [];
     state.connections = data.connections || [];
@@ -5216,26 +5288,52 @@ async function uploadCardFileInBackground(card, blob, filename, signal) {
   }
 }
 
+/** Driveへ保存するデータ本体。updatedAtは、オートセーブOFF中の端末内バックアップ
+ *  (js/upload-queue.jsのsaveLocalDataBackup())とDrive側のどちらが新しいか、次回起動時の
+ *  onSignedIn()が比較するために持たせている(2026年9月追加)。 */
+function collectSaveData() {
+  return {
+    cards: state.cards,
+    sessions: state.sessions,
+    connections: state.connections,
+    hiddenAutoLinks: state.hiddenAutoLinks,
+    exhibitionCalendarId: state.exhibitionCalendarId,
+    crews: state.crews,
+    commentHistory: state.commentHistory,
+    groupViewingIntervalSec: state.groupViewingIntervalSec,
+    feHistory: state.feHistory,
+    feHistoryIndex: state.feHistoryIndex,
+    breadcrumb: state.breadcrumb,
+    updatedAt: Date.now(),
+  };
+}
+
 async function handleSave() {
   setStatus('自動保存中…');
+  const data = collectSaveData();
   try {
-    state.fileId = await saveData(state.folderId, state.fileId, {
-      cards: state.cards,
-      sessions: state.sessions,
-      connections: state.connections,
-      hiddenAutoLinks: state.hiddenAutoLinks,
-      exhibitionCalendarId: state.exhibitionCalendarId,
-      crews: state.crews,
-      commentHistory: state.commentHistory,
-      groupViewingIntervalSec: state.groupViewingIntervalSec,
-      feHistory: state.feHistory,
-      feHistoryIndex: state.feHistoryIndex,
-      breadcrumb: state.breadcrumb,
-    });
+    state.fileId = await saveData(state.folderId, state.fileId, data);
+    if (typeof clearLocalDataBackup === 'function') clearLocalDataBackup();
     setStatus('自動保存しました');
   } catch (err) {
     console.error(err);
-    setStatus('自動保存に失敗しました(コンソールを確認)', { important: true });
+    // Driveへの送信自体が(オフライン等で)失敗しても変更を失わないよう、端末内バックアップへ
+    // 逃がしておく(2026年9月追加、オートセーブOFF中の保護と同じ仕組みを再利用する)。
+    if (typeof saveLocalDataBackup === 'function') await saveLocalDataBackup(data).catch(() => {});
+    setStatus('自動保存に失敗しました(端末に保持、コンソールを確認)', { important: true });
+  }
+}
+
+/** オートセーブOFF中の保存先。Driveへは一切送らず、IndexedDBへ現在のデータ全体を
+ *  バックアップするだけに留める(2026年9月追加)。 */
+async function handleLocalBackupSave() {
+  if (typeof saveLocalDataBackup !== 'function') return;
+  try {
+    await saveLocalDataBackup(collectSaveData());
+    setStatus('端末に保存しました(Drive未送信)');
+  } catch (err) {
+    console.error('ローカルバックアップの保存に失敗', err);
+    setStatus('端末への保存に失敗しました(コンソールを確認)', { important: true });
   }
 }
 
