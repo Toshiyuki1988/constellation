@@ -242,6 +242,12 @@ function ensureCameraDom() {
     wbLabel: document.getElementById('cam-wb-label'),
     autoShutterBtn: document.getElementById('cam-auto-shutter-btn'),
     autoShutterLabel: document.getElementById('cam-auto-shutter-label'),
+    liveCommentBtnPhoto: document.getElementById('cam-live-comment-btn-photo'),
+    liveCommentPanel: document.getElementById('cam-live-comment-panel'),
+    liveCommentAvatar: document.getElementById('cam-live-comment-avatar'),
+    liveCommentName: document.getElementById('cam-live-comment-name'),
+    liveCommentText: document.getElementById('cam-live-comment-text'),
+    liveCommentClose: document.getElementById('cam-live-comment-close'),
 
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
@@ -303,6 +309,8 @@ function wireCameraEvents() {
   wireCamZoomSlider(camEls.photoScreen, camEls.videoPhoto, camEls.zoomBadgePhoto);
   wireCameraControls();
   wireAutoShutterButton();
+  if (camEls.liveCommentBtnPhoto) camEls.liveCommentBtnPhoto.addEventListener('click', handleLiveComment);
+  if (camEls.liveCommentClose) camEls.liveCommentClose.addEventListener('click', hideLiveComment);
 
   // 写真モードのピンチズームは2026年9月に撤去した(誤タップ防止のユーザー方針)。円形Eclipse
   // ガイドの2本指長押しジェスチャー(トーチ点灯)と指の本数が競合するため、常時表示のズーム
@@ -724,6 +732,7 @@ function teardownModeExtras() {
   // フラッシュ撮影を避けたいというユーザー方針、本ファイル上部の既存の注記を参照)。
   if (camTorchOn) setTorch(false);
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
+  hideLiveComment(); // モードを抜ける/カメラを閉じるたび、前回の結果パネルも片付ける(2026年9月追加)
 }
 
 function updateScreenVisibility() {
@@ -979,14 +988,16 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
 
   function showDefault() {
     ratioIndex = 0;
-    symmetric = false;
+    symmetric = true; // 2026年9月: 既定を対称リサイズに変更(ユーザー要望)
     turnOffTorchIfOn(); // 前回開いた時に点けっぱなしのままになっていないよう、毎回念のため
     applyShapeAndChips();
-    if (symmetryBtn) { symmetryBtn.classList.remove('active'); symmetryBtn.textContent = '非対称'; }
-    const bounds = sizeBoundsForRatio(currentRatio(), false); // 毎回、横長(非回転)の既定姿勢に戻す
+    if (symmetryBtn) { symmetryBtn.classList.add('active'); symmetryBtn.textContent = '対称'; }
+    // 2026年9月: 既定の向きを横長→縦型に、既定サイズを画面いっぱいに近い大きめのサイズに変更
+    // (ユーザー要望)。bounds.maxは既に画面の94%以内に収まる上限なので、そのまま使えばよい。
+    const bounds = sizeBoundsForRatio(currentRatio(), true); // 毎回、縦型(portrait)の既定姿勢に戻す
     const rect = screenEl.getBoundingClientRect();
-    const w = Math.min(bounds.max, Math.max(bounds.min, rect.width * 0.62));
-    const h = w / currentRatio();
+    const h = bounds.max;
+    const w = h / currentRatio();
     applyRect((rect.width - w) / 2, (rect.height - h) / 2, w, h, rect.width, rect.height);
     eclipseEl.classList.add('visible', 'appearing');
     setTimeout(() => eclipseEl.classList.remove('appearing'), 200);
@@ -994,6 +1005,9 @@ function wireEclipseGuide(screenEl, eclipseEl, toggleBtn, videoEl, zoomBadgeEl) 
     if (toggleBtn) toggleBtn.classList.add('active');
     syncSizeSliderThumb();
     playEclipseOpen();
+    // 2026年9月: 既定でカメラズームも最大にする(ユーザー要望)。その時点で分かっている
+    // ネイティブ/デジタルズームの上限まで、setCamZoom()自身が安全にクランプしてくれる。
+    setCamZoom(maxZoomForCurrentTrack(), videoEl, zoomBadgeEl);
   }
   function hide() {
     eclipseEl.classList.remove('visible');
@@ -1568,6 +1582,79 @@ async function capturePhoto() {
     console.error(err);
     showCameraError('撮影に失敗しました');
     camEls.shutterPhoto.disabled = false;
+  }
+}
+
+/* ---------------- ライブコメント(2026年9月追加) ----------------
+ * 「見えているが撮影するほどでもないもの」に、その場でGeminiが一言コメントする機能。
+ * ユーザーが質問するのではなく逆に、座談会・コメントカードと同じ顔ぶれ(js/app.jsの
+ * buildRoundtableParticipants())からランダムに選んだ1人が、今プレビューに映っている
+ * フレームを見て自発的につぶやく、という向き。撮影・カード化は一切行わず、フレームは
+ * 使い捨て(保存しない)。無料枠(1日250)を消費するため、自動化はせず必ずこのボタンでの
+ * 明示的な手動トリガーのみにしている。参加者選定・プロンプト組み立てはjs/app.jsの
+ * pickRandomPersona()/fetchLiveSceneComment()(座談会・コメントカードと同じ共通関数を
+ * 再利用)に任せ、camera.js側はフレームの切り出しと結果パネルの表示だけを担当する。 */
+let liveCommentHideTimer = null;
+
+function showLiveCommentThinking(persona) {
+  if (!camEls.liveCommentPanel) return;
+  camEls.liveCommentAvatar.textContent = persona.avatar || '👤';
+  camEls.liveCommentName.textContent = persona.name || '';
+  camEls.liveCommentText.textContent = '考え中…';
+  camEls.liveCommentPanel.classList.add('show', 'thinking');
+  clearTimeout(liveCommentHideTimer);
+}
+
+function showLiveCommentResult(persona, text) {
+  if (!camEls.liveCommentPanel) return;
+  camEls.liveCommentAvatar.textContent = persona.avatar || '👤';
+  camEls.liveCommentName.textContent = persona.name || '';
+  camEls.liveCommentText.textContent = text;
+  camEls.liveCommentPanel.classList.remove('thinking');
+  camEls.liveCommentPanel.classList.add('show');
+  if (typeof playChatReplySound === 'function') playChatReplySound(); // 座談会の自動返信と同じ「シュコッ」
+  clearTimeout(liveCommentHideTimer);
+  liveCommentHideTimer = setTimeout(hideLiveComment, 10000);
+}
+
+function showLiveCommentError(message) {
+  if (!camEls.liveCommentPanel) return;
+  camEls.liveCommentAvatar.textContent = '⚠';
+  camEls.liveCommentName.textContent = '';
+  camEls.liveCommentText.textContent = message;
+  camEls.liveCommentPanel.classList.remove('thinking');
+  camEls.liveCommentPanel.classList.add('show');
+  clearTimeout(liveCommentHideTimer);
+  liveCommentHideTimer = setTimeout(hideLiveComment, 6000);
+}
+
+function hideLiveComment() {
+  clearTimeout(liveCommentHideTimer);
+  if (camEls && camEls.liveCommentPanel) camEls.liveCommentPanel.classList.remove('show', 'thinking');
+}
+
+async function handleLiveComment() {
+  if (!camStream || !camEls.videoPhoto.videoWidth) return;
+  if (camEls.liveCommentBtnPhoto.disabled) return;
+  if (typeof window.pickRandomPersona !== 'function' || typeof window.fetchLiveSceneComment !== 'function') {
+    showLiveCommentError('コメント機能の準備ができていません');
+    return;
+  }
+  const persona = window.pickRandomPersona();
+  camEls.liveCommentBtnPhoto.disabled = true;
+  showLiveCommentThinking(persona);
+  try {
+    const canvas = captureFrameToCanvas(camEls.videoPhoto, 900, currentDigitalZoomForCapture());
+    const blob = await canvasToBlob(canvas, 0.82);
+    const base64 = await blobToBase64(blob);
+    const text = await window.fetchLiveSceneComment(persona, base64, 'image/jpeg');
+    showLiveCommentResult(persona, text || '(…特に言うことがないようです)');
+  } catch (err) {
+    console.error(err);
+    camDebugLog(`ライブコメント失敗: ${err && err.message ? err.message : err}`);
+    showLiveCommentError(`コメントの取得に失敗しました: ${err && err.message ? err.message : err}`);
+  } finally {
+    camEls.liveCommentBtnPhoto.disabled = false;
   }
 }
 

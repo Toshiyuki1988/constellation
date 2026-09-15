@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260915a">
-<link rel="stylesheet" href="css/camera.css?v=20260915e">
+<link rel="stylesheet" href="css/camera.css?v=20260915f">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -181,6 +181,22 @@
           <button class="cam-control-btn cam-control-btn--text" id="cam-wb-btn" type="button" title="ホワイトバランス" hidden>WB</button>
           <span class="cam-control-label" id="cam-wb-label" hidden>オート</span>
         </div>
+      </div>
+      <!-- ライブコメント(2026年9月追加): ユーザーが質問するのではなく逆に、今カメラに映っている
+           けれど撮影するほどでもないものへ、Gemini(ランダムに選んだ座談会の顔ぶれの1人)が
+           その場で一言コメントする機能。撮影・カード化は一切行わず、フレームは使い捨て
+           (js/camera.jsのhandleLiveComment()、js/app.jsのfetchLiveSceneComment()参照)。
+           無料枠(1日250)を消費するため自動化はせず、必ずこのボタンでの明示的な手動トリガーのみ。 -->
+      <button class="cam-live-comment-btn" id="cam-live-comment-btn-photo" type="button" title="今見えているものにコメントをもらう">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9A1.5 1.5 0 0 1 18.5 16H9l-4 3.5V16H5.5A1.5 1.5 0 0 1 4 14.5v-9Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="cam-live-comment" id="cam-live-comment-panel">
+        <div class="cam-live-comment-avatar" id="cam-live-comment-avatar"></div>
+        <div class="cam-live-comment-body">
+          <div class="cam-live-comment-name" id="cam-live-comment-name"></div>
+          <div class="cam-live-comment-text" id="cam-live-comment-text"></div>
+        </div>
+        <button class="cam-live-comment-close" id="cam-live-comment-close" type="button" title="閉じる">✕</button>
       </div>
       <!-- Eclipse(2026年9月追加、同月中にビジュアル刷新): 位置合わせ用の矩形。撮影結果には
            一切影響しない見た目の目安専用(js/camera.jsのwireEclipseGuide()参照)。ダブルタップでも
@@ -405,11 +421,11 @@
   <script src="js/upload-queue.js?v=20260915a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260911e"></script>
-  <script src="js/camera.js?v=20260915d"></script>
+  <script src="js/camera.js?v=20260915f"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260915a"></script>
+  <script src="js/app.js?v=20260915b"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260914b"></script>

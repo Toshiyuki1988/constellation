@@ -3215,6 +3215,31 @@ async function fetchPersonaCommentOnCard(persona, targetCard) {
   return raw.trim();
 }
 
+/* ---------------- カメラのライブコメント(2026年9月追加) ----------------
+ * 「見えているが撮影するほどでもないもの」に、その場でGeminiが一言コメントする機能
+ * (js/camera.jsのhandleLiveComment()から呼ばれる)。撮影・カード化・履歴保存は一切行わず、
+ * フレームは使い捨て。参加者はbuildRoundtableParticipants()(座談会・コメントカードと
+ * 同じBoy/Professor/Gemini+ONのCrews)からランダムに1人選ぶ(聞く相手を毎回選ばせると
+ * 展覧会場でのテンポを乱すため)。camera.jsはDOMを持たないこのファイルの関数を直接呼べない
+ * 読み込み順(camera.js→app.js)のため、windowへ明示的に公開している。
+ */
+function pickRandomPersona() {
+  const participants = buildRoundtableParticipants();
+  return participants[Math.floor(Math.random() * participants.length)];
+}
+window.pickRandomPersona = pickRandomPersona;
+
+window.fetchLiveSceneComment = async function fetchLiveSceneComment(persona, base64, mimeType) {
+  const styleInstruction = personaStyleInstruction(persona);
+  const prompt =
+    `${styleInstruction ? `${styleInstruction}\n\n` : ''}` +
+    '今カメラに映っているものを見て、一言だけ感想やつぶやきを返してください。展覧会場で今まさに' +
+    '目にしているものについての、その場の即興のつぶやきです。前置き・名乗りは書かず、1文だけの' +
+    '短いつぶやきにしてください。';
+  const raw = await askGemini({ prompt, images: [{ base64, mimeType }] });
+  return raw.trim();
+};
+
 /**
  * アプリ起動時に1日1回、全セッション・全カードからランダムに1枚選び、ランダムなONの
  * Crewsペルソナにコメントさせて、ASTR接続済みの新規コメントカードとして残す。
