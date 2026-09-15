@@ -774,6 +774,7 @@ async function onSignedIn() {
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
     if (window.migrateLegacyCrews) window.migrateLegacyCrews(); // 旧【人物情報】【その言葉】形式からConstellation形式への一度きりの移行
+    state.almagestEntries = data.almagestEntries || []; // Almagest(書物モジュール)、2026年9月追加
     state.commentHistory = data.commentHistory || [];
     state.groupViewingIntervalSec = typeof data.groupViewingIntervalSec === 'number' ? data.groupViewingIntervalSec : 60;
     if (data.feHistory) {
@@ -1113,6 +1114,9 @@ function redrawAsterismLines() {
       // 混み合うため。手動のASTR接続(編集ガイド)は「何かに使えるかもしれない」という
       // ユーザー判断で引き続き持たせている。
       c.mediaType !== 'imaginary' &&
+      // Almagest(書物モジュール)の参照カード(2026年9月追加)。書庫エントリへの「参照」であり
+      // 見た順で自動的に繋がるべき一次記録ではないため、Info/Summary/Comment等と同様に除外する。
+      c.mediaType !== 'book' &&
       !c.summarySourceId
   );
 
@@ -1280,6 +1284,13 @@ function editGuideHexHtml(mediaType) {
     // 受け、押すとこのカード自体を座談会カード(mediaType:'chat')へ変換する
     // (handleCommentReply()参照)。
     return hex('reply', 'Reply') + hex('edit', 'Edit') + hex('delete', 'Delete');
+  }
+  // Almagest(書物モジュール)の書庫エントリをセッションのキャンバスへ「参照」として置いた
+  // カード(mediaType:'book'、2026年9月追加)。本文自体はコピーせずcard.almagestEntryIdだけを
+  // 持つ軽量な参照カードのため、Caption/Edit/Captionは不要。ASTRで他のカードと手動接続でき、
+  // Depthで意図的にぼかせる。Almagestは元の書庫エントリの読書ビューへジャンプする専用アクション。
+  if (mediaType === 'book') {
+    return astrHex + hex('depth', 'Depth') + hex('delete', 'Delete') + hex('almagest', '📖 Almagest');
   }
   // イマジナリーカード(Star Pencil、2026年9月追加)は「ドロー以外透過」で、キャプション・
   // メモ欄を持たないためCaption/Editは不要。ASTRで他のカードと手動接続でき、Depthで
@@ -1462,6 +1473,7 @@ function renderCard(card) {
   const isChatCard = mediaType === 'chat';
   const isCommentCard = mediaType === 'comment';
   const isImaginaryCard = mediaType === 'imaginary'; // Star Pencil、2026年9月追加
+  const isBookCard = mediaType === 'book'; // Almagest(書物モジュール)、2026年9月追加
   // テクストカードは常時展開、それ以外はキャプション/メモが入るまでメモ欄を隠しておく
   const hasMemo = isTextCard || Boolean(card.memo);
   const el = document.createElement('div');
@@ -1475,6 +1487,7 @@ function renderCard(card) {
     (isChatCard ? ' star-card--chat' : '') +
     (isImaginaryCard ? ' star-card--imaginary' : '') +
     (isCommentCard ? ' star-card--comment' : '') +
+    (isBookCard ? ' star-card--book' : '') +
     (card.crewPersonaId ? ' star-card--crew' : ''); // Crewsが生成したテクストカードは水色グラスモーフで区別
   el.dataset.id = card.id;
   el.dataset.x = String(card.x);
@@ -1522,6 +1535,10 @@ function renderCard(card) {
     // 実際のHTML生成(SVG+編集ガイド)はモジュール側(js/modules/star-pencil.js)が担う。
     // Mapping Storys/Astrometry Scopeと同じ「統合ポイントは薄いフックのみ」というパターン。
     el.innerHTML = window.imaginaryCardInnerHtml ? window.imaginaryCardInnerHtml(card) : '';
+  } else if (isBookCard) {
+    // Almagest(js/modules/almagest.js)の書庫エントリを「参照」として置いたカード。
+    // 実際のHTML生成(表紙/タイトル+編集ガイド)はモジュール側が担う(同上のパターン)。
+    el.innerHTML = window.almagestBookCardInnerHtml ? window.almagestBookCardInnerHtml(card) : '';
   } else {
     const crewHeadHtml = card.crewPersonaId
       ? `<div class="star-card-crew-head">
@@ -1643,8 +1660,12 @@ function renderCard(card) {
         // Star Pencil本体はモジュール(js/modules/star-pencil.js)側の実装。ここでは
         // 起動フックを呼ぶだけ(Astrometry Scopeのscopeと同じ、window越しの薄い統合)。
         if (window.openStarPencilForCard) window.openStarPencilForCard(card);
+      } else if (action === 'almagest') {
+        // Almagest本体はモジュール(js/modules/almagest.js)側の実装。元の書庫エントリの
+        // 読書ビューへジャンプするだけの起動フック(scope/drawと同じ、window越しの薄い統合)。
+        if (window.jumpToAlmagestEntry) window.jumpToAlmagestEntry(card.almagestEntryId);
       }
-      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply' && action !== 'scope' && action !== 'draw') scheduleAutoSave();
+      if (action !== 'astr' && action !== 'title' && action !== 'toggle' && action !== 'extract' && action !== 'summon' && action !== 'comment' && action !== 'reply' && action !== 'scope' && action !== 'draw' && action !== 'almagest') scheduleAutoSave();
     });
   });
 
@@ -2279,6 +2300,18 @@ function collectSessionTextContext(sessionId, sources, depth = 0) {
         if (nested) lines.push(nested);
       } else if (c.mediaType === 'summary' || c.summarySourceId) {
         // 要約カード自身と、過去に要約から生成されたテクストカードは参照しない
+      } else if (c.mediaType === 'book') {
+        // Almagest(書物モジュール)の参照カード(2026年9月追加)。カード自身は本文を
+        // 持たない(card.almagestEntryIdで参照するだけ)ため、window.getAlmagestEntryById()で
+        // 実体を引き当て、タイトル+本文冒頭だけを短く混ぜ込む(全文を混ぜると要約の文脈が
+        // 薄まるため、Mapping Storysの伝承欄と同様スニペットに留める)。参照先が削除済みなら
+        // 何も足さない。
+        const entry = window.getAlmagestEntryById ? window.getAlmagestEntryById(c.almagestEntryId) : null;
+        if (entry) {
+          const snippet = entry.bodyText ? entry.bodyText.trim().slice(0, 200) : '';
+          sources.push(c.id);
+          lines.push(`${indent}- [出典${sources.length}][Almagest]『${entry.title || '(無題)'}』${snippet}`);
+        }
       } else if (c.memo && c.memo.trim()) {
         const label = c.mediaType === 'text' ? 'テキスト' : c.mediaType === 'info' ? 'インフォ' : c.mediaType === 'comment' ? 'コメント' : 'キャプション/メモ';
         sources.push(c.id);
@@ -5322,6 +5355,7 @@ function collectSaveData() {
     hiddenAutoLinks: state.hiddenAutoLinks,
     exhibitionCalendarId: state.exhibitionCalendarId,
     crews: state.crews,
+    almagestEntries: state.almagestEntries,
     commentHistory: state.commentHistory,
     groupViewingIntervalSec: state.groupViewingIntervalSec,
     feHistory: state.feHistory,

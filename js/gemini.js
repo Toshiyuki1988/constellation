@@ -249,6 +249,28 @@ async function summarizeSession({ context, mode, persona, direction, images }) {
   return { answer: cleaned, mostRelevantSource: null };
 }
 
+/**
+ * Almagest(書物モジュール、js/modules/almagest.js)の書庫エントリの本文を、Boy(やさしく)/
+ * Professor(学術的)の口調で要約する。summarizeSession()と同じ口調プリセットを流用するが、
+ * 対象は展覧会セッションではなく1冊の本文そのものなので、セッション固有の仕組み([出典N]タグ・
+ * mostRelevantSourceによる自動ASTR接続・「展覧会」という前提)は持たない、テンプレート無しの
+ * 単純な1回のGemini呼び出し。
+ * @param {{text: string, mode: 'education'|'academic'}} params
+ * @returns {Promise<string>}
+ */
+async function summarizeAlmagestText({ text, mode }) {
+  const styleInstruction = mode === 'education'
+    ? '小学生・中学生にも分かるように、やさしい言葉と短い文で説明してください。専門用語はできるだけ避け、使う場合は簡単な説明を添えてください。'
+    : '学術的な文体で、批評・美術史的な視点を踏まえて記述してください。必要に応じて専門用語を使って構いません。';
+  const prompt =
+    '以下は書物・記事などの本文です。この内容を噛み砕いて要約してください。\n\n' +
+    `${text}\n\n` +
+    `${styleInstruction}\n` +
+    '前置き・見出し・箇条書き記号は使わず、自然な文章で200〜400字程度にまとめてください。';
+  const raw = await askGemini({ prompt });
+  return raw.trim();
+}
+
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

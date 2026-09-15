@@ -800,6 +800,11 @@ html, body {
    (imaginaryカードはcaption/edit/titleを持たないため衝突しない)。 */
 .star-card-hex--draw { left: 0; top: 22%; transform: translate(-115%, -50%); }
 .star-card-hex-strut--draw { right: -20px; top: 50%; transform: translateY(-50%); }
+
+/* Almagest(書物モジュール、2026年9月追加): bookカードはCaption/Edit/Titleを持たないため、
+   その位置(左辺・下寄り、edit相当)がそのまま空いている。そこを流用する。 */
+.star-card-hex--almagest { left: 0; top: 78%; transform: translate(-115%, -50%); }
+.star-card-hex-strut--almagest { right: -20px; top: 50%; transform: translateY(-50%); }
 /* Comment(2026年9月にimaginaryカードでも対応): 全カード種別共通の.star-card-hex--comment
    (左辺・縦中央)の位置指定をそのまま使う。Draw(左辺・上寄り)とは別位置のため衝突しない。
    以前はimaginaryカードに限定した専用位置(下寄り)を持っていたが、上記の全カード共通の
@@ -1923,6 +1928,26 @@ html, body {
   font-size: 11px;
   color: #083338;
 }
+
+/* ---------- Almagest: 書庫エントリの参照カード(mediaType:'book'、2026年9月追加) ----------
+   本体アプリの白カード意匠はそのまま、金色アクセントのヘッダーだけ乗せて出自を示す
+   (Crewsのテクストカードが水色グラスモーフで区別されるのと同じ作法)。カード自体は
+   card.almagestEntryIdで書庫エントリを「参照」するだけで、本文を複製しない。 */
+.star-card--book { border-color: rgba(201, 162, 39, 0.55); }
+.star-card-book-head {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+  padding-bottom: 7px; border-bottom: 1px solid rgba(201, 162, 39, 0.4);
+}
+.star-card-book-icon { font-size: 14px; flex: none; }
+.star-card-book-label {
+  font-family: var(--mono); font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: #8a6d10;
+}
+.star-card-book-cover {
+  width: 100%; max-height: 80px; object-fit: cover; border-radius: 6px; margin-bottom: 7px; display: block;
+}
+.star-card-book-title { font-family: var(--sans); font-weight: 700; font-size: 12px; line-height: 1.4; }
+.star-card-book-missing { font-family: var(--mono); font-size: 10px; color: var(--muted); font-style: italic; }
 
 /* WormGateのジャンプ着地演出と同じ視覚言語(緑のリング)を、こちらは基本機能側で独自に持つ */
 .star-card--landed {
