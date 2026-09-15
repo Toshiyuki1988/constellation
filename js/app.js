@@ -3,6 +3,9 @@
 const state = {
   folderId: null,
   fileId: null,
+  // Almagest(書物モジュール)専用のDriveファイル(almagest-library.json)のID。
+  // 2026年9月、書庫データをメインのconstellation-data.jsonから独立させた際に追加。
+  almagestFileId: null,
   // メディア(画像・動画・音声)の入れ子フォルダのルート(Constellation/media)。
   // 実際のアップロード先は resolveSessionMediaFolderId() が年/セッションごとのサブフォルダを解決する。
   mediaFolderId: null,
@@ -774,7 +777,15 @@ async function onSignedIn() {
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
     if (window.migrateLegacyCrews) window.migrateLegacyCrews(); // 旧【人物情報】【その言葉】形式からConstellation形式への一度きりの移行
-    state.almagestEntries = data.almagestEntries || []; // Almagest(書物モジュール)、2026年9月追加
+    // Almagest(書物モジュール)、2026年9月追加。書庫データは専用のDriveファイル
+    // (almagest-library.json)を持つため、メインのconstellation-data.jsonからは独立して
+    // 読み込む(window.initAlmagestData()、js/modules/almagest.js参照)。
+    // data.almagestEntriesは旧形式(メインJSONへ埋め込んでいた頃の名残)の一度きりの移行元として渡す。
+    if (window.initAlmagestData) {
+      await window.initAlmagestData(data.almagestEntries);
+    } else {
+      state.almagestEntries = data.almagestEntries || [];
+    }
     state.commentHistory = data.commentHistory || [];
     state.groupViewingIntervalSec = typeof data.groupViewingIntervalSec === 'number' ? data.groupViewingIntervalSec : 60;
     if (data.feHistory) {
@@ -2552,6 +2563,36 @@ function createChatCard(summaryCard, question) {
   return card;
 }
 
+/**
+ * Almagest(書物モジュール、js/modules/almagest.js)の読書ビュー「🗣 読書会をひらく」から
+ * 呼ばれる。座談会(createChatCard())と全く同じ仕組みのチャットカード(mediaType:'chat')を、
+ * 今アクティブなセッションのキャンバスへ生成する(セッションのサマリーカードに紐付かないため、
+ * 位置はnewCardSpawnPos()、sessionIdはactiveSessionId()を使う点だけが異なる)。
+ * card.almagestEntryIdを持たせておくことで、fetchChatReply()がセッション文脈の代わりに
+ * この本の内容を会話の文脈として使う(chatCardInnerHtml()のヘッダー表示の分岐にも使う)。
+ */
+function createBookChatCard(entryId) {
+  const spawnPos = newCardSpawnPos();
+  const card = {
+    id: crypto.randomUUID(),
+    x: spawnPos.x,
+    y: spawnPos.y,
+    width: 320,
+    height: 360,
+    mediaType: 'chat',
+    sessionId: activeSessionId(),
+    almagestEntryId: entryId,
+    chatParticipants: buildRoundtableParticipants(),
+    chatMessages: [],
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  renderCard(card);
+  redrawAsterismLines();
+  scheduleAutoSave();
+  return card;
+}
+
 /** 1件ぶんのメッセージ(質問 or 発言)をHTMLへ。初期描画・カスケード中の逐次追加の両方で使う。 */
 function chatMessageHtml(m) {
   if (m.type === 'question') {
@@ -2581,13 +2622,18 @@ function chatTargetOptionsHtml(card) {
 }
 
 function chatCardInnerHtml(card) {
-  const session = getSessionById(card.sessionId);
+  // Almagest(書物モジュール)の「読書会」チャットカードは、セッションではなく本の内容が
+  // 話題のため、ヘッダーの見出しを本のタイトルへ差し替える(2026年9月追加)。
+  const bookEntry = card.almagestEntryId && window.getAlmagestEntryById ? window.getAlmagestEntryById(card.almagestEntryId) : null;
+  const headLabel = card.almagestEntryId
+    ? `📖 読書会 — ${escapeHtml(bookEntry ? (bookEntry.title || '(無題)') : '(書庫から削除されました)')}`
+    : (() => { const session = getSessionById(card.sessionId); return `座談会 — ${escapeHtml(session ? session.name : '(不明)')}`; })();
   const messages = card.chatMessages || [];
   const logHtml = messages.length
     ? messages.map((m) => chatMessageHtml(m)).join('')
     : '<p class="star-card-chat-empty">まだ発言はありません。質問を送ってみましょう。</p>';
   return `
-    <p class="star-card-chat-head"><span class="dot"></span>座談会 — ${escapeHtml(session ? session.name : '(不明)')}</p>
+    <p class="star-card-chat-head"><span class="dot"></span>${headLabel}</p>
     <div class="star-card-chat-log">${logHtml}</div>
     <div class="star-card-chat-attach-preview" hidden>
       <img class="star-card-chat-attach-thumb" alt="">
@@ -2855,7 +2901,14 @@ function personaStyleInstruction(p) {
  * 質問がまだ無い(通常のつぶやき合いの段階)場合は、従来通りの「賛成・反論・補足」の指示のみ。
  */
 async function fetchChatReply(card, speaker, messages, imageParts) {
-  const sessionContext = collectSessionTextContext(card.sessionId, []);
+  // Almagest(書物モジュール)の「読書会」チャットカードは、セッションの記録ではなく本の
+  // 内容そのものを会話の文脈として渡す(2026年9月追加、card.almagestEntryIdの有無で分岐)。
+  const isBookChat = Boolean(card.almagestEntryId);
+  const sessionContext = isBookChat
+    ? (window.buildAlmagestChatContext ? window.buildAlmagestChatContext(card.almagestEntryId) : '(この書物は書庫から削除されています)')
+    : collectSessionTextContext(card.sessionId, []);
+  const contextIntro = isBookChat ? '以下はある書物の内容です:' : '以下はある美術展覧会・セッションの記録です:';
+  const gatheringLabel = isBookChat ? 'これは1冊の本を巡って複数の立場が一言ずつ感想・意見を交わす読書会のチャットです。' : 'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。';
   const transcriptText = messages
     .map((m) => (m.type === 'question' ? `[質問] ${m.text}` : `[${m.name}] ${m.text}`))
     .join('\n');
@@ -2865,8 +2918,8 @@ async function fetchChatReply(card, speaker, messages, imageParts) {
     ? `直近の質問「${lastQuestion.text}」に対して、まずあなた自身の答え・考えを直接述べてください。他の参加者の発言を踏まえて賛成・反論・補足を加えても構いませんが、質問への回答から外れた独り言にはしないでください。`
     : '直前までの発言を踏まえて構いません(賛成・反論・補足など)。';
   const prompt =
-    `以下はある美術展覧会・セッションの記録です:\n${sessionContext}\n\n` +
-    'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。ここまでの発言:\n' +
+    `${contextIntro}\n${sessionContext}\n\n` +
+    `${gatheringLabel}ここまでの発言:\n` +
     `${transcriptText || '(まだ発言はありません)'}\n\n` +
     `あなたは次の話者「${speaker.name}」です。${styleInstruction}\n` +
     `${responseInstruction} 前置き・名乗りは書かず、1〜2文の短い一言だけを返してください。`;
@@ -5355,7 +5408,9 @@ function collectSaveData() {
     hiddenAutoLinks: state.hiddenAutoLinks,
     exhibitionCalendarId: state.exhibitionCalendarId,
     crews: state.crews,
-    almagestEntries: state.almagestEntries,
+    // almagestEntriesはここには含めない(2026年9月〜): Almagestは専用のDriveファイル
+    // (almagest-library.json)へ変更のたびに即座に保存するようになったため、オートセーブの
+    // ON/OFF・デバウンスの影響を受けるこのメインファイルには含めない(js/modules/almagest.js参照)。
     commentHistory: state.commentHistory,
     groupViewingIntervalSec: state.groupViewingIntervalSec,
     feHistory: state.feHistory,

@@ -117,10 +117,41 @@ async function loadData(folderId) {
  * @returns {Promise<string>} 保存後のファイルID
  */
 async function saveData(folderId, fileId, data) {
+  return saveNamedData(folderId, fileId, data, CONFIG.DATA_FILE_NAME);
+}
+
+/**
+ * 任意のファイル名でJSONを探す(APP_FOLDER_NAME直下)。saveData/loadDataが暗黙に
+ * CONFIG.DATA_FILE_NAME(constellation-data.json)を対象にしているのに対し、こちらは
+ * Almagest(書物モジュール)専用の別ファイル(almagest-library.json)のように、メインの
+ * データファイルとは独立して読み書きしたいものに使う(2026年9月追加)。
+ */
+async function findFileByName(folderId, fileName) {
+  const q = encodeURIComponent(
+    `name='${fileName}' and '${folderId}' in parents and trashed=false`
+  );
+  const res = await driveFetch(`/files?q=${q}&fields=files(id,name)`);
+  const { files } = await res.json();
+  return files && files[0] ? files[0].id : null;
+}
+
+/** loadData()の汎用版。ファイルが無ければ{fileId:null, data:null}を返す(呼び出し側で
+ *  初期値・移行処理を判断できるよう、loadData()のような既定値は持たせない)。 */
+async function loadNamedData(folderId, fileName) {
+  const fileId = await findFileByName(folderId, fileName);
+  if (!fileId) return { fileId: null, data: null };
+  const res = await driveFetch(`/files/${fileId}?alt=media`);
+  const data = await res.json();
+  return { fileId, data };
+}
+
+/** saveData()の汎用版。任意のファイル名でJSONを作成/上書き保存する。
+ *  @returns {Promise<string>} 保存後のファイルID */
+async function saveNamedData(folderId, fileId, data, fileName) {
   const token = await ensureAccessToken();
   const metadata = fileId
-    ? { name: CONFIG.DATA_FILE_NAME }
-    : { name: CONFIG.DATA_FILE_NAME, parents: [folderId] };
+    ? { name: fileName }
+    : { name: fileName, parents: [folderId] };
 
   const boundary = 'constellation-boundary';
   const body =

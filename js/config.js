@@ -37,6 +37,12 @@ const CONFIG = {
   // 全カード情報をまとめて保存する JSON ファイル名(APP_FOLDER_NAME直下、メディアとは別置き)
   DATA_FILE_NAME: 'constellation-data.json',
 
+  // Almagest(書物モジュール)の書庫データ専用のJSONファイル名(2026年9月追加)。
+  // メインのDATA_FILE_NAMEに埋め込むと、オートセーブOFF既定(端末内にしか保存されない)の
+  // 影響を受けて登録した本が他端末へ同期されない・端末ローカルにしか残らないという実機不具合が
+  // あったため、独立したファイルとして常にDriveへ即時保存する(js/modules/almagest.js参照)。
+  ALMAGEST_FILE_NAME: 'almagest-library.json',
+
   // メディア(画像・動画・音声)を置くフォルダ名(APP_FOLDER_NAME直下)。
   // この下に「年セッション名/セッション名/.../ファイル」という入れ子構造でアップロードする。
   MEDIA_FOLDER_NAME: 'media',

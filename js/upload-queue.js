@@ -36,7 +36,12 @@ const UPLOAD_QUEUE_STORE = 'pending';
 // 引き継ぐ(onupgradeneededは既存store作成済みならスキップする作りのため、既存ユーザーの
 // 待機列データも失われない)。
 const DATA_BACKUP_STORE = 'dataBackup';
-const UPLOAD_QUEUE_DB_VERSION = 2;
+// Almagest(書物モジュール)のオフライン閲覧・未送信保護用の端末内キャッシュ(2026年9月追加、
+// 下記「Almagestのローカルキャッシュ」セクション参照)。DBバージョンを3へ上げるが、
+// onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーのpending/dataBackupは
+// 引き続き無事。
+const ALMAGEST_CACHE_STORE = 'almagestCache';
+const UPLOAD_QUEUE_DB_VERSION = 3;
 const UPLOAD_QUEUE_CONCURRENCY = 2;
 
 let uploadQueueDbPromise = null;
@@ -57,6 +62,9 @@ function openUploadQueueDb() {
       }
       if (!req.result.objectStoreNames.contains(DATA_BACKUP_STORE)) {
         req.result.createObjectStore(DATA_BACKUP_STORE, { keyPath: 'id' });
+      }
+      if (!req.result.objectStoreNames.contains(ALMAGEST_CACHE_STORE)) {
+        req.result.createObjectStore(ALMAGEST_CACHE_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -422,4 +430,37 @@ function clearLocalDataBackup() {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   })).catch(() => {});
+}
+
+/* ---------------- Almagest(書物モジュール)のローカルキャッシュ(2026年9月追加) ----------------
+ * 書庫データ(state.almagestEntries)は専用のDriveファイル(almagest-library.json)へ変更の
+ * たびに即座に保存する設計にしたが(上記のオートセーブOFF/ONの影響を受けない、常に同期される
+ * ようにするため)、Drive側の読み書きが失敗しうる(オフライン等)ことに変わりはないため、
+ * 上記のdataBackupと同じ「成功していないのに確定的な状態遷移を行わない」設計をここでも踏襲する。
+ * このstoreは2つの役割を持つ:
+ *   1. Driveへの保存に失敗した時、変更を端末内へ確実に残す(次回オンライン時に再送信する
+ *      手がかりにする、updatedAtで新旧を比較する)。
+ *   2. アプリ起動時にDriveへ到達できない(オフライン)場合でも、前回までにこの端末で
+ *      読み込めていた書庫の内容を表示できるようにする(=非URLの本のオフライン閲覧)。
+ */
+
+function saveAlmagestLocalCache(data) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ALMAGEST_CACHE_STORE, 'readwrite');
+    tx.objectStore(ALMAGEST_CACHE_STORE).put({ id: 'latest', data, updatedAt: (data && data.updatedAt) || Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function loadAlmagestLocalCache() {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ALMAGEST_CACHE_STORE, 'readonly');
+    const req = tx.objectStore(ALMAGEST_CACHE_STORE).get('latest');
+    req.onsuccess = () => resolve(req.result ? req.result.data : null);
+    req.onerror = () => reject(req.error);
+  })).catch((err) => {
+    console.error('Almagestローカルキャッシュの読み込みに失敗', err);
+    return null;
+  });
 }
