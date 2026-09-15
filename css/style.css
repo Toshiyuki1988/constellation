@@ -1959,7 +1959,14 @@ html, body {
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 100;
+  /* 2026年9月: z-index:100のままだと、Crews(120/130/150)・WormGate(130)・
+     Flight Engineer(130)・Astrometry Scope(145/148/150)・Star Pencil(160/165)・
+     Almagest(150/155)など、後発の多くのモジュールのフルスクリーンオーバーレイより
+     下に埋もれてしまい、showChoiceDialog()(削除確認など)がその内側から呼ばれると
+     見えないまま固まったように見える不具合が実機で見つかった(Almagestの削除確認で発覚、
+     他のモジュールでも同様に再現しうる)。確認ダイアログは常に最前面であるべきなので、
+     既存の全オーバーレイ(#extract-region-overlayの210が最大)より確実に上へ引き上げた。 */
+  z-index: 220;
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.35);

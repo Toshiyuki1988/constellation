@@ -65,6 +65,7 @@
   let stylesInjected = false;
 
   let searchQuery = '';
+  let activeTagFilter = null; // null='すべて'、'__unsummarized__'='未要約'、それ以外はタグ文字列
   let readingEntryId = null; // 読書ビューで開いている本のid
   let newEntryKind = 'book'; // 新規登録フォームのタブ状態。'book'|'url'
   let newEntryUsedOcr = false; // 今開いているフォームでOCRを使ったか(kind='ocr'|'paste'の判定用)
@@ -146,6 +147,19 @@
       }
       .al-new-toggle-btn:hover { background: rgba(201, 162, 39, 0.28); }
 
+      /* タグ絞り込みチップ(2026年9月追加): 「すべて」「未要約」+登録済みタグの一覧。
+         キーワード検索と組み合わせて1つだけ選べる(モックアップ準拠)。API不使用、
+         クライアント側の文字列一致・フラグ判定のみ。 */
+      .al-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; flex: none; }
+      .al-tag {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.04em; padding: 4px 11px;
+        border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.55); cursor: pointer;
+      }
+      .al-tag.active {
+        background: linear-gradient(155deg, #c9a227, #8a6d10); color: #241a06; border-color: transparent; font-weight: 700;
+      }
+
       .al-new-panel {
         margin: 0 16px 12px; padding: 13px 13px 15px; flex: none;
         background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(201, 162, 39, 0.28); border-radius: 12px;
@@ -215,24 +229,37 @@
         transition: transform 0.12s ease;
       }
       .al-book:hover { transform: translateY(-4px); }
+      /* 出典の種類ごとに背表紙の色を変える(2026年9月追加、モックアップに合わせた): OCR=赤系、
+         貼り付け=青系。既定(.al-book)の金茶色より後に置いて上書きする。 */
+      .al-book--ocr { background: linear-gradient(160deg, #6b3838, #3a1c1c); border-color: rgba(217, 140, 110, 0.5); }
+      .al-book--paste { background: linear-gradient(160deg, #2f4a63, #17242f); border-color: rgba(120, 170, 217, 0.5); }
+      .al-book-badge { position: absolute; top: 6px; right: 6px; font-size: 10px; opacity: 0.85; }
       .al-book-spine-title {
         writing-mode: vertical-rl; text-orientation: mixed;
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px; font-weight: 700; color: #e8d9a8;
-        line-height: 1.45; max-height: 114px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        line-height: 1.45; max-height: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .al-book--cover {
         width: 100px; height: 140px; background-size: cover; background-position: center;
         align-items: flex-end; justify-content: stretch; padding: 0;
+      }
+      .al-book-cover-badge {
+        position: absolute; top: 8px; left: 8px; font-size: 13px;
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
       }
       .al-book-title-overlay {
         display: block; width: 100%; padding: 22px 8px 8px; box-sizing: border-box;
         background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
         color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; font-weight: 700; line-height: 1.35;
       }
+      .al-book-src {
+        display: block; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; font-weight: 400;
+        color: rgba(255, 255, 255, 0.65); margin-top: 3px;
+      }
 
       .al-bookmarks { display: flex; flex-direction: column; gap: 6px; }
       .al-bookmark {
-        position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 34px 8px 10px; cursor: pointer;
+        position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer;
         background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.09); border-left: 3px solid #c9a227;
         border-radius: 0 8px 8px 0;
       }
@@ -242,12 +269,13 @@
         flex: 1; min-width: 0; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11.5px; color: #fff;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
-      .al-bookmark-pin {
-        position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-        width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(201, 162, 39, 0.5);
+      .al-bookmark-pin, .al-bookmark-del {
+        flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(201, 162, 39, 0.5);
         background: rgba(201, 162, 39, 0.16); color: #f1e4bd; font-size: 11px; cursor: pointer; padding: 0;
       }
       .al-bookmark-pin:hover { background: rgba(201, 162, 39, 0.32); }
+      .al-bookmark-del { border-color: rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.55); }
+      .al-bookmark-del:hover { border-color: #b3402b; color: #ff8a70; background: rgba(179, 64, 43, 0.18); }
 
       /* ---------------- 読書ビュー(本を開いた時の別階層オーバーレイ) ---------------- */
       .al-read-overlay {
@@ -277,6 +305,7 @@
 
       .al-read-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
       .al-read-cover { width: 100%; max-height: 220px; object-fit: cover; border-radius: 10px; margin-bottom: 14px; display: block; }
+      .al-read-src { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.4); margin-bottom: 6px; }
       .al-read-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
       .al-read-tag {
         padding: 3px 10px; border-radius: 999px; background: rgba(201, 162, 39, 0.14); border: 1px solid rgba(201, 162, 39, 0.4);
@@ -336,6 +365,7 @@
         <input type="text" class="al-search-input" placeholder="検索(タイトル・本文・タグ)">
         <button class="al-new-toggle-btn">＋ 登録</button>
       </div>
+      <div class="al-tags"></div>
       <div class="al-new-panel" hidden>
         <div class="al-new-kind-tabs">
           <button type="button" class="al-new-kind-tab active" data-kind="book">📖 本(OCR/貼り付け)</button>
@@ -392,6 +422,7 @@
     alEls = {
       overlay,
       searchInput: overlay.querySelector('.al-search-input'),
+      tagsEl: overlay.querySelector('.al-tags'),
       newToggleBtn: overlay.querySelector('.al-new-toggle-btn'),
       newPanel: overlay.querySelector('.al-new-panel'),
       newTitleInput: overlay.querySelector('.al-new-title-input'),
@@ -423,6 +454,13 @@
 
     alEls.searchInput.addEventListener('input', () => {
       searchQuery = alEls.searchInput.value;
+      renderShelf();
+    });
+
+    alEls.tagsEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.al-tag');
+      if (!chip) return;
+      activeTagFilter = chip.dataset.tagKey || null;
       renderShelf();
     });
 
@@ -471,6 +509,8 @@
     alEls.bookmarksEl.addEventListener('click', (e) => {
       const pinBtn = e.target.closest('[data-pin-id]');
       if (pinBtn) { placeEntryOnCanvas(pinBtn.dataset.pinId); return; }
+      const delBtn = e.target.closest('[data-del-id]');
+      if (delBtn) { deleteEntry(delBtn.dataset.delId); return; }
       const item = e.target.closest('[data-mark-id]');
       if (!item) return;
       const entry = getAlmagestEntryById(item.dataset.markId);
@@ -594,16 +634,48 @@
     return hay.includes(q.toLowerCase());
   }
 
+  function isUnsummarized(entry) {
+    return entry.kind !== 'url' && !(entry.summaries && (entry.summaries.easy || entry.summaries.academic));
+  }
+
+  function matchesTagFilter(entry) {
+    if (!activeTagFilter) return true;
+    if (activeTagFilter === '__unsummarized__') return isUnsummarized(entry);
+    return (entry.tags || []).includes(activeTagFilter);
+  }
+
+  function collectAllTags() {
+    const set = new Set();
+    getEntries().forEach((e) => (e.tags || []).forEach((t) => set.add(t)));
+    return [...set].sort();
+  }
+
+  function renderTagChips() {
+    const chips = [
+      { key: null, label: 'すべて' },
+      { key: '__unsummarized__', label: '未要約' },
+      ...collectAllTags().map((t) => ({ key: t, label: t })),
+    ];
+    alEls.tagsEl.innerHTML = chips
+      .map((c) => `<span class="al-tag${activeTagFilter === c.key ? ' active' : ''}" data-tag-key="${escapeAttrLocal(c.key || '')}">${escapeHtml(c.label)}</span>`)
+      .join('');
+  }
+
   function bookSpineHtml(entry) {
     const hasCover = Boolean(entry.thumbDataUrl);
+    const kindClass = entry.kind === 'ocr' ? 'al-book--ocr' : 'al-book--paste';
+    const badge = entry.kind === 'ocr' ? '📷' : '📋';
     if (hasCover) {
+      const srcHtml = entry.sourceLabel ? `<span class="al-book-src">${escapeHtml(entry.sourceLabel)}</span>` : '';
       return (
-        `<div class="al-book al-book--cover" data-book-id="${entry.id}" style="background-image:url('${escapeAttrLocal(entry.thumbDataUrl)}')">` +
-        `<span class="al-book-title-overlay">${escapeHtml(entry.title || '(無題)')}</span></div>`
+        `<div class="al-book al-book--cover ${kindClass}" data-book-id="${entry.id}" style="background-image:url('${escapeAttrLocal(entry.thumbDataUrl)}')">` +
+        `<span class="al-book-cover-badge">${badge}</span>` +
+        `<span class="al-book-title-overlay">${escapeHtml(entry.title || '(無題)')}${srcHtml}</span></div>`
       );
     }
     return (
-      `<div class="al-book" data-book-id="${entry.id}">` +
+      `<div class="al-book ${kindClass}" data-book-id="${entry.id}">` +
+      `<span class="al-book-badge">${badge}</span>` +
       `<span class="al-book-spine-title">${escapeHtml(entry.title || '(無題)')}</span></div>`
     );
   }
@@ -615,14 +687,16 @@
         <img class="al-bookmark-favicon" src="${escapeAttrLocal(favicon)}" alt="">
         <span class="al-bookmark-title">${escapeHtml(entry.title || '(無題)')}</span>
         <button type="button" class="al-bookmark-pin" data-pin-id="${entry.id}" title="このセッションに置く">📌</button>
+        <button type="button" class="al-bookmark-del" data-del-id="${entry.id}" title="書庫から削除">🗑</button>
       </div>
     `;
   }
 
   function renderShelf() {
     const totalCount = getEntries().length;
+    renderTagChips();
     const q = searchQuery.trim();
-    const filtered = getEntries().filter((e) => matchesSearch(e, q));
+    const filtered = getEntries().filter((e) => matchesSearch(e, q) && matchesTagFilter(e));
     const books = filtered.filter((e) => e.kind !== 'url').sort(byCreatedDesc);
     const marks = filtered.filter((e) => e.kind === 'url').sort(byCreatedDesc);
     alEls.booksEl.innerHTML = books.map(bookSpineHtml).join('');
@@ -637,6 +711,7 @@
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
     if (!alEls) buildShelfDom();
     searchQuery = '';
+    activeTagFilter = null;
     alEls.searchInput.value = '';
     alEls.newPanel.hidden = true;
     renderShelf();
@@ -663,6 +738,7 @@
       </div>
       <div class="al-read-body">
         <img class="al-read-cover" hidden>
+        <div class="al-read-src"></div>
         <div class="al-read-tags"></div>
         <div class="al-read-text"></div>
         <div class="al-read-summary-row">
@@ -682,6 +758,7 @@
       overlay,
       title: overlay.querySelector('.al-read-title'),
       cover: overlay.querySelector('.al-read-cover'),
+      src: overlay.querySelector('.al-read-src'),
       tags: overlay.querySelector('.al-read-tags'),
       text: overlay.querySelector('.al-read-text'),
       summaryBox: overlay.querySelector('.al-read-summary-box'),
@@ -742,6 +819,8 @@
     } else {
       rdEls.cover.hidden = true;
     }
+    rdEls.src.textContent = entry.sourceLabel || '';
+    rdEls.src.hidden = !entry.sourceLabel;
     rdEls.tags.innerHTML = (entry.tags || []).map((t) => `<span class="al-read-tag">${escapeHtml(t)}</span>`).join('');
     rdEls.text.textContent = entry.bodyText || '';
     renderReadingSummaries(entry);
@@ -773,8 +852,13 @@
     }
   }
 
-  async function handleDeleteEntry() {
-    const entry = getAlmagestEntryById(readingEntryId);
+  /**
+   * 書庫からエントリを削除する共通処理。読書ビューの🗑削除ボタン(本)と、本棚のしおり行に
+   * 直接付けた🗑ボタンの両方から呼ぶ(しおりは読書ビューを経由しないため、2026年9月に
+   * ここを本のIDを直接受け取れる形へ切り出した)。
+   */
+  async function deleteEntry(entryId) {
+    const entry = getAlmagestEntryById(entryId);
     if (!entry) return;
     const choice = await showChoiceDialog({
       title: `「${entry.title || '(無題)'}」を書庫から削除しますか?`,
@@ -787,10 +871,14 @@
     if (choice !== 'delete') return;
     state.almagestEntries = getEntries().filter((e) => e.id !== entry.id);
     scheduleAutoSave();
-    closeReadingView();
+    if (readingEntryId === entryId) closeReadingView();
     renderShelf();
     renderAllCards(); // 参照カードの表示を「削除済み」の見た目へ更新する
     setStatus('書庫から削除しました');
+  }
+
+  function handleDeleteEntry() {
+    deleteEntry(readingEntryId);
   }
 
   /* ---------------- セッションのキャンバスへの配置(橋渡し機能) ---------------- */
@@ -837,8 +925,17 @@
    *  ジャンプする。参照先が削除済みならその旨を知らせるだけ(js/app.jsのhexクリック
    *  ディスパッチャからwindow経由で呼ばれる、Astrometry Scope/Star Pencilと同じ薄い統合)。 */
   function jumpToAlmagestEntry(entryId) {
-    if (!getAlmagestEntryById(entryId)) {
+    const entry = getAlmagestEntryById(entryId);
+    if (!entry) {
       setStatus('この参照先は書庫から削除されています', { important: true });
+      return;
+    }
+    // しおり(URL)は本文を持たず読書ビューの対象外(本棚のタップと同じ挙動)なので、
+    // ここでも読書ビューではなく外部URLを新規タブで直接開く(2026年9月、実機報告で発覚した
+    // 不具合: 以前は常にopenReadingView()を呼んでいたため、しおりカードから「📖 Almagest」を
+    // 押しても外部ページへ飛ばず、本文もタグも空の読書ビューが開くだけになっていた)。
+    if (entry.kind === 'url') {
+      if (entry.url) window.open(entry.url, '_blank', 'noopener');
       return;
     }
     openAlmagest();
