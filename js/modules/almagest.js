@@ -8,9 +8,10 @@
 // redrawAsterismLines() / activeSessionId() / newCardSpawnPos() / generateThumbnail() /
 // openCamera() / createTextCard() / createBookChatCard() / showChoiceDialog() /
 // escapeHtml() / setStatus() / cardElById() / EDIT_GUIDE_HANDLES_HTML / editGuideHexHtml() /
-// summarizeAlmagestText()(js/gemini.js) / findFileByName・loadNamedData・saveNamedData
-// (js/drive.js) / saveAlmagestLocalCache・loadAlmagestLocalCache(js/upload-queue.js) などの
-// 既存グローバルは直接参照する。
+// summarizeAlmagestText()・ocrImage()(js/gemini.js) / loadImageFileToCanvas()・canvasToBlob()
+// (js/camera.js) / findFileByName・loadNamedData・saveNamedData(js/drive.js) /
+// saveAlmagestLocalCache・loadAlmagestLocalCache(js/upload-queue.js) などの既存グローバルは
+// 直接参照する。
 //
 // 起動: js/module-launcher.js経由、コード"159"(洛書の対角線、123/456/789/147/258/369で
 // 埋まった残り2枠のうち採用した方。357はまだ空き)。
@@ -616,7 +617,16 @@
         overflow-wrap: anywhere; word-break: break-word;
       }
       .al-field input::placeholder, .al-field textarea::placeholder { color: rgba(255, 255, 255, 0.3); }
-      .al-new-body-input { min-height: 96px; resize: vertical; }
+      /* 本文編集欄の高さ(2026年9月、PCでの編集作業向けに約5倍へ拡大: 96px→480px)。
+         長文のOCR結果・貼り付けを読み書きする画面のため、縦スクロールに頼りきらず
+         できるだけ広い面積で編集できるようにする狙い。 */
+      .al-new-body-input { min-height: 480px; resize: vertical; }
+      /* 本文欄への画像ドラッグ&ドロップ(2026年9月追加、下記wireBodyImageDrop()参照)。
+         ドラッグ中は縁を強調して、ここへ落とせることを示す。 */
+      .al-new-body-input.al-body-dragover {
+        border-color: rgba(201, 162, 39, 0.9); background: rgba(201, 162, 39, 0.1);
+        box-shadow: inset 0 0 0 1px rgba(201, 162, 39, 0.5);
+      }
       .al-new-ocr-btn {
         width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
         background: rgba(201, 162, 39, 0.16); border: 1px solid rgba(201, 162, 39, 0.5); color: #f1e4bd; cursor: pointer; font-size: 12px;
@@ -994,6 +1004,12 @@
       const blob = imageItem.getAsFile();
       if (blob) await applyDraftThumbBlob(blob);
     });
+    // 本文欄への画像ドラッグ&ドロップ(2026年9月追加、PCでの編集作業向け)。カメラモーダルを
+    // 開かず、ドロップした画像をその場でOCRして本文へ追記する(下記wireBodyImageDrop()参照)。
+    wireBodyImageDrop(alEls.newBodyInput, (files) => handleBodyImageDrop(files, {
+      getTarget: () => (!alEls.newPanel.hidden ? alEls.newBodyInput : null),
+      onAppended: () => { newEntryUsedOcr = true; },
+    }));
 
     alEls.newOcrBtn.addEventListener('click', () => handleOcrIntoDraft(alEls.newOcrBtn));
     alEls.newSaveBtn.addEventListener('click', handleSaveNewEntry);
@@ -1106,6 +1122,75 @@
     } finally {
       if (btnEl) btnEl.disabled = false;
     }
+  }
+
+  /** 本文欄への画像ドラッグ&ドロップ配線(2026年9月追加、PCでの編集作業向け)。カメラモーダルを
+   *  経由せず、ドロップされた画像ファイルをその場でOCRして本文へ追記する。js/camera.jsの
+   *  loadImageFileToCanvas()/canvasToBlob()、js/gemini.jsのocrImage()はいずれもグローバル
+   *  関数(IIFEで包まれていない核となるファイル)のため、モジュールの外からもそのまま呼べる。 */
+  function wireBodyImageDrop(textareaEl, onFiles) {
+    let dragDepth = 0; // dragenter/dragleaveは子要素の出入りでも発火するため、深さで数える
+    textareaEl.addEventListener('dragover', (e) => {
+      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    textareaEl.addEventListener('dragenter', (e) => {
+      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      dragDepth++;
+      textareaEl.classList.add('al-body-dragover');
+    });
+    textareaEl.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) textareaEl.classList.remove('al-body-dragover');
+    });
+    textareaEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      textareaEl.classList.remove('al-body-dragover');
+      const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/'));
+      if (files.length) onFiles(files);
+    });
+  }
+
+  let bodyImageDropBusy = false; // 複数のドロップが重なって本文への追記順が混線しないようにする
+
+  /** ドロップされた画像ファイル(複数可)を順番にOCRし、結果を本文欄へ改行区切りで追記する。
+   *  1枚ずつ処理するため、途中の1枚が読み取れなくても他の枚数分は失われない。処理中にパネル/
+   *  編集画面が閉じられていた場合は(handleOcrIntoDraft()/handleOcrIntoEdit()と同じ理由で)
+   *  読み取った文字を失わないよう新規テクストカードとして残す。 */
+  async function handleBodyImageDrop(files, opts) {
+    if (bodyImageDropBusy) return;
+    bodyImageDropBusy = true;
+    const { getTarget, onAppended } = opts;
+    let appendedCount = 0;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        setStatus(`画像から読み取り中…(${i + 1}/${files.length})`, { busy: true });
+        try {
+          const canvas = await loadImageFileToCanvas(files[i], 3840);
+          const blob = await canvasToBlob(canvas, 0.92);
+          const text = (await ocrImage(blob)).trim();
+          if (!text || text.includes('(テキストなし)')) continue;
+          const target = getTarget();
+          if (target) {
+            const existing = target.value.trim();
+            target.value = existing ? `${existing}\n${text}` : text;
+            if (onAppended) onAppended();
+          } else {
+            createTextCard(text);
+            setStatus('編集画面が閉じられていたため、読み取った文字は新しいテクストカードに残しました');
+          }
+          appendedCount++;
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    } finally {
+      bodyImageDropBusy = false;
+    }
+    setStatus(appendedCount > 0 ? `${appendedCount}枚の画像から読み取りました` : '文字を検出できませんでした');
   }
 
   async function handleSaveNewEntry() {
@@ -1475,6 +1560,18 @@
       e.preventDefault();
       const blob = imageItem.getAsFile();
       if (blob) await applyEditThumbBlob(blob);
+    });
+
+    // 本文欄への画像ドラッグ&ドロップ(2026年9月追加、上記新規登録パネルと同じ理由)。
+    wireBodyImageDrop(rdEls.editBodyInput, (files) => {
+      const targetEntryId = readingEntryId; // handleOcrIntoEdit()と同じ理由でドロップ時点のIDを固定する
+      return handleBodyImageDrop(files, {
+        getTarget: () => (
+          editingEntry && readingEntryId === targetEntryId &&
+          rdEls.editBodyInput.isConnected && !rdEls.editBodyField.hidden
+            ? rdEls.editBodyInput : null
+        ),
+      });
     });
 
     rdEls.editOcrBtn.addEventListener('click', () => handleOcrIntoEdit(rdEls.editOcrBtn));

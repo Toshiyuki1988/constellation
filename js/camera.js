@@ -263,6 +263,7 @@ function ensureCameraDom() {
     captionScreen: document.getElementById('camera-screen-caption'),
     videoCaption: document.getElementById('camera-video-caption'),
     captionHint: document.getElementById('caption-hint'),
+    pageStrip: document.getElementById('caption-page-strip'),
     focusLayerCaption: document.getElementById('focus-layer-caption'),
     zoomBadgeCaption: document.getElementById('zoom-badge-caption'),
     capBtn: document.getElementById('camera-cap-btn'),
@@ -303,11 +304,18 @@ function wireCameraEvents() {
   camEls.capBtn.addEventListener('click', captureForSelection);
   camEls.uploadBtn.addEventListener('click', () => camEls.uploadFile.click());
   camEls.uploadFile.addEventListener('change', () => {
-    const file = camEls.uploadFile.files && camEls.uploadFile.files[0];
+    // 複数選択(input[multiple]、2026年9月追加)にも対応。書籍の複数ページを一括で選べる。
+    const files = Array.from(camEls.uploadFile.files || []);
     camEls.uploadFile.value = ''; // 同じファイルを続けて選び直せるようにする
-    if (file) handleUploadForSelection(file);
+    if (files.length) handleFilesForSelection(files);
   });
   wireCaptionDragDrop();
+  if (camEls.pageStrip) {
+    camEls.pageStrip.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-page-index]');
+      if (btn) switchCaptionPage(Number(btn.dataset.pageIndex));
+    });
+  }
   camEls.selectRetakeBtn.addEventListener('click', resetCaptionState);
   camEls.selectRunBtn.addEventListener('click', handleSelectionRun);
   camEls.selectFinishBtn.addEventListener('click', handleSelectionFinish);
@@ -373,7 +381,19 @@ async function switchCameraMode(mode) {
       await acquireStreamForMode(mode);
     } catch (err) {
       console.error(err);
-      showCameraError('カメラ/マイクを使用できませんでした。ブラウザの権限設定を確認してください');
+      // テクスト(OCR)画面はPCでの利用(カメラ非搭載)を主眼に、ドラッグ&ドロップ/
+      // アップロードだけでも完結できるようにしてある(2026年9月、PC編集特化の要望)ため、
+      // カメラ/マイクが無くても不安を煽る警告バーは出さない。前回セッションの残り
+      // (続けて選択モードの状態)を初期化した上で、無カメラ向けの案内に上書きする。
+      // それ以外のモード(写真・動画・音声、いずれも撮影自体にカメラ/マイクが必須)は
+      // 従来通り警告バーで知らせる。
+      if (mode === 'caption') {
+        resetCaptionState();
+        camEls.capBtn.hidden = true;
+        camEls.captionHint.textContent = '画像をドラッグ&ドロップ、または📁アップロードで読み取れます';
+      } else {
+        showCameraError('カメラ/マイクを使用できませんでした。ブラウザの権限設定を確認してください');
+      }
       return;
     }
 
@@ -1863,6 +1883,12 @@ let captionSelectionGen = 0;
 // 持つ(失敗・空振りもここには残して見た目で分かるようにするが、最終的なテキスト結合の対象には
 // しないため)。
 let captionThumbs = [];
+// 複数ページ取り込み(2026年9月追加、PCでの編集作業向け): 書籍・雑誌の複数ページ画像を
+// 一度にドラッグ&ドロップ/複数選択アップロードできるようにし、続けて選択モードを終えずに
+// ページを切り替えながら範囲選択OCRを続けられるようにする。{canvas, thumbUrl}[]。
+// captionThumbs(読み取った「範囲」の履歴)とは別の概念(こちらは「ページ」そのもの)。
+let captionPages = [];
+let captionPageIndex = -1;
 
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
@@ -1878,6 +1904,9 @@ function resetCaptionState() {
   captionRunGuardActive = false;
   captionSelectionGen++;
   clearCaptionThumbs();
+  captionPages = [];
+  captionPageIndex = -1;
+  renderCaptionPageStrip();
   camEls.freezeWrap.classList.remove('show');
   camEls.freezeWrap.innerHTML = '';
   camEls.selectLayer.classList.remove('show');
@@ -1915,26 +1944,50 @@ async function captureForSelection() {
  * (#camera-screen-caption)だけなので、ここを拡張するだけで呼び出し元(テクストツール・
  * セッション名OCR・Crews・Almagest等)全てに自動的に行き渡る。選んだ画像は撮影時と全く同じ
  * enterSelectionMode()へ合流するため、自由範囲選択も同様に使える。
+ * **2026年9月さらに拡張**: 複数ファイルを一度に選択/ドロップできるようにした(書籍・雑誌の
+ * 複数ページを一括で取り込みたい、というPCでの編集作業向けの要望)。既に続けて選択セッション中
+ * (freeze-wrapが表示中)なら追加ページとして末尾に積み増し、新規なら1ページ目として開始する。
+ * どちらの場合も、新しく増えたページのうち最初の1枚へ即座に切り替える。
  */
-async function handleUploadForSelection(file) {
+async function handleFilesForSelection(files) {
+  if (!files.length) return;
   camEls.uploadBtn.disabled = true;
   try {
-    // アップロードされたファイル(特にスクリーンショット)は、カメラのライブ映像と違って
-    // 元々デジタルにシャープなことが多く、撮影時の2400pxという上限に縛られる理由が無い。
-    // 書籍ページのような小さい密な文字を潰さないよう、写真撮影(capturePhoto())と同じ
-    // 3840pxまで許容する。
-    const canvas = await loadImageFileToCanvas(file, 3840);
-    enterSelectionMode(canvas);
-  } catch (err) {
-    console.error(err);
-    showCameraError('画像の読み込みに失敗しました');
+    const canvases = [];
+    for (const file of files) {
+      try {
+        // アップロードされたファイル(特にスクリーンショット)は、カメラのライブ映像と違って
+        // 元々デジタルにシャープなことが多く、撮影時の2400pxという上限に縛られる理由が無い。
+        // 書籍ページのような小さい密な文字を潰さないよう、写真撮影(capturePhoto())と同じ
+        // 3840pxまで許容する。
+        canvases.push(await loadImageFileToCanvas(file, 3840));
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    if (!canvases.length) {
+      showCameraError('画像の読み込みに失敗しました');
+      return;
+    }
+    const wasInSession = camEls.freezeWrap.classList.contains('show');
+    const newFirstIndex = wasInSession ? captionPages.length : 0;
+    if (!wasInSession) {
+      captionPages = [];
+      beginCaptionSelectionUi();
+    }
+    captionPages.push(...canvases.map((canvas) => ({ canvas, thumbUrl: canvasThumbDataUrl(canvas) })));
+    switchCaptionPage(newFirstIndex);
+    if (wasInSession && typeof setStatus === 'function') {
+      setStatus(`${canvases.length}ページ追加しました(全${captionPages.length}ページ)`);
+    }
   } finally {
     camEls.uploadBtn.disabled = false;
   }
 }
 
 /** 「📁 アップロード」ボタンの他に、画面へ直接ドラッグ&ドロップでも画像ファイルを渡せる
- *  ようにする(2026年9月追加、PCでの使い勝手向上)。画像以外のドロップは無視する。 */
+ *  ようにする(2026年9月追加、PCでの使い勝手向上)。複数ファイルを一度にドロップした場合は
+ *  全て複数ページとして取り込む(2026年9月さらに拡張)。画像以外のドロップは無視する。 */
 function wireCaptionDragDrop() {
   const screenEl = camEls.captionScreen;
   let dragDepth = 0; // dragenter/dragleaveは子要素の出入りでも発火するため、深さで数える
@@ -1957,8 +2010,8 @@ function wireCaptionDragDrop() {
     e.preventDefault();
     dragDepth = 0;
     screenEl.classList.remove('cam-caption-dragover');
-    const file = Array.from(e.dataTransfer.files || []).find((f) => f.type.startsWith('image/'));
-    if (file) handleUploadForSelection(file);
+    const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/'));
+    if (files.length) handleFilesForSelection(files);
   });
 }
 
@@ -1985,19 +2038,68 @@ function loadImageFileToCanvas(file, maxEdge) {
   });
 }
 
+/** 静止フレーム1枚(カメラ撮影)で新規セッションを開始する、従来からの入口。
+ *  複数ページ(handleFilesForSelection())と実装を共有するため、captionPagesへ
+ *  1件だけ積んで同じ経路(switchCaptionPage())へ合流させる。 */
 function enterSelectionMode(canvas) {
-  captionFreezeCanvas = canvas;
-  captionSelection = null;
-  camEls.freezeWrap.innerHTML = '';
-  camEls.freezeWrap.appendChild(canvas);
+  captionPages = [{ canvas, thumbUrl: canvasThumbDataUrl(canvas) }];
+  beginCaptionSelectionUi();
+  switchCaptionPage(0);
+}
+
+/** 続けて選択モードのUI(選択レイヤー・アクションボタン等)を初回だけ整える。ページの
+ *  表示自体はswitchCaptionPage()が担う(2026年9月、複数ページ対応で分離)。 */
+function beginCaptionSelectionUi() {
   camEls.freezeWrap.classList.add('show');
   camEls.selectLayer.classList.add('show');
-  camEls.selectRect.hidden = true;
   camEls.selectActions.classList.add('show');
   camEls.capBtn.hidden = true;
   camEls.uploadBtn.hidden = true;
   camEls.captionHint.textContent = '文字の範囲を指でなぞって選択(そのままなら全体を読み取ります)';
+}
+
+/** ページを切り替える(ページストリップのタップ、または新規ページ追加時に呼ぶ、2026年9月追加)。
+ *  選択矩形はページごとに独立させず単純化し、切り替えるたびにリセットする。読み取り済み
+ *  バッファ(captionOcrBuffer)・サムネイル一覧・continuousセッション自体は維持する(=複数
+ *  ページをまたいでも「1回の取り込み」として扱う、書籍の複数ページを段組みごと読み取っていく
+ *  運用を想定)。 */
+function switchCaptionPage(index) {
+  if (index < 0 || index >= captionPages.length) return;
+  captionPageIndex = index;
+  captionFreezeCanvas = captionPages[index].canvas;
+  camEls.freezeWrap.innerHTML = '';
+  camEls.freezeWrap.appendChild(captionFreezeCanvas);
+  captionSelection = null;
+  camEls.selectRect.hidden = true;
   updateSelectRunLabel();
+  renderCaptionPageStrip();
+}
+
+/** ページストリップ(複数ページ取り込み時だけ現れる横一列のサムネイル)を描き直す。
+ *  1ページしか無い間は表示しない(従来の単一ページ運用と見た目を変えないため)。 */
+function renderCaptionPageStrip() {
+  if (!camEls.pageStrip) return;
+  const show = captionPages.length > 1;
+  camEls.pageStrip.classList.toggle('show', show);
+  if (!show) { camEls.pageStrip.innerHTML = ''; return; }
+  camEls.pageStrip.innerHTML = captionPages
+    .map((p, i) => (
+      `<button type="button" class="cam-page-chip${i === captionPageIndex ? ' active' : ''}" ` +
+      `data-page-index="${i}" title="${i + 1}ページ目へ切り替え">` +
+      `<img src="${p.thumbUrl}" alt=""><span class="cam-page-chip-num">${i + 1}</span></button>`
+    ))
+    .join('');
+}
+
+/** ページストリップ用の小さいサムネイルを生成する(captionThumbsの範囲サムネイルとは別、
+ *  ページ全体の縮小プレビュー)。 */
+function canvasThumbDataUrl(canvas, maxEdge = 120) {
+  const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(canvas.width * scale));
+  out.height = Math.max(1, Math.round(canvas.height * scale));
+  out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+  return out.toDataURL('image/jpeg', 0.7);
 }
 
 function updateSelectRunLabel() {
@@ -2314,6 +2416,9 @@ function handleSelectionFinish() {
   const combined = captionOcrBuffer.join('\n');
   captionOcrBuffer = [];
   clearCaptionThumbs(); // サムネイルのBlob URLをこの時点で解放する(次回openCamera()を待たない)
+  captionPages = []; // 複数ページ分のcanvasも同時に解放する(2026年9月追加)
+  captionPageIndex = -1;
+  renderCaptionPageStrip();
   const resolve = detachCameraForBackgroundOcr();
   if (typeof setStatus === 'function') setStatus('読み取りました');
   resolve({ kind: 'text', text: combined });
