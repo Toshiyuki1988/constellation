@@ -748,7 +748,12 @@
       .al-book-spine-title {
         writing-mode: vertical-rl; text-orientation: mixed;
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px; font-weight: 700; color: #e8d9a8;
-        line-height: 1.45; white-space: normal; overflow: visible; max-height: none; overflow-wrap: anywhere;
+        line-height: 1.45; overflow-wrap: anywhere;
+        /* 長いタイトル(展覧会名など)で背表紙が際限なく縦長になる不具合の対応(2026年9月、
+           実機報告)。writing-mode:vertical-rlでは高さ方向が「行内方向」にあたり、高さを
+           制約しないと折り返し(複数列化)が起きず無制限に伸びてしまう。高さの上限を決めた
+           上でellipsis省略に変更した(全文は背表紙のホバー時のtitle属性で見られる)。 */
+        display: inline-block; max-height: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
       }
       /* しおり(URL)の背表紙だけに常設する小さなアクション行(2026年9月追加)。本(OCR/貼り付け)は
          読書ビューを開いてから📌/✎/🗑を使うため、シェルフ上には持たせない(タップで即座に
@@ -1419,7 +1424,7 @@
       );
     }
     return (
-      `<div class="al-book ${kindClass}" data-book-id="${entry.id}">` +
+      `<div class="al-book ${kindClass}" data-book-id="${entry.id}" title="${escapeAttrLocal(entry.title || '(無題)')}">` +
       `<span class="al-book-badge">${badge}</span>` +
       offlineBadgeHtml(entry, 'al-book-offline-badge--top-left') +
       `<span class="al-book-spine-title">${escapeHtml(entry.title || '(無題)')}</span></div>`
@@ -1427,10 +1432,12 @@
   }
 
   /** しおり(URL)の背表紙。タップ(本文以外の部分)で外部URLを開く。📌/✎/🗑は常設のフッター
-   *  アイコンから、読書ビューを経由せず直接呼べる(本と違いこの種別には読書ビューが無いため)。 */
+   *  アイコンから、読書ビューを経由せず直接呼べる(本と違いこの種別には読書ビューが無いため)。
+   *  外側の要素にtitle属性(2026年9月追加)を持たせ、タイトルが長くて背表紙上では省略
+   *  表示(ellipsis)になっても、PCでのホバーで全文を確認できるようにしている。 */
   function bookmarkSpineHtml(entry) {
     return (
-      `<div class="al-book al-book--url" data-mark-id="${entry.id}">` +
+      `<div class="al-book al-book--url" data-mark-id="${entry.id}" title="${escapeAttrLocal(entry.title || '(無題)')}">` +
       `<span class="al-book-badge">🔖</span>` +
       `<span class="al-book-spine-title">${escapeHtml(entry.title || '(無題)')}</span>` +
       `<div class="al-book-footer">` +
