@@ -140,8 +140,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const uploadStatusBtn = document.getElementById('upload-status-btn');
   if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', () => withMainData(openUploadStatusList));
 
-  // 高画質差し替え(EXIF自動照合、2026年9月追加)。state.cards(activeSessionId()の写真カード)を
-  // 前提にするため、withMainData()で保護する(上と同じ理由)。
+  // 高画質差し替え(EXIF自動照合、2026年9月追加→同月中にユーザー判断でオフ、CLAUDE.md参照)。
+  // 「今の使用状況では、必要な写真はズーム時に元画質で見られているため不要」との理由で
+  // index.html側でボタンをhiddenにした。この配線・下の一連の関数は削除せず残してある
+  // (また必要になればindex.htmlのhidden属性を外すだけで復活する)。
+  // state.cards(activeSessionId()の写真カード)を前提にするため、withMainData()で保護する
+  // (上と同じ理由)。
   els.exifMatchBtn = document.getElementById('exif-match-btn');
   els.exifMatchInput = document.getElementById('exif-match-input');
   if (els.exifMatchBtn) els.exifMatchBtn.addEventListener('click', () => withMainData(() => els.exifMatchInput.click()));

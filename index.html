@@ -449,12 +449,14 @@
         <button id="upload-status-btn" class="secondary">📋 アップロード状況を見る</button>
       </div>
       <hr class="modal-divider">
-      <!-- 帰宅後、現地での仮撮影(スマホ等)をカメラ本体の高画質な写真へ差し替える機能
-           (2026年9月追加)。選んだ写真のEXIF撮影時刻と、今開いているセッション内の写真
-           カードの記録時刻を照らし合わせて候補を提案する(js/app.jsのhandleExifMatchStart()参照)。 -->
-      <label class="settings-drive-upload-label">高画質差し替え(EXIF自動照合)</label>
-      <p class="modal-desc">現地でのメモ用に撮った写真を、あとでカメラ本体の高画質な写真と差し替えます。今開いているセッション内の写真カードと、選んだ写真のEXIF撮影時刻を照らし合わせて候補を提案します。元のDrive上のファイルは削除されません。</p>
-      <div class="modal-actions">
+      <!-- 高画質差し替え(EXIF自動照合、2026年9月実装→同月中にユーザー判断でオフ)。
+           「今の使用状況では、必要な写真はズーム時に元画質で見られているため不要」との
+           判断で、CONSTELLATION PIEと同じ「コードは残したまま入口だけ隠す」方式にした
+           (hidden属性を付けるだけ、JS側の関数・イベント配線は一切削除していない)。
+           また必要になったらこのhidden属性を外すだけで復活できる。詳細はCLAUDE.md参照。 -->
+      <label class="settings-drive-upload-label" hidden>高画質差し替え(EXIF自動照合)</label>
+      <p class="modal-desc" hidden>現地でのメモ用に撮った写真を、あとでカメラ本体の高画質な写真と差し替えます。今開いているセッション内の写真カードと、選んだ写真のEXIF撮影時刻を照らし合わせて候補を提案します。元のDrive上のファイルは削除されません。</p>
+      <div class="modal-actions" hidden>
         <button id="exif-match-btn" disabled>📥 高画質差し替え</button>
       </div>
     </div>
