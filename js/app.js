@@ -115,14 +115,17 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsCloseBtn.addEventListener('click', closeSettings);
 
   // Driveへの手動アップロード(2026年9月、完全手動化。設定モーダル内に置き、誤操作を防ぐ)。
+  // いずれもstate.cards(getCardById())を前提にするため、withMainData()で保護する
+  // (メインデータ読み込み前に呼ぶと、待機列のエントリを「対応カードが見つからない」=
+  // 削除済みと誤認して消してしまいかねない、2026年9月に発見した重大なリスクへの対応)。
   els.driveUploadBtn = document.getElementById('drive-upload-btn');
   els.driveUploadStatus = document.getElementById('drive-upload-status');
-  if (els.driveUploadBtn) els.driveUploadBtn.addEventListener('click', handleDriveUploadBtnClick);
+  if (els.driveUploadBtn) els.driveUploadBtn.addEventListener('click', () => withMainData(handleDriveUploadBtnClick));
   els.exportToPhotosBtn = document.getElementById('export-to-photos-btn');
-  if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', handleExportToPhotos);
+  if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', () => withMainData(handleExportToPhotos));
   updateDriveUploadButton();
   const uploadStatusBtn = document.getElementById('upload-status-btn');
-  if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', openUploadStatusList);
+  if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', () => withMainData(openUploadStatusList));
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
@@ -150,18 +153,22 @@ document.addEventListener('DOMContentLoaded', () => {
     stopGroupViewing(); // サインアウト後もタイマーが回り続けてAPIを呼び続けないようにする
     setStatus('サインアウトしました');
   });
-  els.toolUpload.addEventListener('click', () => els.imageInput.click());
+  // ボトムツールバーの各ボタンは、いずれも最終的にstate.cards/sessionsを前提にした
+  // カード作成へつながるため、withMainData()でメインデータの読み込みを待ってから実行する
+  // (2026年9月追加、「サインイン→すぐAlmagestで読書」の通信量最小化のためonSignedIn()を
+  // 2段階に分けたことに伴う対応。ensureMainDataLoaded()のコメント参照)。
+  els.toolUpload.addEventListener('click', () => withMainData(() => els.imageInput.click()));
   els.imageInput.addEventListener('change', handleImageSelected);
   els.retryUploadInput = document.getElementById('retry-upload-input');
   if (els.retryUploadInput) els.retryUploadInput.addEventListener('change', handleRetryUploadSelected);
-  els.toolCamera.addEventListener('click', () => handleOpenCamera('photo'));
-  els.toolText.addEventListener('click', handleOpenTextTool);
-  els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
-  els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
-  els.toolSession.addEventListener('click', handleCreateSession);
-  els.toolInfo.addEventListener('click', createInfoCard);
-  els.toolSummary.addEventListener('click', () => createSummaryCard());
-  els.toolStreetview.addEventListener('click', createStreetviewCard);
+  els.toolCamera.addEventListener('click', () => withMainData(() => handleOpenCamera('photo')));
+  els.toolText.addEventListener('click', () => withMainData(handleOpenTextTool));
+  els.toolVideo.addEventListener('click', () => withMainData(() => handleOpenCamera('video')));
+  els.toolAudio.addEventListener('click', () => withMainData(() => handleOpenCamera('audio')));
+  els.toolSession.addEventListener('click', () => withMainData(handleCreateSession));
+  els.toolInfo.addEventListener('click', () => withMainData(createInfoCard));
+  els.toolSummary.addEventListener('click', () => withMainData(() => createSummaryCard()));
+  els.toolStreetview.addEventListener('click', () => withMainData(createStreetviewCard));
   els.toolKeypad.addEventListener('click', () => { if (window.openModuleKeypad) window.openModuleKeypad(); });
   els.infoTicker.addEventListener('click', () => {
     const card = infoTickerItems[infoTickerIndex];
@@ -717,16 +724,23 @@ function handleOfflineIndicatorClick() {
 }
 
 function scheduleAutoSave() {
-  if (!state.folderId) return; // サインイン前は何もしない
+  // サインイン前、またはメインデータ(state.cards/sessions等)をまだ読み込んでいない間は
+  // 何もしない。**mainDataLoadedのチェックは安全上必須**: 2026年9月にonSignedIn()を
+  // 「Almagestだけ先に使える」フェーズと「メインデータの読み込み(ensureMainDataLoaded())」
+  // フェーズへ分割した際、後者が完了する前にこの関数が万が一呼ばれてしまうと、まだ空の
+  // state.cards/sessionsでDrive上のconstellation-data.jsonを上書きしてしまいかねない
+  // (=これまでの記録が丸ごと消える最悪のケース)。個々の呼び出し元をすべて洗い出して
+  // ensureMainDataLoaded()で塞ぐことに加えて、ここでも二重に防ぐ。
+  if (!state.folderId || !mainDataLoaded) return;
   pendingSave = true;
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(runScheduledSave, AUTO_SAVE_DELAY_MS);
 }
 
 /** デバウンスを待たず、今すぐ保存する(新規カード追加など、タブが閉じられる前に必ず
- *  残しておきたい変更で使う)。 */
+ *  残しておきたい変更で使う)。scheduleAutoSave()と同じ安全上の理由でmainDataLoadedも見る。 */
 function saveImmediately() {
-  if (!state.folderId) return;
+  if (!state.folderId || !mainDataLoaded) return;
   pendingSave = true;
   clearTimeout(autoSaveTimer);
   runScheduledSave();
@@ -775,12 +789,85 @@ window.addEventListener('beforeunload', (e) => {
   }
 });
 
+/**
+ * 2026年9月、電車内など「サインイン→すぐAlmagestで読書」だけで済ませたい場面での通信量を
+ * 最小限にするため、onSignedIn()を2段階に分割した:
+ *   フェーズ1(この関数、常に即座に実行): フォルダ解決(小さなJSON照会のみ)と、
+ *     Almagestの専用ファイル(almagest-library.json、カードのサムネイルを含まないため
+ *     メインデータよりずっと軽い)の読み込みだけを行う。この時点でAlmagestはすぐ使える。
+ *   フェーズ2(ensureMainDataLoaded()/loadMainData()、必要になるまで呼ばない): カード・
+ *     セッション全体(各カードのサムネイルをbase64で埋め込んだ、普段いちばん重い
+ *     constellation-data.json)の読み込み。年タブ・ボトムツールバー・モジュールキーパッドの
+ *     Almagest以外のコード等、実際にメインのキャンバスを触る操作をした時に初めて読み込む
+ *     (呼び出し箇所は下記ensureMainDataLoaded()のコメント参照)。Almagestだけで使い終える
+ *     セッションでは、このフェーズの通信は一切発生しない。
+ */
 async function onSignedIn() {
   toggleAuthUI(true);
   setStatus('Google Driveと同期中…', { busy: true });
   try {
     state.folderId = await findOrCreateAppFolder();
     state.mediaFolderId = await findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId);
+    // Almagestは専用ファイルだけで完結するため、メインデータを待たずここで読み込む。
+    // 旧形式(メインJSON埋め込み)からの移行は、専用ファイルが見つからずlegacyEntriesも
+    // 渡せない場合に限り、loadMainData()側でメインデータ読み込み後に改めて行う(下記参照)。
+    if (window.initAlmagestData) await window.initAlmagestData();
+    renderYearTabsPlaceholder();
+    refreshDriveQuota(); // ヘッダーのDrive使用量表示(メインデータ不要)
+    setStatus('サインインしました(Almagestはすぐ使えます。年タブをタップすると続きを読み込みます)');
+  } catch (err) {
+    console.error(err);
+    setStatus('同期に失敗しました(コンソールを確認)');
+  }
+}
+
+let mainDataLoaded = false; // メインデータ(state.cards/sessions等)を読み込み終えたか
+let mainDataLoadPromise = null;
+
+/**
+ * メインデータ(state.cards/sessions等)がまだ読み込まれていなければ読み込む。複数箇所から
+ * 同時に呼ばれてもPromiseを使い回すだけで、二重に読み込むことはない。
+ * **呼び出し箇所(=メインのキャンバスを実際に触りうる操作)**: ボトムツールバーの各ボタン
+ * (アップロード/カメラ/テクスト/動画/音声/セッション/インフォ/サマリー/ストリートビュー)、
+ * モジュールキーパッドでAlmagest(159)以外のコードを入力した時(js/module-launcher.js)、
+ * 年タブのプレースホルダー(renderYearTabsPlaceholder())、設定モーダルの「☁ Driveへ送信」
+ * 「📤 端末へ保存」「📋 アップロード状況を見る」(いずれもstate.cardsを前提にする)。
+ * **scheduleAutoSave()/saveImmediately()側にも、空のstateでDriveを上書きしてしまわない
+ * ための二重の安全策(mainDataLoadedチェック)を入れてある**ため、万が一ここでの呼び出し
+ * 漏れがあっても、保存だけは確実に防がれる(=最悪でも「操作が効かない」で済み、
+ * データが消えることはない)。
+ */
+function ensureMainDataLoaded() {
+  if (mainDataLoaded) return Promise.resolve();
+  if (mainDataLoadPromise) return mainDataLoadPromise;
+  mainDataLoadPromise = loadMainData().finally(() => { mainDataLoadPromise = null; });
+  return mainDataLoadPromise;
+}
+
+/** メインデータの読み込みを待ってから実行する共通ラッパー(ボトムツールバー等の各ボタンから
+ *  呼ぶ、上記ensureMainDataLoaded()のコメント参照)。読み込みに失敗した場合はloadMainData()
+ *  側で既にエラーのステータス表示が済んでいるため、ここでは何もせず処理を諦める
+ *  (中途半端な状態、例えばsessionIdの無いカードを作ってしまう等を避ける)。 */
+async function withMainData(fn) {
+  try {
+    await ensureMainDataLoaded();
+  } catch (err) {
+    return;
+  }
+  fn();
+}
+
+async function loadMainData() {
+  // ボトムツールバー等はtoggleAuthUI(true)で即座に有効化されるため、理論上はonSignedIn()の
+  // フォルダ解決(state.folderIdの設定)が終わるより前に押される可能性がゼロではない
+  // (この一瞬の競合自体は今回の変更以前から存在した)。folderId未確定のままDrive APIを
+  // 呼んで分かりにくいエラーになるのを避け、分かりやすい案内にする。
+  if (!state.folderId) {
+    setStatus('まだサインイン処理中です。少し待ってからもう一度お試しください', { important: true });
+    throw new Error('state.folderIdがまだ設定されていません');
+  }
+  setStatus('続きを読み込み中…', { busy: true });
+  try {
     const { fileId, data: driveData } = await loadData(state.folderId);
     state.fileId = fileId;
     // オートセーブOFF中に端末内だけへ保存された変更(js/upload-queue.jsのsaveLocalDataBackup())が
@@ -805,14 +892,14 @@ async function onSignedIn() {
     state.exhibitionCalendarId = data.exhibitionCalendarId || null;
     state.crews = data.crews || [];
     if (window.migrateLegacyCrews) window.migrateLegacyCrews(); // 旧【人物情報】【その言葉】形式からConstellation形式への一度きりの移行
-    // Almagest(書物モジュール)、2026年9月追加。書庫データは専用のDriveファイル
-    // (almagest-library.json)を持つため、メインのconstellation-data.jsonからは独立して
-    // 読み込む(window.initAlmagestData()、js/modules/almagest.js参照)。
-    // data.almagestEntriesは旧形式(メインJSONへ埋め込んでいた頃の名残)の一度きりの移行元として渡す。
-    if (window.initAlmagestData) {
+    // Almagestの一度きりの移行の安全網(2026年9月): onSignedIn()のフェーズ1で
+    // window.initAlmagestData()を引数無しで呼んでいるため、専用ファイル(almagest-library.json)
+    // がまだ存在せず、かつメインJSON埋め込みの旧データ(legacyEntries)がある場合の移行は
+    // そちらでは行えない。ここでメインデータが揃ったタイミングで、その場合に限り移行し直す
+    // (通常運用では専用ファイルは既に存在するため、この分岐に入ること自体まず無い)。
+    if (window.initAlmagestData && !state.almagestFileId && data.almagestEntries && data.almagestEntries.length &&
+        (!state.almagestEntries || state.almagestEntries.length === 0)) {
       await window.initAlmagestData(data.almagestEntries);
-    } else {
-      state.almagestEntries = data.almagestEntries || [];
     }
     state.commentHistory = data.commentHistory || [];
     state.groupViewingIntervalSec = typeof data.groupViewingIntervalSec === 'number' ? data.groupViewingIntervalSec : 60;
@@ -870,6 +957,7 @@ async function onSignedIn() {
       if (valid.length > 0) restoredBreadcrumb = valid;
     }
     state.breadcrumb = restoredBreadcrumb || [migrationTargetId];
+    mainDataLoaded = true; // renderAllCards()等より前に立てる(scheduleAutoSave()等がこの直後に動いても安全なように)
     renderYearTabs();
     renderBreadcrumb();
     renderAllCards();
@@ -878,18 +966,19 @@ async function onSignedIn() {
     if (restoredBreadcrumb) fitAllCardsToScreen();
     refreshInfoTicker();
     // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
-    // (API通信は発生しない、ローカルの日付比較のみ)。
+    // (API通信は発生しない、ローカルの日付比較のみ)。このsetIntervalはensureMainDataLoaded()の
+    // Promiseキャッシュにより、1セッション中に一度しかここへ来ないため二重登録の心配はない。
     setInterval(refreshInfoTicker, 30 * 60 * 1000);
     // 前回終了時にDrive未送信のまま残っていたファイルの表示状態を拾い直す(js/upload-queue.js)。
     // **自動送信はしない**(2026年9月、完全手動化。実際の送信は設定モーダルの「☁ Driveへ送信」を押した時だけ)。
     await restoreUploadQueueOnLoad();
     maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
     maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
-    refreshDriveQuota(); // ヘッダーのDrive使用量表示
     setStatus(`読み込み完了(${state.cards.length}件)`);
   } catch (err) {
     console.error(err);
-    setStatus('同期に失敗しました(コンソールを確認)');
+    setStatus('同期に失敗しました(コンソールを確認)', { important: true });
+    throw err; // ensureMainDataLoaded()の呼び出し元(トグル/ボタン)へも失敗を伝え、再試行できるようにする
   }
 }
 
@@ -929,6 +1018,20 @@ function getCurrentYearSessionId() {
   const currentYear = new Date().getFullYear();
   const session = state.sessions.find((s) => s.type === 'year' && s.year === currentYear);
   return session ? session.id : state.sessions.find((s) => s.type === 'year').id;
+}
+
+/** メインデータ読み込み前(onSignedIn()のフェーズ1直後)の年タブ欄。実際の年タブが
+ *  読めるようになるまでの間、タップすればメインデータの読み込みを開始できる入口を
+ *  1つだけ置いておく(でないと年タブ欄が空のままで「読み込み方が分からない」状態になる)。
+ *  ensureMainDataLoaded()完了後はloadMainData()内のrenderYearTabs()が中身を差し替える。 */
+function renderYearTabsPlaceholder() {
+  if (mainDataLoaded) return;
+  els.yearTabs.innerHTML = '';
+  const btn = document.createElement('button');
+  btn.className = 'year-tab';
+  btn.textContent = '📅 タップして読み込む';
+  btn.addEventListener('click', () => withMainData(() => {}));
+  els.yearTabs.appendChild(btn);
 }
 
 function renderYearTabs() {

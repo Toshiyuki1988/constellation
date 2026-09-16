@@ -189,6 +189,12 @@
     });
   }
 
+  // Almagest(コード"159")だけは、専用の軽量ファイルだけで完結し、セッション/カード全体
+  // (state.cards/sessions)を必要としない。それ以外の全モジュールはキャンバス上のカードを
+  // 扱うため、js/app.jsのensureMainDataLoaded()でメインデータの読み込みを待ってから起動する
+  // (2026年9月追加、「サインイン→すぐAlmagestで読書」の通信量最小化に伴う対応)。
+  const NO_MAIN_DATA_NEEDED_CODE = '159';
+
   function onDigit(d) {
     soundAudioCtx();
     playGuideRevealSound(); // 既存の「ピッ」を流用(押すたびの確認音)
@@ -196,10 +202,15 @@
     updateSlots();
     if (enteredDigits.length < 3) return;
 
-    const callback = moduleCodes.get(enteredDigits);
+    const code = enteredDigits;
+    const callback = moduleCodes.get(code);
     if (callback) {
       closeModuleKeypad();
-      callback();
+      if (code === NO_MAIN_DATA_NEEDED_CODE || typeof ensureMainDataLoaded !== 'function') {
+        callback();
+      } else {
+        ensureMainDataLoaded().then(callback).catch(() => {}); // 失敗時のステータス表示はjs/app.js側で既に出す
+      }
     } else {
       kpEls.panel.classList.add('shake');
       setTimeout(() => {
