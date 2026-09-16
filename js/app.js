@@ -983,6 +983,16 @@ function closeStartMenu() {
   startMenuEls.overlay.classList.remove('open');
 }
 
+/** js/modules/almagest.jsのcloseAlmagest()から呼ばれるフック(2026年9月追加)。
+ *  スタートメニューからAlmagestだけを開いた場合、閉じた瞬間はまだメインデータを
+ *  読み込んでおらずクイックモードにも入っていない(=キャンバスが空白のまま取り残される)
+ *  ため、スタートメニューへ戻す。既にスタート/クイックのどちらかを選んで進んでいた場合
+ *  (mainDataLoaded/state.quickModeのいずれかがtrue)は何もしない。 */
+function onAlmagestClosed() {
+  if (!mainDataLoaded && !state.quickMode) openStartMenu();
+}
+window.onAlmagestClosed = onAlmagestClosed;
+
 /** 現在(端末のローカル日時)の西暦年。 */
 function currentCalendarYear() {
   return new Date().getFullYear();
