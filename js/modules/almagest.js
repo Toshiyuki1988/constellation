@@ -8,10 +8,9 @@
 // redrawAsterismLines() / activeSessionId() / newCardSpawnPos() / generateThumbnail() /
 // openCamera() / createTextCard() / createBookChatCard() / showChoiceDialog() /
 // escapeHtml() / setStatus() / cardElById() / EDIT_GUIDE_HANDLES_HTML / editGuideHexHtml() /
-// summarizeAlmagestText()・ocrImage()(js/gemini.js) / loadImageFileToCanvas()・canvasToBlob()
-// (js/camera.js) / findFileByName・loadNamedData・saveNamedData(js/drive.js) /
-// saveAlmagestLocalCache・loadAlmagestLocalCache(js/upload-queue.js) などの既存グローバルは
-// 直接参照する。
+// summarizeAlmagestText()(js/gemini.js) / findFileByName・loadNamedData・saveNamedData
+// (js/drive.js) / saveAlmagestLocalCache・loadAlmagestLocalCache(js/upload-queue.js) などの
+// 既存グローバルは直接参照する。
 //
 // 起動: js/module-launcher.js経由、コード"159"(洛書の対角線、123/456/789/147/258/369で
 // 埋まった残り2枠のうち採用した方。357はまだ空き)。
@@ -97,6 +96,10 @@
   let newEntryKind = 'book'; // 新規登録フォームのタブ状態。'book'|'url'
   let newEntryUsedOcr = false; // 今開いているフォームでOCRを使ったか(kind='ocr'|'paste'の判定用)
   let newEntryThumbDataUrl = null; // 新規登録フォームで設定したサムネイル(book限定)
+  // 本文欄への画像ドロップ(2026年9月追加)で貼り付けた画像(dataURL文字列の配列)。
+  // OCRでテキスト化せず、切り抜いた画像そのものをentry.bodyImagesとして保持する。
+  let newEntryBodyImages = []; // 新規登録フォーム用
+  let editBodyImages = []; // 読書ビューの編集フォーム用
   let almagestUpdatedAt = 0; // 最後に確定した(Driveへ送った、またはDriveから読んだ)書庫データの時刻
   // 書庫データの読み込み状況(2026年9月追加)。詳細はensureAlmagestDataLoaded()参照。
   let almagestDataLoaded = false;
@@ -205,6 +208,7 @@
     return {
       ...base,
       bodyText: entry.bodyText || null,
+      bodyImages: entry.bodyImages || [],
       citation: entry.citation || null,
       summaries: entry.summaries || { easy: null, academic: null },
     };
@@ -247,6 +251,7 @@
   async function saveAlmagestBookContentNow(entry) {
     const payload = {
       bodyText: entry.bodyText || '',
+      bodyImages: entry.bodyImages || [],
       citation: entry.citation || null,
       summaries: entry.summaries || { easy: null, academic: null },
       updatedAt: Date.now(),
@@ -293,6 +298,7 @@
       content = await loadAlmagestBookCache(entry.id).catch(() => null);
     }
     entry.bodyText = (content && content.bodyText) || '';
+    entry.bodyImages = (content && content.bodyImages) || [];
     entry.citation = (content && content.citation) || null;
     entry.summaries = (content && content.summaries) || { easy: null, academic: null };
     entry.contentLoaded = true;
@@ -315,6 +321,7 @@
       const old = oldById.get(e.id);
       if (old && old.contentLoaded) {
         e.bodyText = old.bodyText;
+        e.bodyImages = old.bodyImages;
         e.summaries = old.summaries;
         e.citation = old.citation;
         e.contentLoaded = true;
@@ -332,7 +339,7 @@
    */
   async function migrateAlmagestEntriesToSplitFiles() {
     if (!state.folderId) return;
-    const legacyOnes = getEntries().filter((e) => e.kind !== 'url' && !e.bodyFileId && e.bodyText);
+    const legacyOnes = getEntries().filter((e) => e.kind !== 'url' && !e.bodyFileId && (e.bodyText || (e.bodyImages && e.bodyImages.length)));
     if (legacyOnes.length === 0) return;
     setStatus(`書庫の保存形式を更新中…(0/${legacyOnes.length})`, { busy: true });
     let done = 0;
@@ -647,6 +654,20 @@
       }
       .al-new-save-btn:hover { background: #ddb843; }
 
+      /* 本文欄へドロップした画像(entry.bodyImages)の小さいギャラリー(2026年9月追加)。
+         新規登録フォーム・編集フォームの両方で共通のクラスを使う(renderBodyImagesGallery()参照)。 */
+      .al-body-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+      .al-body-image-item {
+        position: relative; width: 76px; height: 76px; border-radius: 6px; overflow: hidden;
+        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.16);
+      }
+      .al-body-image-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .al-body-image-remove {
+        position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%;
+        border: none; background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
+      }
+      .al-body-image-remove:hover { background: rgba(0, 0, 0, 0.85); }
+
       .al-shelf { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 24px; }
       .al-empty {
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 12px; color: rgba(255, 255, 255, 0.4);
@@ -802,6 +823,10 @@
       }
       .al-read-text p { margin: 0 0 0.9em; }
       .al-read-text p:last-child { margin-bottom: 0; }
+      /* 本文に貼り付けた画像(entry.bodyImages)の閲覧用ギャラリー(2026年9月追加)。
+         スクラップブックのように、切り抜き画像をそのまま縦に並べて表示する。 */
+      .al-read-body-images { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+      .al-read-body-images img { width: 100%; border-radius: 10px; display: block; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35); }
       .al-read-summary-row { display: flex; gap: 8px; margin-bottom: 12px; }
       .al-read-summary-btn {
         flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(201, 162, 39, 0.4);
@@ -893,7 +918,8 @@
               <label>本文</label>
               <button type="button" class="al-new-ocr-btn" title="カメラでOCR読み取り">📷</button>
             </div>
-            <textarea class="al-new-body-input" placeholder="本文を貼り付け、またはOCRで読み取る"></textarea>
+            <textarea class="al-new-body-input" placeholder="本文を貼り付け、またはOCRで読み取る(画像をドロップすると切り抜き画像をそのまま追加できます)"></textarea>
+            <div class="al-body-images al-new-body-images" hidden></div>
           </div>
           <div class="al-field">
             <label>出典元(任意)</label>
@@ -938,6 +964,7 @@
       newThumbFile: overlay.querySelector('.al-new-thumb-file'),
       newOcrBtn: overlay.querySelector('.al-new-ocr-btn'),
       newBodyInput: overlay.querySelector('.al-new-body-input'),
+      newBodyImages: overlay.querySelector('.al-new-body-images'),
       newCitationInput: overlay.querySelector('.al-new-citation-input'),
       newTagsInput: overlay.querySelector('.al-new-tags-input'),
       newUrlTitleInput: overlay.querySelector('.al-new-url-title-input'),
@@ -1004,12 +1031,9 @@
       const blob = imageItem.getAsFile();
       if (blob) await applyDraftThumbBlob(blob);
     });
-    // 本文欄への画像ドラッグ&ドロップ(2026年9月追加、PCでの編集作業向け)。カメラモーダルを
-    // 開かず、ドロップした画像をその場でOCRして本文へ追記する(下記wireBodyImageDrop()参照)。
-    wireBodyImageDrop(alEls.newBodyInput, (files) => handleBodyImageDrop(files, {
-      getTarget: () => (!alEls.newPanel.hidden ? alEls.newBodyInput : null),
-      onAppended: () => { newEntryUsedOcr = true; },
-    }));
+    // 本文欄への画像ドラッグ&ドロップ(2026年9月追加、PCでの編集作業向け)。OCRでテキスト化
+    // せず、切り抜いた画像をそのままnewEntryBodyImagesへ追加する(下記wireBodyImageDrop()参照)。
+    wireBodyImageDrop(alEls.newBodyInput, (files) => handleBodyImageEmbed(files, newEntryBodyImages, renderNewBodyImagesGallery));
 
     alEls.newOcrBtn.addEventListener('click', () => handleOcrIntoDraft(alEls.newOcrBtn));
     alEls.newSaveBtn.addEventListener('click', handleSaveNewEntry);
@@ -1046,6 +1070,7 @@
     newEntryKind = 'book';
     newEntryUsedOcr = false;
     newEntryThumbDataUrl = null;
+    newEntryBodyImages = [];
     alEls.newTitleInput.value = '';
     alEls.newBodyInput.value = '';
     alEls.newCitationInput.value = '';
@@ -1054,8 +1079,42 @@
     alEls.newUrlInput.value = '';
     alEls.newUrlTagsInput.value = '';
     renderDraftThumbBox();
+    renderNewBodyImagesGallery();
     alEls.overlay.querySelectorAll('.al-new-kind-tab').forEach((t) => t.classList.toggle('active', t.dataset.kind === 'book'));
     alEls.overlay.querySelectorAll('[data-kind-panel]').forEach((p) => { p.hidden = p.dataset.kindPanel !== 'book'; });
+  }
+
+  /** 本文欄に貼り付けた画像(entry.bodyImages)の小さいギャラリー表示。新規登録フォーム・
+   *  編集フォームの両方で使い回す共通描画関数(2026年9月追加)。✕で1枚ずつ削除できる。 */
+  function renderBodyImagesGallery(containerEl, images, onRemove) {
+    if (!containerEl) return;
+    containerEl.hidden = images.length === 0;
+    containerEl.innerHTML = images.map((dataUrl, i) => (
+      `<div class="al-body-image-item">` +
+      `<img src="${escapeAttrLocal(dataUrl)}" alt="">` +
+      `<button type="button" class="al-body-image-remove" data-remove-index="${i}" title="この画像を削除">✕</button>` +
+      '</div>'
+    )).join('');
+    // innerHTMLで作り直すたびに配線し直すだけで済むよう、addEventListenerの積み重ねを避けて
+    // onclickプロパティの上書きにしている(再描画のたびリスナーが増え続けない)。
+    containerEl.onclick = (e) => {
+      const btn = e.target.closest('[data-remove-index]');
+      if (btn) onRemove(Number(btn.dataset.removeIndex));
+    };
+  }
+
+  function renderNewBodyImagesGallery() {
+    renderBodyImagesGallery(alEls.newBodyImages, newEntryBodyImages, (i) => {
+      newEntryBodyImages.splice(i, 1);
+      renderNewBodyImagesGallery();
+    });
+  }
+
+  function renderEditBodyImagesGallery() {
+    renderBodyImagesGallery(rdEls.editBodyImages, editBodyImages, (i) => {
+      editBodyImages.splice(i, 1);
+      renderEditBodyImagesGallery();
+    });
   }
 
   function renderDraftThumbBox() {
@@ -1124,10 +1183,8 @@
     }
   }
 
-  /** 本文欄への画像ドラッグ&ドロップ配線(2026年9月追加、PCでの編集作業向け)。カメラモーダルを
-   *  経由せず、ドロップされた画像ファイルをその場でOCRして本文へ追記する。js/camera.jsの
-   *  loadImageFileToCanvas()/canvasToBlob()、js/gemini.jsのocrImage()はいずれもグローバル
-   *  関数(IIFEで包まれていない核となるファイル)のため、モジュールの外からもそのまま呼べる。 */
+  /** 本文欄への画像ドラッグ&ドロップ配線(2026年9月追加、PCでの編集作業向け)。単なるDnD
+   *  イベントの配線だけを担い、実際にドロップされた時の処理はonFilesへ委ねる。 */
   function wireBodyImageDrop(textareaEl, onFiles) {
     let dragDepth = 0; // dragenter/dragleaveは子要素の出入りでも発火するため、深さで数える
     textareaEl.addEventListener('dragover', (e) => {
@@ -1154,43 +1211,17 @@
     });
   }
 
-  let bodyImageDropBusy = false; // 複数のドロップが重なって本文への追記順が混線しないようにする
-
-  /** ドロップされた画像ファイル(複数可)を順番にOCRし、結果を本文欄へ改行区切りで追記する。
-   *  1枚ずつ処理するため、途中の1枚が読み取れなくても他の枚数分は失われない。処理中にパネル/
-   *  編集画面が閉じられていた場合は(handleOcrIntoDraft()/handleOcrIntoEdit()と同じ理由で)
-   *  読み取った文字を失わないよう新規テクストカードとして残す。 */
-  async function handleBodyImageDrop(files, opts) {
-    if (bodyImageDropBusy) return;
-    bodyImageDropBusy = true;
-    const { getTarget, onAppended } = opts;
-    let appendedCount = 0;
-    try {
-      for (let i = 0; i < files.length; i++) {
-        setStatus(`画像から読み取り中…(${i + 1}/${files.length})`, { busy: true });
-        try {
-          const canvas = await loadImageFileToCanvas(files[i], 3840);
-          const blob = await canvasToBlob(canvas, 0.92);
-          const text = (await ocrImage(blob)).trim();
-          if (!text || text.includes('(テキストなし)')) continue;
-          const target = getTarget();
-          if (target) {
-            const existing = target.value.trim();
-            target.value = existing ? `${existing}\n${text}` : text;
-            if (onAppended) onAppended();
-          } else {
-            createTextCard(text);
-            setStatus('編集画面が閉じられていたため、読み取った文字は新しいテクストカードに残しました');
-          }
-          appendedCount++;
-        } catch (err) {
-          console.error(err);
-        }
-      }
-    } finally {
-      bodyImageDropBusy = false;
+  /** ドロップされた画像ファイル(複数可)を、OCRでテキスト化せず**切り抜いた画像そのまま**
+   *  entry.bodyImagesへ追加する(2026年9月、ユーザー指示により以前のOCR経由の実装から変更)。
+   *  generateThumbnail()(js/app.js、グローバル関数)で長辺1400px・quality0.85まで縮小した
+   *  dataURLとして保持する(元の切り抜き画像の可読性を保ちつつ、JSONへ素の状態で埋め込む
+   *  ため際限なく大きくはしない)。 */
+  async function handleBodyImageEmbed(files, images, onChange) {
+    for (const file of files) {
+      const dataUrl = await generateThumbnail(file, 1400, 0.85);
+      if (dataUrl) images.push(dataUrl);
     }
-    setStatus(appendedCount > 0 ? `${appendedCount}枚の画像から読み取りました` : '文字を検出できませんでした');
+    onChange();
   }
 
   async function handleSaveNewEntry() {
@@ -1198,8 +1229,10 @@
     if (newEntryKind === 'book') {
       const title = alEls.newTitleInput.value.trim();
       const bodyText = alEls.newBodyInput.value.trim();
-      if (!title || !bodyText) {
-        setStatus('タイトルと本文を入力してください', { important: true });
+      // 本文が空でも、切り抜き画像(newEntryBodyImages)だけで構成された本を認める
+      // (2026年9月追加、画像をそのまま貼るだけの登録に対応)。
+      if (!title || (!bodyText && newEntryBodyImages.length === 0)) {
+        setStatus('タイトルと本文(または画像)を入力してください', { important: true });
         return;
       }
       entry = {
@@ -1208,6 +1241,7 @@
         title,
         sourceLabel: newEntryUsedOcr ? 'OCR' : '貼り付け',
         bodyText,
+        bodyImages: newEntryBodyImages.slice(),
         url: null,
         citation: alEls.newCitationInput.value.trim() || null,
         thumbDataUrl: newEntryThumbDataUrl || null,
@@ -1422,6 +1456,7 @@
             <button type="button" class="al-read-font-btn" data-delta="1">A+</button>
           </div>
           <div class="al-read-text-panel" hidden><div class="al-read-text"></div></div>
+          <div class="al-read-body-images" hidden></div>
           <div class="al-read-summary-row" hidden>
             <button type="button" class="al-read-summary-btn" data-mode="education">👦 Boy</button>
             <button type="button" class="al-read-summary-btn" data-mode="academic">🎓 Professor</button>
@@ -1444,7 +1479,8 @@
               <label>本文</label>
               <button type="button" class="al-new-ocr-btn al-edit-ocr-btn" title="カメラでOCR読み取り(追記)">📷</button>
             </div>
-            <textarea class="al-edit-body-input al-new-body-input"></textarea>
+            <textarea class="al-edit-body-input al-new-body-input" placeholder="画像をドロップすると切り抜き画像をそのまま追加できます"></textarea>
+            <div class="al-body-images al-edit-body-images" hidden></div>
           </div>
           <div class="al-field al-edit-citation-field">
             <label>出典元(任意)</label>
@@ -1485,6 +1521,7 @@
       textControls: overlay.querySelector('.al-read-text-controls'),
       textPanel: overlay.querySelector('.al-read-text-panel'),
       text: overlay.querySelector('.al-read-text'),
+      bodyImages: overlay.querySelector('.al-read-body-images'),
       summaryRow: overlay.querySelector('.al-read-summary-row'),
       summaryBox: overlay.querySelector('.al-read-summary-box'),
       roundtableBtn: overlay.querySelector('.al-read-roundtable-btn'),
@@ -1495,6 +1532,7 @@
       editThumbFile: overlay.querySelector('.al-edit-thumb-file'),
       editBodyField: overlay.querySelector('.al-edit-body-field'),
       editBodyInput: overlay.querySelector('.al-edit-body-input'),
+      editBodyImages: overlay.querySelector('.al-edit-body-images'),
       editOcrBtn: overlay.querySelector('.al-edit-ocr-btn'),
       editCitationField: overlay.querySelector('.al-edit-citation-field'),
       editCitationInput: overlay.querySelector('.al-edit-citation-input'),
@@ -1564,13 +1602,12 @@
 
     // 本文欄への画像ドラッグ&ドロップ(2026年9月追加、上記新規登録パネルと同じ理由)。
     wireBodyImageDrop(rdEls.editBodyInput, (files) => {
-      const targetEntryId = readingEntryId; // handleOcrIntoEdit()と同じ理由でドロップ時点のIDを固定する
-      return handleBodyImageDrop(files, {
-        getTarget: () => (
-          editingEntry && readingEntryId === targetEntryId &&
-          rdEls.editBodyInput.isConnected && !rdEls.editBodyField.hidden
-            ? rdEls.editBodyInput : null
-        ),
+      const targetEntryId = readingEntryId; // ドロップ時点で編集中だった本のIDを固定する
+      return handleBodyImageEmbed(files, editBodyImages, () => {
+        // 生成中に編集を終了/別の本を開き直していた場合、今表示中の本のギャラリーへ
+        // 混ざらないよう反映を控える(editBodyImages自体は次にrenderReadingView()が
+        // 呼ばれた時点で読み込み直され、古い内容は残らない)。
+        if (editingEntry && readingEntryId === targetEntryId) renderEditBodyImagesGallery();
       });
     });
 
@@ -1640,6 +1677,8 @@
         rdEls.editCitationInput.value = entry.citation || '';
         editThumbDataUrl = entry.thumbDataUrl || null;
         renderEditThumbBox();
+        editBodyImages = (entry.bodyImages || []).slice();
+        renderEditBodyImagesGallery();
       }
       return;
     }
@@ -1671,6 +1710,9 @@
       applyReadingFontSize();
       rdEls.text.innerHTML = reflowBodyTextHtml(entry.bodyText || '');
     }
+    const bodyImages = (!isUrl && entry.bodyImages) || [];
+    rdEls.bodyImages.hidden = bodyImages.length === 0;
+    rdEls.bodyImages.innerHTML = bodyImages.map((dataUrl) => `<img src="${escapeAttrLocal(dataUrl)}" alt="">`).join('');
     rdEls.summaryRow.hidden = isUrl;
     rdEls.roundtableBtn.hidden = isUrl;
     renderReadingSummaries(entry);
@@ -1698,6 +1740,8 @@
     rdEls.textControls.hidden = true;
     rdEls.textPanel.hidden = false;
     rdEls.text.textContent = '読み込み中…';
+    rdEls.bodyImages.hidden = true;
+    rdEls.bodyImages.innerHTML = '';
     rdEls.summaryRow.hidden = true;
     rdEls.roundtableBtn.hidden = true;
   }
@@ -1777,11 +1821,14 @@
       entry.sourceLabel = hostnameOf(url);
     } else {
       const bodyText = rdEls.editBodyInput.value.trim();
-      if (!bodyText) {
-        setStatus('本文を入力してください', { important: true });
+      // 本文が空でも、切り抜き画像(editBodyImages)だけで構成された本を認める
+      // (2026年9月追加、上記handleSaveNewEntry()と同じ理由)。
+      if (!bodyText && editBodyImages.length === 0) {
+        setStatus('本文(または画像)を入力してください', { important: true });
         return;
       }
       entry.bodyText = bodyText;
+      entry.bodyImages = editBodyImages.slice();
       entry.citation = rdEls.editCitationInput.value.trim() || null;
       entry.thumbDataUrl = editThumbDataUrl || null;
       bodyChanged = true;
