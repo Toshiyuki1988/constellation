@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260916e">
+<link rel="stylesheet" href="css/style.css?v=20260916f">
 <link rel="stylesheet" href="css/camera.css?v=20260916d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -448,8 +448,19 @@
       <div class="modal-actions">
         <button id="upload-status-btn" class="secondary">📋 アップロード状況を見る</button>
       </div>
+      <hr class="modal-divider">
+      <!-- 帰宅後、現地での仮撮影(スマホ等)をカメラ本体の高画質な写真へ差し替える機能
+           (2026年9月追加)。選んだ写真のEXIF撮影時刻と、今開いているセッション内の写真
+           カードの記録時刻を照らし合わせて候補を提案する(js/app.jsのhandleExifMatchStart()参照)。 -->
+      <label class="settings-drive-upload-label">高画質差し替え(EXIF自動照合)</label>
+      <p class="modal-desc">現地でのメモ用に撮った写真を、あとでカメラ本体の高画質な写真と差し替えます。今開いているセッション内の写真カードと、選んだ写真のEXIF撮影時刻を照らし合わせて候補を提案します。元のDrive上のファイルは削除されません。</p>
+      <div class="modal-actions">
+        <button id="exif-match-btn" disabled>📥 高画質差し替え</button>
+      </div>
     </div>
   </div>
+
+  <input type="file" id="exif-match-input" accept="image/*" multiple hidden>
 
   <!-- Google Identity Services (OAuth) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -466,7 +477,7 @@
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260916i"></script>
+  <script src="js/app.js?v=20260916j"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260916a"></script>

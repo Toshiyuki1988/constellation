@@ -188,6 +188,29 @@ html, body {
 .upload-status-action { flex: none; display: flex; align-items: center; }
 .upload-status-action button { font-size: 10.5px; padding: 5px 8px; }
 
+/* 高画質差し替え(EXIF自動照合)の確認モーダル(js/app.jsのopenExifMatchReviewModal()、
+   2026年9月追加)。既存の.modal-overlay/.modal、upload-status-*の行レイアウトを踏襲しつつ、
+   差し替え候補は「旧サムネイル→矢印→新サムネイル」の2枚並びにしている。 */
+.exif-match-modal { max-width: 520px; }
+.exif-match-list { max-height: 40vh; overflow-y: auto; margin: 4px 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.exif-match-row {
+  display: flex; gap: 8px; align-items: center; padding: 8px; border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.exif-match-row input[type="checkbox"] { flex: none; width: 16px; height: 16px; }
+.exif-match-thumb {
+  width: 36px; height: 36px; border-radius: 3px; flex: none; overflow: hidden;
+  background: var(--panel); display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.exif-match-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.exif-match-arrow { flex: none; color: var(--muted); font-size: 13px; }
+.exif-match-body { flex: 1; min-width: 0; }
+.exif-match-title {
+  font-size: 12px; font-weight: 600; margin-bottom: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.exif-match-line { font-family: var(--mono); font-size: 10px; color: var(--muted); line-height: 1.5; }
+
 .status {
   margin-left: auto;
   font-family: var(--mono);

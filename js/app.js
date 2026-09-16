@@ -140,6 +140,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const uploadStatusBtn = document.getElementById('upload-status-btn');
   if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', () => withMainData(openUploadStatusList));
 
+  // 高画質差し替え(EXIF自動照合、2026年9月追加)。state.cards(activeSessionId()の写真カード)を
+  // 前提にするため、withMainData()で保護する(上と同じ理由)。
+  els.exifMatchBtn = document.getElementById('exif-match-btn');
+  els.exifMatchInput = document.getElementById('exif-match-input');
+  if (els.exifMatchBtn) els.exifMatchBtn.addEventListener('click', () => withMainData(() => els.exifMatchInput.click()));
+  if (els.exifMatchInput) els.exifMatchInput.addEventListener('change', handleExifMatchFilesSelected);
+
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
   if (isConfigured()) {
@@ -446,6 +453,7 @@ function toggleAuthUI(signedIn) {
   els.toolSummary.disabled = !signedIn;
   els.toolStreetview.disabled = !signedIn;
   els.toolKeypad.disabled = !signedIn;
+  if (els.exifMatchBtn) els.exifMatchBtn.disabled = !signedIn;
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
@@ -5902,6 +5910,353 @@ async function createCardFromCapture({ blob, filename, mediaType, memo, x, y }) 
     }
   }
   return card;
+}
+
+/* ---------------- 高画質差し替え(EXIF自動照合、2026年9月追加) ----------------
+ * 「帰宅後、EXIFタイムスタンプを手がかりに、現地で撮った高画質写真を仮画像と自動的に
+ * 差し替える」という、アプリのコンセプト当初からの構想(CLAUDE.md「コアコンセプト」参照)。
+ * 設定モーダルの「📥 高画質差し替え」ボタンから、カメラ本体等で撮った写真を複数選ぶと、
+ * 各写真のEXIF撮影時刻(DateTimeOriginal)と、今開いているセッション内の写真カードの
+ * 記録時刻(card.createdAt)を照らし合わせ、近いものを差し替え候補として提案する。
+ *
+ * 外部ライブラリは使わず、JPEGのAPP1(Exif)セグメントに含まれるTIFF形式のIFDを
+ * 直接パースする最小実装にしている(HEIC/HEIFは非対応、下記参照)。
+ */
+
+// マッチとみなす最大の時刻差(実機で調整の余地あり、まずは15分に設定)。
+// 現地でのメモ用撮影とカメラ本体での撮影は数十秒〜数分しかズレない想定だが、
+// 機材の時計がずれている場合も考慮してやや余裕を持たせている。
+const EXIF_MATCH_MAX_DIFF_MS = 15 * 60 * 1000;
+
+/**
+ * JPEGファイルの拡張子・種別のみで判定する軽いチェック(EXIF読み取り前のフィルタ用)。
+ * HEIC/HEIF(iPhone既定の撮影形式)はJPEGと異なるコンテナ形式のため、この最小実装では
+ * 非対応(EXIF抽出は常にnullを返す、= 「記録なし」として新規カード追加の対象になる)。
+ */
+function isJpegBlob(blob) {
+  return Boolean(blob && (blob.type === 'image/jpeg' || /\.jpe?g$/i.test(blob.name || '')));
+}
+
+/** IFD(Image File Directory)を読み、tag→値のMapを返す。ASCII(type 2)は文字列、
+ *  SHORT/LONG(type 3/4/9)は数値として読む(このアプリで必要なタグに絞った最小実装、
+ *  RATIONAL等その他の型は今回使わないため読まない)。 */
+function readExifIfdEntries(view, tiffStart, ifdOffset, littleEndian) {
+  const map = new Map();
+  if (ifdOffset < 0 || ifdOffset + 2 > view.byteLength) return map;
+  const count = view.getUint16(ifdOffset, littleEndian);
+  for (let i = 0; i < count; i++) {
+    const entryOffset = ifdOffset + 2 + i * 12;
+    if (entryOffset + 12 > view.byteLength) break;
+    const tag = view.getUint16(entryOffset, littleEndian);
+    const type = view.getUint16(entryOffset + 2, littleEndian);
+    const numValues = view.getUint32(entryOffset + 4, littleEndian);
+    const valueOffsetField = entryOffset + 8;
+    const typeSize = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 }[type] || 1;
+    const totalSize = typeSize * numValues;
+    const dataOffset = totalSize <= 4 ? valueOffsetField : tiffStart + view.getUint32(valueOffsetField, littleEndian);
+    if (type === 2) {
+      // ASCII文字列(null終端)
+      if (dataOffset < 0 || dataOffset + numValues > view.byteLength) continue;
+      let str = '';
+      for (let j = 0; j < numValues; j++) {
+        const b = view.getUint8(dataOffset + j);
+        if (b === 0) break;
+        str += String.fromCharCode(b);
+      }
+      map.set(tag, str);
+    } else if (type === 3) {
+      map.set(tag, view.getUint16(valueOffsetField, littleEndian));
+    } else if (type === 4 || type === 9) {
+      map.set(tag, view.getUint32(valueOffsetField, littleEndian));
+    }
+  }
+  return map;
+}
+
+/** "YYYY:MM:DD HH:MM:SS" 形式(EXIFの日時タグの書式)をローカル時刻のDateへ変換する。
+ *  タイムゾーン情報を持たないため、カメラの時計がローカル時刻に合っている前提で扱う。 */
+function parseExifDateString(str) {
+  const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(str || '');
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+}
+
+/** TIFF本体(Exifヘッダーの直後)からDateTimeOriginal(無ければDateTimeDigitized、
+ *  さらに無ければIFD0のDateTime)を探す。 */
+function parseExifTiffForDate(view, tiffStart) {
+  const byteOrderMark = view.getUint16(tiffStart);
+  const littleEndian = byteOrderMark === 0x4949; // "II"
+  if (!littleEndian && byteOrderMark !== 0x4d4d) return null; // "MM"でもなければ壊れている
+  const ifd0Offset = view.getUint32(tiffStart + 4, littleEndian);
+  const ifd0 = readExifIfdEntries(view, tiffStart, tiffStart + ifd0Offset, littleEndian);
+  const exifIfdPointer = ifd0.get(0x8769); // Exif IFD Pointer
+  if (exifIfdPointer != null) {
+    const exifIfd = readExifIfdEntries(view, tiffStart, tiffStart + exifIfdPointer, littleEndian);
+    const dt = exifIfd.get(0x9003) || exifIfd.get(0x9004); // DateTimeOriginal / DateTimeDigitized
+    if (dt) return parseExifDateString(dt);
+  }
+  const dt0 = ifd0.get(0x0132); // IFD0のDateTime(更新日時、フォールバック)
+  return dt0 ? parseExifDateString(dt0) : null;
+}
+
+/**
+ * JPEGファイルのEXIFから撮影日時を読み取る。外部ライブラリを使わない最小実装
+ * (実装時にNode.jsで合成したExifバイナリを使って単体テスト済み)。先頭部分だけ読めば
+ * 十分なため(APP1セグメントは最大64KB強)、ファイル全体は読み込まない。
+ * @param {Blob} blob
+ * @returns {Promise<Date|null>}
+ */
+async function extractExifDateTime(blob) {
+  if (!isJpegBlob(blob)) return null; // HEIC/HEIF等は非対応、素直にnullを返す
+  try {
+    const head = await blob.slice(0, 128 * 1024).arrayBuffer();
+    const view = new DataView(head);
+    if (view.byteLength < 4 || view.getUint16(0) !== 0xffd8) return null;
+    let offset = 2;
+    while (offset < view.byteLength - 4) {
+      if (view.getUint8(offset) !== 0xff) break;
+      const marker = view.getUint8(offset + 1);
+      if (marker === 0xd8 || marker === 0xd9) { offset += 2; continue; }
+      if (marker >= 0xd0 && marker <= 0xd7) { offset += 2; continue; } // RSTn(データを持たない)
+      const size = view.getUint16(offset + 2);
+      if (marker === 0xe1) {
+        const exifStart = offset + 4;
+        if (
+          exifStart + 6 <= view.byteLength &&
+          view.getUint32(exifStart) === 0x45786966 && // "Exif"
+          view.getUint16(exifStart + 4) === 0x0000
+        ) {
+          return parseExifTiffForDate(view, exifStart + 6);
+        }
+      }
+      if (marker === 0xda) break; // Start of Scan、以降は画像本体
+      offset += 2 + size;
+    }
+    return null;
+  } catch (err) {
+    console.error('EXIF読み取りに失敗', err);
+    return null;
+  }
+}
+
+/**
+ * 新しく取り込む写真(incoming)と、既存の写真カード(candidateCards)を、撮影/記録時刻の
+ * 近さで1対1にマッチングする(貪欲法: 時刻差が小さい組み合わせから確定していく)。
+ * @param {{file: File, exifDate: Date|null}[]} incoming
+ * @param {object[]} candidateCards
+ * @returns {{matches: {incoming: object, card: object, diffMs: number}[], unmatchedIncoming: object[]}}
+ */
+function matchExifPhotosToCards(incoming, candidateCards) {
+  const pairs = [];
+  incoming.forEach((inc, i) => {
+    if (!inc.exifDate) return;
+    candidateCards.forEach((card, j) => {
+      const diff = Math.abs(inc.exifDate.getTime() - new Date(card.createdAt).getTime());
+      if (diff <= EXIF_MATCH_MAX_DIFF_MS) pairs.push({ i, j, diff });
+    });
+  });
+  pairs.sort((a, b) => a.diff - b.diff);
+  const usedIncoming = new Set();
+  const usedCards = new Set();
+  const matches = [];
+  for (const pair of pairs) {
+    if (usedIncoming.has(pair.i) || usedCards.has(pair.j)) continue;
+    usedIncoming.add(pair.i);
+    usedCards.add(pair.j);
+    matches.push({ incoming: incoming[pair.i], card: candidateCards[pair.j], diffMs: pair.diff });
+  }
+  const unmatchedIncoming = incoming.filter((_, i) => !usedIncoming.has(i));
+  return { matches, unmatchedIncoming };
+}
+
+/** ボタンから呼ばれ、ファイル選択後にEXIF抽出・マッチング・確認モーダル表示までを行う。 */
+async function handleExifMatchFilesSelected(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (files.length === 0) return;
+  setStatus('EXIFを確認中…', { busy: true });
+  const incoming = await Promise.all(files.map(async (file) => ({ file, exifDate: await extractExifDateTime(file) })));
+  const candidateCards = state.cards.filter((c) => c.sessionId === activeSessionId() && c.mediaType === 'image');
+  const { matches, unmatchedIncoming } = matchExifPhotosToCards(incoming, candidateCards);
+  if (matches.length === 0 && unmatchedIncoming.length === 0) {
+    setStatus('対象の写真がありませんでした');
+    return;
+  }
+  setStatus(`${matches.length}件の差し替え候補が見つかりました`);
+  openExifMatchReviewModal(matches, unmatchedIncoming);
+}
+
+function formatClockTime(date) {
+  return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDiffMinutes(diffMs) {
+  const minutes = Math.round(diffMs / 60000);
+  return minutes === 0 ? '1分未満' : `${minutes}分`;
+}
+
+/** 確認モーダル。差し替え候補・新規追加候補それぞれにチェックボックスを付け、選んだ分だけ
+ *  「実行」で反映する。行ごとに新しい写真のプレビュー用object URLを作るため、閉じる時に
+ *  必ずrevokeObjectURL()すること(下のclose()参照)。 */
+function openExifMatchReviewModal(matches, unmatchedIncoming) {
+  const objectUrls = [];
+  const makePreviewUrl = (file) => {
+    const url = URL.createObjectURL(file);
+    objectUrls.push(url);
+    return url;
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay visible';
+  const modal = document.createElement('div');
+  modal.className = 'modal exif-match-modal';
+  const heading = document.createElement('h2');
+  heading.textContent = '高画質差し替え';
+  const desc = document.createElement('p');
+  desc.className = 'modal-desc';
+  desc.textContent = '撮影時刻が近いものを見つけました。差し替えたい/追加したい組み合わせだけチェックを残してください。元のDrive上のファイルは削除されず、そのまま残ります。';
+  modal.appendChild(heading);
+  modal.appendChild(desc);
+
+  const matchInputs = [];
+  if (matches.length > 0) {
+    const label = document.createElement('p');
+    label.className = 'modal-desc';
+    label.innerHTML = `<strong>差し替え候補(${matches.length}件)</strong>`;
+    modal.appendChild(label);
+    const list = document.createElement('div');
+    list.className = 'exif-match-list';
+    matches.forEach((m) => {
+      const row = document.createElement('div');
+      row.className = 'exif-match-row';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = true;
+      matchInputs.push({ checkbox, match: m });
+      const oldThumb = document.createElement('div');
+      oldThumb.className = 'exif-match-thumb';
+      oldThumb.innerHTML = m.card.thumbDataUrl ? `<img src="${escapeAttrExif(m.card.thumbDataUrl)}" alt="">` : '🖼️';
+      const arrow = document.createElement('span');
+      arrow.className = 'exif-match-arrow';
+      arrow.textContent = '→';
+      const newThumb = document.createElement('div');
+      newThumb.className = 'exif-match-thumb';
+      newThumb.innerHTML = `<img src="${escapeAttrExif(makePreviewUrl(m.incoming.file))}" alt="">`;
+      const body = document.createElement('div');
+      body.className = 'exif-match-body';
+      const memoSnippet = (m.card.memo || '').trim().slice(0, 20);
+      body.innerHTML =
+        `<div class="exif-match-title">${escapeHtml(memoSnippet || '(無題の写真カード)')}</div>` +
+        `<div class="exif-match-line">記録 ${formatClockTime(new Date(m.card.createdAt))} → 撮影 ${formatClockTime(m.incoming.exifDate)}(差${formatDiffMinutes(m.diffMs)})</div>`;
+      row.appendChild(checkbox);
+      row.appendChild(oldThumb);
+      row.appendChild(arrow);
+      row.appendChild(newThumb);
+      row.appendChild(body);
+      list.appendChild(row);
+    });
+    modal.appendChild(list);
+  }
+
+  const newInputs = [];
+  if (unmatchedIncoming.length > 0) {
+    const label = document.createElement('p');
+    label.className = 'modal-desc';
+    label.innerHTML = `<strong>近い記録が見つからなかった写真(${unmatchedIncoming.length}件、新規カードとして追加)</strong>`;
+    modal.appendChild(label);
+    const list = document.createElement('div');
+    list.className = 'exif-match-list';
+    unmatchedIncoming.forEach((inc) => {
+      const row = document.createElement('div');
+      row.className = 'exif-match-row';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = true;
+      newInputs.push({ checkbox, incoming: inc });
+      const newThumb = document.createElement('div');
+      newThumb.className = 'exif-match-thumb';
+      newThumb.innerHTML = `<img src="${escapeAttrExif(makePreviewUrl(inc.file))}" alt="">`;
+      const body = document.createElement('div');
+      body.className = 'exif-match-body';
+      body.innerHTML =
+        `<div class="exif-match-title">${escapeHtml(inc.file.name)}</div>` +
+        `<div class="exif-match-line">${inc.exifDate ? `撮影 ${formatClockTime(inc.exifDate)}(近い記録なし)` : 'EXIF撮影時刻が読み取れませんでした'}</div>`;
+      row.appendChild(checkbox);
+      row.appendChild(newThumb);
+      row.appendChild(body);
+      list.appendChild(row);
+    });
+    modal.appendChild(list);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'secondary';
+  cancelBtn.textContent = 'キャンセル';
+  const confirmBtn = document.createElement('button');
+  confirmBtn.textContent = '実行';
+  actions.appendChild(cancelBtn);
+  actions.appendChild(confirmBtn);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+
+  const close = () => {
+    objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    overlay.remove();
+  };
+  cancelBtn.addEventListener('click', close);
+  attachBackgroundTapToClose(overlay, close);
+  confirmBtn.addEventListener('click', async () => {
+    const selectedMatches = matchInputs.filter((x) => x.checkbox.checked).map((x) => x.match);
+    const selectedNew = newInputs.filter((x) => x.checkbox.checked).map((x) => x.incoming);
+    close();
+    await commitExifMatches(selectedMatches, selectedNew);
+  });
+
+  document.body.appendChild(overlay);
+}
+
+function escapeAttrExif(str) {
+  return String(str).replace(/"/g, '&quot;');
+}
+
+/** 確認済みの1件を、既存カードへの差し替えとして適用する。古いDrive参照(imageFileId)は
+ *  外すだけで、Drive上の元ファイルには一切触れない(削除しない)。新しい実体は既存の
+ *  待機列(IndexedDB)経由の手動アップロードの仕組みにそのまま乗せる。 */
+async function applyExifReplacement(card, file) {
+  const thumbDataUrl = await generateThumbnail(file);
+  if (thumbDataUrl) card.thumbDataUrl = thumbDataUrl;
+  card.imageFileId = null;
+  card.uploadQueued = true;
+  card.uploadPending = false;
+  card.uploadFailed = false;
+  card.deviceSaved = false;
+  const filename = `${Date.now()}-${file.name}`;
+  const persisted = await persistToUploadQueue(card, file, filename);
+  if (!persisted) {
+    // IndexedDBが使えない場合は、データを失わないようその場でアップロードする
+    // (createCardFromCapture()と同じフォールバック方針)。
+    card.uploadQueued = false;
+    await uploadCardFileInBackground(card, file, filename);
+  }
+}
+
+/** 確認モーダルの「実行」から呼ぶ。差し替え・新規追加をまとめて適用し、最後に1回だけ
+ *  再描画・保存する(1件ごとに描画すると件数分だけ余計な再計算が走るため)。 */
+async function commitExifMatches(selectedMatches, selectedNew) {
+  if (selectedMatches.length === 0 && selectedNew.length === 0) return;
+  setStatus('高画質差し替えを適用中…', { busy: true });
+  for (const m of selectedMatches) {
+    await applyExifReplacement(m.card, m.incoming.file);
+  }
+  for (const inc of selectedNew) {
+    await createCardFromCapture({ blob: inc.file, filename: `${Date.now()}-${inc.file.name}`, mediaType: 'image' });
+  }
+  renderAllCards();
+  redrawAsterismLines();
+  scheduleAutoSave();
+  setStatus(`高画質差し替え: ${selectedMatches.length}件差し替え・${selectedNew.length}件新規追加しました`, { important: true });
 }
 
 /** カードの実体を、裏でDriveへアップロードする。js/upload-queue.jsの待機列ドレイン時
