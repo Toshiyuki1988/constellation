@@ -134,13 +134,6 @@ html, body {
   color: #06282c;
 }
 
-/* オートセーブ切り替えボタン(js/app.jsのhandleAutoSaveToggleClick()、2026年9月追加)。
-   ONの間だけ緑系にして、Driveへ自動送信中であることを一目で分かるようにする。 */
-#autosave-toggle-btn.autosave-toggle-btn--on {
-  background: rgba(110, 230, 150, 0.9);
-  color: #0a2c14;
-}
-
 /* オフライン中インジケーター(js/app.jsのupdateOfflineIndicator()、2026年9月追加)。
    警告ではなく「今の状態のお知らせ」程度の位置づけなので、赤系ではなく琥珀色にしている。
    オンライン中はhiddenで非表示(平常時に主張しない)。 */

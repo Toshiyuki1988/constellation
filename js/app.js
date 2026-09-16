@@ -43,11 +43,13 @@ const state = {
   // グループビューイングモード(js/app.jsのgroupViewingTick())のコメント間隔(秒)。
   // js/modules/crews.jsのペルソナ管理パネルから設定できる。既定60秒。
   groupViewingIntervalSec: 60,
-  // オートセーブ(constellation-data.json全体のDrive自動保存)のON/OFF(2026年9月追加)。
-  // Driveへ送るかどうかだけを切り替える端末ローカルの設定のため、Driveへは保存せず
-  // localStorageに持つ(loadAutoSaveEnabledPref()参照)。既定はOFF(通信量節約を優先する
-  // 安全側、js/upload-queue.jsの通信種別自動判定撤去と同じ考え方)。
-  autoSaveEnabled: false,
+  // オートセーブ(constellation-data.json全体のDrive自動保存)のON/OFF。
+  // **2026年9月、手動トグルを廃止し接続状態に自動連動させた**(updateOfflineIndicator()/
+  // handleConnectivityChange()参照)。以前は端末ローカルのON/OFFボタンで手動切り替えしていたが、
+  // ヘッダーのボタンが増えて煩雑になったこと、切り替え忘れによる「オンラインなのに未保存が
+  // 溜まる」取りこぼしが起きうることから、シンプルな「オンライン中は自動保存・オフライン中は
+  // 端末内バックアップのみ」という接続状態そのものへの連動に置き換えた。
+  autoSaveEnabled: navigator.onLine,
 };
 
 const FIRST_YEAR = 2025;
@@ -98,14 +100,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (els.commentHistoryBtn) els.commentHistoryBtn.addEventListener('click', openCommentHistory);
   els.driveQuotaBtn = document.getElementById('drive-quota-btn');
   if (els.driveQuotaBtn) els.driveQuotaBtn.addEventListener('click', () => refreshDriveQuota());
-  els.autoSaveToggleBtn = document.getElementById('autosave-toggle-btn');
-  if (els.autoSaveToggleBtn) els.autoSaveToggleBtn.addEventListener('click', handleAutoSaveToggleClick);
-  state.autoSaveEnabled = loadAutoSaveEnabledPref();
-  updateAutoSaveToggleButton();
   els.offlineIndicatorBtn = document.getElementById('offline-indicator-btn');
   if (els.offlineIndicatorBtn) els.offlineIndicatorBtn.addEventListener('click', handleOfflineIndicatorClick);
-  window.addEventListener('online', updateOfflineIndicator);
-  window.addEventListener('offline', updateOfflineIndicator);
+  window.addEventListener('online', handleConnectivityChange);
+  window.addEventListener('offline', handleConnectivityChange);
   updateOfflineIndicator();
 
   initCanvas(els.viewport, els.content);
@@ -428,7 +426,6 @@ function toggleAuthUI(signedIn) {
   els.toolSummary.disabled = !signedIn;
   els.toolStreetview.disabled = !signedIn;
   els.toolKeypad.disabled = !signedIn;
-  if (els.autoSaveToggleBtn) els.autoSaveToggleBtn.disabled = !signedIn;
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
@@ -652,61 +649,52 @@ let pendingSave = false; // まだDriveへ反映されていない変更があ�
 let saveInFlight = false; // handleSave()/handleLocalBackupSave()が今まさに実行中か
 let saveQueued = false; // 実行中の保存が終わったら、最新stateでもう一度保存すべきか
 
-const AUTOSAVE_ENABLED_STORAGE_KEY = 'constellation-autosave-enabled';
+/* ---------------- オフライン検知・オートセーブとの連動(2026年9月) ----------------
+ * 以前は「📡 オートセーブ: ON/OFF」という手動トグルボタンをヘッダーに常設していたが、
+ * 他の状態表示ボタン(Drive容量・オフライン中インジケーター等)が増えてヘッダーが煩雑に
+ * なってきたこと、そして何より**切り替え忘れ**(オンラインに戻ったのにOFFのままで未保存が
+ * 溜まり続ける)という取りこぼしのリスクがあったことから、ユーザー判断で手動トグルを廃止し、
+ * 「オンライン中は常時オートセーブ、オフライン中(Wi-Fi・モバイル通信ともに端末側でOFFにして
+ * いる状態)は自動的に止まる」という接続状態そのものへの連動に置き換えた。
+ *
+ * これはjs/upload-queue.jsのDriveアップロードで採用していた「通信種別(Wi-Fi/モバイル)の
+ * 自動判定」とは性質が異なる点に注意: あちらはnavigator.connection(Chrome系のみ・iOS Safari
+ * には存在しない非標準API)で「Wi-Fiかモバイルか」を判定しようとして、iOS Safariでは判定
+ * できず「最後に手動で切り替えた状態」がlocalStorageに何日も残り続け、気づかないまま
+ * モバイル回線で送信され続けた実機事故(3日間で計0.87GB消費)につながった。今回使う
+ * navigator.onLineは、Wi-Fi/モバイルの種別ではなく「OSレベルでそもそもネットワーク経路が
+ * 有効か」だけを見る、iOS Safariを含めて広くサポートされた基本的なAPIであり、
+ * 「Wi-Fiもモバイルも端末で手動オフにする」というユーザーの運用(機内モード相当)を
+ * 確実に検出できる。既知の限界(Wi-Fiに繋がっているが実際にはインターネットに出られない
+ * 状況までは判定できない)はあるが、その場合でも実際のDrive呼び出しが失敗するだけで、
+ * 既存のフォールバック(saveLocalDataBackup()、失敗時も実データは必ず端末に残る設計)が
+ * そのまま効くため、被害が出ない。 */
 
-/** オートセーブON/OFFは端末ローカルの通信ポリシーなのでDriveへは保存せずlocalStorageに持つ。
- *  読み取れない/未設定の場合は既定でOFF(通信量節約を優先する安全側)。 */
-function loadAutoSaveEnabledPref() {
-  try {
-    return localStorage.getItem(AUTOSAVE_ENABLED_STORAGE_KEY) === '1';
-  } catch (err) {
-    return false;
-  }
+function updateAutoSaveFromConnectivity() {
+  state.autoSaveEnabled = navigator.onLine;
 }
 
-function persistAutoSaveEnabledPref(enabled) {
-  try {
-    localStorage.setItem(AUTOSAVE_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
-  } catch (err) {
-    // localStorageが使えない環境でも致命的ではないため無視する
-  }
-}
-
-function updateAutoSaveToggleButton() {
-  const btn = els.autoSaveToggleBtn;
-  if (!btn) return;
-  btn.textContent = state.autoSaveEnabled ? '📡 オートセーブ: ON' : '📡 オートセーブ: OFF';
-  btn.classList.toggle('autosave-toggle-btn--on', state.autoSaveEnabled);
-  btn.title = state.autoSaveEnabled
-    ? 'ONの間、変更のたびにDriveへ自動保存します。タップでOFFにできます'
-    : 'OFFの間は端末内にのみ保存し、Driveへは送信しません。Wi-Fi接続時などにタップしてONにしてください';
-}
-
-function handleAutoSaveToggleClick() {
-  state.autoSaveEnabled = !state.autoSaveEnabled;
-  persistAutoSaveEnabledPref(state.autoSaveEnabled);
-  updateAutoSaveToggleButton();
-  if (state.autoSaveEnabled) {
-    // ONにした瞬間、それまで端末内にだけ溜まっていた変更を即座にDriveへ反映する
-    // (「☁ Driveへ送信」ボタンと同じ、ユーザーが明示的にONにした操作をきっかけに送る作法)。
+/** online/offlineイベント共通のハンドラ。オフライン→オンラインへ復帰した瞬間は、
+ *  それまで端末内にだけ溜まっていた変更を即座にDriveへ反映する(以前の手動トグルをONに
+ *  した時と同じ作法)。 */
+function handleConnectivityChange() {
+  const wasEnabled = state.autoSaveEnabled;
+  updateAutoSaveFromConnectivity();
+  updateOfflineIndicator();
+  if (state.autoSaveEnabled && !wasEnabled && state.folderId) {
     saveImmediately();
   }
 }
 
 /* ---------------- オフライン中インジケーター(2026年9月追加) ----------------
  * 「通信量節約のための導線」というユーザー要望への対応。navigator.onLine + online/offline
- * イベントだけを見る単純な実装で、**このバッジの値で何かを自動的に止めたり送ったりすることは
- * 一切しない**(表示専用)。理由: js/upload-queue.jsのDriveアップロードで、通信種別の自動判定
- * (navigator.connection)に基づいて挙動そのものを自動で切り替える設計を採用した結果、
- * iOS Safariには自動判定が無く「最後に手動で切り替えた状態」が何日も残り続け、気づかないまま
- * モバイル回線で送信され続けた実機事故(3日間で計0.87GB消費)があった。**「自動判定はどれだけ
- * 確実か」「間違った時の被害の大きさ」を天秤にかけ、被害が大きい判断は自動化せず明示的な
- * 手動操作に任せる**という、その事故から得た教訓をここでも踏襲している。navigator.onLineは
- * 「OSのネットワークアダプタが繋がっているか」しか見ておらず、Wi-Fiには繋がっているが実際の
- * インターネットには繋がっていない(圏外の館内Wi-Fi等)ケースを検出できないという既知の限界が
- * あるが、このバッジ自体は「新規のOCR・要約生成・Driveへの送信は待った方がいいかもしれない」と
- * 伝えるだけの道しるべなので、多少不正確でも実害が無い(=このアプリの他の自動判定と違い、
- * 間違えても通信量を無駄に消費したりデータを失ったりしない)と判断し、単純な実装で十分とした。
+ * イベントだけを見る単純な実装で、**このバッジ自体の表示/クリックが何かを自動的に止めたり
+ * 送ったりすることは一切ない**(あくまで表示・説明のみ)。同じnavigator.onLineの変化は、
+ * 上記のオートセーブ連動(handleConnectivityChange())からも見られているが、あちらは
+ * 「自動的に何かを送信する」のではなく逆に「オフライン中は送信を止める」安全側の連動であり、
+ * 両者とも間違えた時の実害が小さい(通信量を無駄に消費したりデータを失ったりしない)ことを
+ * 確認した上で自動化している点は共通(js/upload-queue.jsのDriveアップロードで、通信種別の
+ * 自動判定を採用して実機事故を起こした反省、CLAUDE.md参照)。
  */
 function updateOfflineIndicator() {
   if (!els.offlineIndicatorBtn) return;

@@ -391,14 +391,15 @@ async function restoreUploadQueueOnLoad() {
 // メディアのアップロードは既に完全手動化していたが、カードの位置・メモ編集などの
 // メタデータ(constellation-data.json全体)を保存するオートセーブは自動のままで、変更の
 // たびにサムネイル込みのJSON全体をDriveへ書き戻していた。これがモバイル通信量の実質的な
-// 主因と判明したため、オートセーブ自体にもON/OFFトグル(js/app.jsのhandleAutoSaveToggleClick())
-// を設け、OFF中はDriveへ送らずここ(IndexedDB)へだけ保存するようにした。
+// 主因と判明したため、オートセーブ自体にもON/OFFの切り替え(当初は手動トグル、2026年9月に
+// オンライン/オフラインへの自動連動へ置き換え。js/app.jsのhandleConnectivityChange()参照)を
+// 設け、OFF中(オフライン中)はDriveへ送らずここ(IndexedDB)へだけ保存するようにした。
 //
 // **ブラウザを閉じるとメモリ上のstateは消えるため、OFF中の変更を保護する必要がある**
 // (アップロード待機列と同じ「成功していないのに確定的な状態遷移を行わない」という設計を
 // 踏襲: OFF中は「Driveへ送っていない」という状態を保ったまま、実データは必ずどこかに残す)。
-// 単一キー('latest')で1件だけを保持する単純な作りで、ONに切り替えた瞬間に
-// js/app.jsのhandleAutoSaveToggleClick()がDriveへ即座に保存し、成功すればclearLocalDataBackup()
+// 単一キー('latest')で1件だけを保持する単純な作りで、ONに切り替わった(オンラインに復帰した)
+// 瞬間にjs/app.jsのhandleConnectivityChange()がDriveへ即座に保存し、成功すればclearLocalDataBackup()
 // で消す。次回起動時はonSignedIn()がDrive側のupdatedAtとこちらのupdatedAtを比較し、こちらの
 // 方が新しければ復元する(=Driveへ送れないまま終了したブラウザセッションがあった場合の保険)。
 
