@@ -438,12 +438,17 @@ html, body {
 
 /* ---------- OCRのピクチャ・イン・ピクチャ表示(js/camera.jsのrunOcrInBackground()、2026年9月追加) ----------
    「読み取る」を押した瞬間にカメラは閉じ、OCR自体はここで進捗だけを示す。タップ等の操作は
-   要求しない(pointer-events: none、下のキャンバス操作を一切妨げない)控えめな表示。 */
+   要求しない(pointer-events: none、下のキャンバス操作を一切妨げない)控えめな表示。
+   **2026年9月修正**: z-index:55のままだと、Almagest(150/155)・Crews(120/130/150)・
+   Star Pencil(160/165)など後発のフルスクリーンモジュールオーバーレイの裏に隠れてしまい、
+   それらのモジュール内からOCRを実行すると「読み取り中の表示が全く見えない」不具合になって
+   いた(実機報告)。既存の全オーバーレイ(#extract-region-overlayの210)より上、確認ダイアログ
+   (.modal-overlayの220、常に最前面であるべき)より下に引き上げた。 */
 #ocr-pip {
   position: fixed;
   right: 12px;
   bottom: calc(84px + env(safe-area-inset-bottom, 0px));
-  z-index: 55;
+  z-index: 216;
   display: flex;
   align-items: center;
   gap: 8px;

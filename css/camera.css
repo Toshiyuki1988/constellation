@@ -614,7 +614,7 @@
 
 .cam-select-actions {
   position: absolute; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; z-index: 8;
-  display: none; justify-content: center; gap: 10px; padding: 0 16px;
+  display: none; justify-content: center; gap: 10px; padding: 0 16px; flex-wrap: wrap;
 }
 .cam-select-actions.show { display: flex; }
 .cam-select-btn {
@@ -622,7 +622,36 @@
 }
 .cam-select-retake { background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px solid rgba(255, 255, 255, 0.32); }
 .cam-select-run { background: #fff; color: #000; border: none; }
+/* 「読み取りを終える」は続けて選択モード中だけ現れる、確定の意味合いを持つ操作なので
+   run/retakeと視覚的に区別できるアクセントカラーにする。 */
+.cam-select-finish { background: #2e9e5b; color: #fff; border: none; }
 .cam-select-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* 範囲選択OCRの進捗・件数表示(2026年9月追加、上記.cam-select-actionsセクション参照)。
+   選択レイヤー・アクションボタンより上、常に視界に入る位置に置く。 */
+.cam-select-status {
+  position: absolute; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; z-index: 8;
+  display: flex; justify-content: center; align-items: center; gap: 10px; padding: 0 16px; pointer-events: none;
+}
+.cam-select-count {
+  font-family: inherit; font-size: 10.5px; color: #fff; background: rgba(255, 255, 255, 0.16);
+  border-radius: 20px; padding: 5px 12px;
+}
+.cam-select-progress {
+  font-family: inherit; font-size: 10.5px; color: #fff; background: rgba(0, 0, 0, 0.5);
+  border-radius: 20px; padding: 5px 8px 5px 10px; display: inline-flex; align-items: center; gap: 6px;
+  pointer-events: auto; /* 親.cam-select-statusはnoneだが、中止ボタンは押せる必要がある */
+}
+.cam-select-progress-spinner {
+  width: 11px; height: 11px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff; animation: ocr-pip-spin 0.8s linear infinite; flex-shrink: 0;
+}
+/* 電波状況が悪い等で読み取りがいつまでも終わらない場合の中止手段(#ocr-pip-cancelと同じ考え方)。 */
+.cam-select-progress-cancel {
+  flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%; border: none;
+  background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 9px; line-height: 1; cursor: pointer; padding: 0;
+}
+.cam-select-progress-cancel:active { background: rgba(255, 255, 255, 0.32); }
 
 /* ---------- 動画 ---------- */
 .cam-video-timer {

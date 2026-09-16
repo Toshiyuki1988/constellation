@@ -264,6 +264,10 @@ function ensureCameraDom() {
     selectActions: document.getElementById('caption-select-actions'),
     selectRetakeBtn: document.getElementById('caption-select-retake'),
     selectRunBtn: document.getElementById('caption-select-run'),
+    selectFinishBtn: document.getElementById('caption-select-finish'),
+    selectCountEl: document.getElementById('caption-select-count'),
+    selectProgressEl: document.getElementById('caption-select-progress'),
+    selectProgressCancelBtn: document.getElementById('caption-select-progress-cancel'),
 
     videoScreen: document.getElementById('camera-screen-video'),
     videoVideo: document.getElementById('camera-video-video'),
@@ -295,6 +299,8 @@ function wireCameraEvents() {
   wireCaptionDragDrop();
   camEls.selectRetakeBtn.addEventListener('click', resetCaptionState);
   camEls.selectRunBtn.addEventListener('click', handleSelectionRun);
+  camEls.selectFinishBtn.addEventListener('click', handleSelectionFinish);
+  camEls.selectProgressCancelBtn.addEventListener('click', handleSelectionOcrCancel);
   wireSelectionLayer();
 
   camEls.videoRecBtn.addEventListener('click', () => {
@@ -1827,6 +1833,16 @@ let selectPointerActive = false;
 let selectPointerId = null;
 let selectStartX = 0;
 let selectStartY = 0;
+// 「続けて選択」モード(2026年9月追加、下記handleSelectionRun()参照): 書籍のような複数段組みの
+// ページを段ごとに範囲選択→読み取りを繰り返すための、同じ静止フレーム上での連続OCR。
+// 一度でも範囲選択でOCRを実行すると、このバッファへ結果を積みながらカメラを開いたままにし、
+// 「✓ 読み取りを終える」を押すまで次々と範囲を選び直せる。
+let captionOcrBuffer = [];
+let captionOcrBusy = false;
+// enterSelectionMode()が呼ばれるたびに増やす世代カウンタ。「続けて選択」モード中のOCR結果
+// (非同期)が、撮り直し・カメラを閉じる等で既に無効になった古いセッションのものであれば
+// captionOcrBufferへ書き戻さないようにするための踏み分け(2026年9月追加)。
+let captionSelectionGen = 0;
 
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
@@ -1836,6 +1852,10 @@ function resetCaptionState() {
   camEls.captionHint.textContent = '画面にキャプションを収めてタップ';
   captionFreezeCanvas = null;
   captionSelection = null;
+  captionOcrBuffer = [];
+  captionOcrBusy = false;
+  captionInlineController = null;
+  captionSelectionGen++;
   camEls.freezeWrap.classList.remove('show');
   camEls.freezeWrap.innerHTML = '';
   camEls.selectLayer.classList.remove('show');
@@ -1843,6 +1863,9 @@ function resetCaptionState() {
   camEls.selectActions.classList.remove('show');
   camEls.selectRunBtn.disabled = false;
   camEls.selectRetakeBtn.disabled = false;
+  camEls.selectFinishBtn.hidden = true;
+  camEls.selectCountEl.hidden = true;
+  camEls.selectProgressEl.hidden = true;
 }
 
 function camDebugLog(msg) {
@@ -1956,7 +1979,25 @@ function enterSelectionMode(canvas) {
 }
 
 function updateSelectRunLabel() {
-  camEls.selectRunBtn.textContent = captionSelection ? 'この範囲を読み取る' : '全体を読み取る';
+  // 一度でも範囲選択でOCRを実行した後(続けて選択モード中)は、ボタンが「終了」ではなく
+  // 「追加」であることが伝わるよう文言を変える(2026年9月追加)。
+  if (captionOcrBuffer.length > 0) {
+    camEls.selectRunBtn.textContent = captionSelection ? '＋ この範囲を追加' : '＋ 全体を追加';
+  } else {
+    camEls.selectRunBtn.textContent = captionSelection ? 'この範囲を読み取る' : '全体を読み取る';
+  }
+}
+
+/** 続けて選択モードの進捗UI(件数バッジ・読み取り中スピナー・終えるボタンの表示/非表示)。
+ *  runSelectionOcrInline()の開始/終了と、handleSelectionRun()の分岐から呼ぶ。 */
+function updateSelectionOcrUi() {
+  camEls.selectProgressEl.hidden = !captionOcrBusy;
+  camEls.selectRunBtn.disabled = captionOcrBusy;
+  camEls.selectRetakeBtn.disabled = captionOcrBusy;
+  camEls.selectFinishBtn.hidden = captionOcrBuffer.length === 0;
+  camEls.selectFinishBtn.disabled = captionOcrBusy;
+  camEls.selectCountEl.hidden = captionOcrBuffer.length === 0;
+  camEls.selectCountEl.textContent = `読み取り済み: ${captionOcrBuffer.length}件`;
 }
 
 /** 選択レイヤー上のドラッグで矩形を描く。指を離すまで始点を固定し、終点だけ動かす。 */
@@ -2058,9 +2099,20 @@ function cropCanvasToBlob(sourceCanvas, containerEl, selRect, quality) {
  * 押した瞬間にカメラのオーバーレイ自体を閉じ、OCR(Gemini呼び出し)はrunOcrInBackground()で
  * バックグラウンドへ回すように変更した。進行中であることは画面右下の小さなPiP表示
  * (#ocr-pip、css/style.css)だけで示し、カメラは即座に次の撮影に使える状態へ戻る。
+ *
+ * **2026年9月さらに改良(「続けて選択」モード)**: 美術手帖のような書籍ページは縦書き4段組み
+ * など構成が複雑で、1回のOCRでは段の順序が混ざって読み取り精度が落ちる。範囲選択を使って
+ * 段ごとに分割してOCRする運用は有効だが、以前は1回読み取るたびにカメラごと閉じてしまうため、
+ * 次の段を読み取るには毎回カメラを開き直し・同じ写真を撮り直す/アップロードし直す必要があり
+ * 実用上とても不便だった。そこで「範囲を選ばずそのまま読み取る(全体)」場合は従来通りの
+ * 一発読み取り(即座に閉じてバックグラウンドPiPへ)のままにしつつ、**一度でも範囲を選んで
+ * 読み取った場合は、同じ静止フレームを表示したままにして、続けて次の範囲を選べる**ように
+ * した。進行中はこの画面内のインラインの進捗表示(#caption-select-progress)で示し、
+ * 「✓ 読み取りを終える」を押した時点で、それまでに読み取った範囲を改行区切りで結合して
+ * 呼び出し元へ渡す。
  */
 async function handleSelectionRun() {
-  if (!captionFreezeCanvas) return;
+  if (!captionFreezeCanvas || captionOcrBusy) return;
   let blob;
   try {
     // OCR用はダウンスケールを一切かけず、映像そのままの解像度・高画質で送る。
@@ -2074,9 +2126,84 @@ async function handleSelectionRun() {
     showCameraError('画像の切り出しに失敗しました');
     return;
   }
-  camDebugLog(`OCR送信(選択=${captionSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
+  const hadSelection = Boolean(captionSelection);
+  camDebugLog(`OCR送信(選択=${hadSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
+
+  // まだ一度も範囲選択を使っておらず、かつ今回も「全体」なら、単発の写真OCRとして
+  // これまで通りその場でカメラを閉じ、バックグラウンド(corner PiP)で処理する。
+  if (!hadSelection && captionOcrBuffer.length === 0) {
+    const resolve = detachCameraForBackgroundOcr();
+    runOcrInBackground(blob, resolve);
+    return;
+  }
+  runSelectionOcrInline(blob);
+}
+
+/**
+ * 「続けて選択」モード中の1範囲ぶんのOCR。カメラは閉じず、結果はcaptionOcrBufferへ積んで
+ * 画面内の進捗表示を更新するだけ(呼び出し元への通知はhandleSelectionFinish()まで行わない)。
+ * captionSelectionGenで、撮り直し・カメラを閉じるなどで無効になった古いセッションの結果を
+ * 誤って積んでしまわないようにガードする。
+ */
+let captionInlineController = null; // 今インラインで進行中のOCR呼び出し(#caption-select-progress-cancelで個別に中止する)
+
+async function runSelectionOcrInline(blob) {
+  const gen = captionSelectionGen;
+  captionOcrBusy = true;
+  updateSelectionOcrUi();
+  const controller = new AbortController();
+  captionInlineController = controller;
+  ocrActiveControllers.add(controller); // PiPの✕(全件中止)にも相乗りできるよう、共有Setにも登録しておく
+  try {
+    const text = await ocrImage(blob, { signal: controller.signal });
+    if (gen !== captionSelectionGen) return; // その間に撮り直し/クローズ等で無効になったセッション
+    if (!text || text.includes('(テキストなし)')) {
+      if (typeof setStatus === 'function') setStatus('この範囲では文字を検出できませんでした');
+    } else {
+      captionOcrBuffer.push(text);
+      if (typeof setStatus === 'function') setStatus(`範囲を読み取りました(${captionOcrBuffer.length}件目)`);
+    }
+  } catch (err) {
+    console.error(err);
+    camDebugLog('OCRエラー(続けて選択): ' + err.message);
+    if (gen === captionSelectionGen) {
+      if (err && err.cancelled) {
+        if (typeof setStatus === 'function') setStatus('読み取りを中止しました');
+      } else if (typeof setStatus === 'function') {
+        setStatus(`読み取りに失敗しました: ${err.message}`, { important: true });
+      }
+    }
+  } finally {
+    ocrActiveControllers.delete(controller);
+    if (captionInlineController === controller) captionInlineController = null;
+    if (gen === captionSelectionGen) {
+      captionOcrBusy = false;
+      // 次の範囲をすぐ選べるよう、選択矩形だけリセットして同じ画像は表示したままにする。
+      captionSelection = null;
+      camEls.selectRect.hidden = true;
+      updateSelectRunLabel();
+      updateSelectionOcrUi();
+    }
+  }
+}
+
+/** インライン進捗表示の✕(2026年9月追加): 電波状況が悪い等でこの範囲の読み取りが
+ *  いつまでも終わらない場合に、この1件だけを中止できる(#ocr-pip-cancelの「全件中止」より
+ *  的を絞った操作)。 */
+function handleSelectionOcrCancel() {
+  if (captionInlineController) captionInlineController.abort();
+}
+
+/** 「✓ 読み取りを終える」: それまでに続けて選択モードで読み取った範囲を改行区切りで結合し、
+ *  カメラを閉じて呼び出し元のPromiseへ渡す(単発読み取り(runOcrInBackground())と合流する
+ *  出口が違うだけで、呼び出し元からは同じ{kind:'text', text}の形で届く)。 */
+function handleSelectionFinish() {
+  if (captionOcrBusy || captionOcrBuffer.length === 0) return;
+  const combined = captionOcrBuffer.join('\n');
+  captionOcrBuffer = [];
   const resolve = detachCameraForBackgroundOcr();
-  runOcrInBackground(blob, resolve);
+  if (typeof setStatus === 'function') setStatus('読み取りました');
+  resolve({ kind: 'text', text: combined });
 }
 
 /* ---------------- OCRのバックグラウンド実行・PiP表示(2026年9月追加) ----------------

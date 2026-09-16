@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260916a">
-<link rel="stylesheet" href="css/camera.css?v=20260916b">
+<link rel="stylesheet" href="css/style.css?v=20260916b">
+<link rel="stylesheet" href="css/camera.css?v=20260916c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -303,9 +303,23 @@
       <div class="cam-select-layer" id="caption-select-layer">
         <div class="cam-select-rect" id="caption-select-rect" hidden></div>
       </div>
+      <!-- 範囲選択OCRの進捗・件数表示(2026年9月追加): 書籍のような複数段組みのページを
+           段ごとに範囲選択→読み取り→追記を繰り返す時、今どこまで読めたか・今読み取り中かを
+           この場で確認できるようにする(以前は読み取り中の表示が画面右下の小さなPiPだけで、
+           Almagest/Crews等のフルスクリーンモジュールの裏に隠れて見えなかった)。 -->
+      <div class="cam-select-status" id="caption-select-status">
+        <span class="cam-select-count" id="caption-select-count" hidden></span>
+        <span class="cam-select-progress" id="caption-select-progress" hidden>
+          <span class="cam-select-progress-spinner"></span>読み取り中…
+          <button type="button" class="cam-select-progress-cancel" id="caption-select-progress-cancel" title="この範囲の読み取りを中止">✕</button>
+        </span>
+      </div>
       <div class="cam-select-actions" id="caption-select-actions">
         <button class="cam-select-btn cam-select-retake" id="caption-select-retake">撮り直す</button>
         <button class="cam-select-btn cam-select-run" id="caption-select-run">全体を読み取る</button>
+        <!-- 範囲を1回でも読み取ると現れる(=複数段組みの続けて読み取りモード)。押すまで
+             カメラは閉じず、同じ画像のまま次の範囲を選び続けられる。 -->
+        <button class="cam-select-btn cam-select-finish" id="caption-select-finish" hidden>✓ 読み取りを終える</button>
       </div>
     </div>
 
@@ -435,7 +449,7 @@
   <script src="js/upload-queue.js?v=20260916a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260916a"></script>
-  <script src="js/camera.js?v=20260916b"></script>
+  <script src="js/camera.js?v=20260916c"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
