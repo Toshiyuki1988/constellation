@@ -96,10 +96,20 @@ let camWaveAnalyser = null;
 let camWaveSource = null;
 let camWaveRAF = null;
 
-/** @param {'photo'|'caption'|'video'|'audio'} initialMode */
-function openCamera(initialMode) {
+/**
+ * @param {'photo'|'caption'|'video'|'audio'} initialMode
+ * @param {{continuous?: boolean}} [opts] continuous: 'caption'モード限定。trueだと、範囲を
+ *   選ばない1回目の読み取りも「続けて選択」の画面内フロー(サムネイル表示・カメラを閉じない)
+ *   で扱う(2026年9月追加)。既定(false/省略)は従来通り、範囲を選ばなければ即座に閉じて
+ *   画面右下のPiPで進捗を示す単発読み取りのまま。Almagestのように範囲選択OCRの繰り返しが
+ *   前提のモジュールは、押した瞬間ごとに単発/連続の挙動が変わって分かりにくい(実機報告:
+ *   「サムネに変化がない」→実際は範囲を選ばず単発扱いのPiP経路に入っていて、続けて選択の
+ *   サムネ自体が生成されていなかった)ため、常にサムネイル付きの画面内フローへ固定する。
+ */
+function openCamera(initialMode, opts) {
   ensureCameraDom();
   bindCameraViewportSync();
+  captionForceContinuous = Boolean(opts && opts.continuous);
   return new Promise((resolve) => {
     resolveCamera = resolve;
     camEls.overlay.classList.add('open');
@@ -1830,6 +1840,10 @@ function wireTargetScope() {
 
 let captionFreezeCanvas = null; // 撮影直後の静止フレーム(選択モード中だけ保持)
 let captionSelection = null; // 選択レイヤー内のCSSピクセル座標 {x, y, w, h}。null = 未選択(全体)
+// openCamera('caption', {continuous:true})で呼ばれた場合にtrue(2026年9月追加)。retake
+// (resetCaptionState())を挟んでも同じopenCamera()セッション中は維持したいため、
+// resetCaptionState()ではリセットしない(teardownCamera()でセッション終了時にのみ戻す)。
+let captionForceContinuous = false;
 let selectPointerActive = false;
 let selectPointerId = null;
 let selectStartX = 0;
@@ -2018,13 +2032,25 @@ function updateSelectionOcrUi() {
 function addCaptionThumb(url) {
   const entry = { url, status: 'pending' };
   captionThumbs.push(entry);
+  camDebugLog(`サムネ追加(pending) 現在${captionThumbs.length}件`);
   renderCaptionThumbs();
   return entry;
 }
 
 function setCaptionThumbStatus(entry, status) {
   entry.status = status;
+  camDebugLog(`サムネ状態変更: ${status}`);
   renderCaptionThumbs();
+}
+
+/** 状態ごとのバッジ内容(絵文字/記号 or スピナー)。実機で::after(疑似要素)が
+ *  親のoverflow:hiddenとの組み合わせで見えなくなる不具合が報告されたため、疑似要素ではなく
+ *  実体のDOM要素(span)として描画する(2026年9月変更)。 */
+function captionThumbBadgeHtml(status) {
+  if (status === 'pending') return '<span class="cam-select-thumb-spinner"></span>';
+  if (status === 'done') return '✓';
+  if (status === 'empty') return '？';
+  return '✕'; // failed | cancelled
 }
 
 function renderCaptionThumbs() {
@@ -2035,7 +2061,7 @@ function renderCaptionThumbs() {
       `<div class="cam-select-thumb cam-select-thumb--${t.status}">` +
       `<img src="${t.url}" alt="">` +
       `<span class="cam-select-thumb-num">${i + 1}</span>` +
-      (t.status === 'pending' ? '<span class="cam-select-thumb-spinner"></span>' : '') +
+      `<span class="cam-select-thumb-badge">${captionThumbBadgeHtml(t.status)}</span>` +
       '</div>'
     ))
     .join('');
@@ -2196,9 +2222,11 @@ async function handleSelectionRun() {
   const hadSelection = Boolean(captionSelection);
   camDebugLog(`OCR送信(選択=${hadSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
 
-  // まだ一度も範囲選択を使っておらず、かつ今回も「全体」なら、単発の写真OCRとして
-  // これまで通りその場でカメラを閉じ、バックグラウンド(corner PiP)で処理する。
-  if (!hadSelection && captionOcrBuffer.length === 0) {
+  // まだ一度も範囲選択を使っておらず、かつ今回も「全体」で、呼び出し元が続けて選択モードを
+  // 明示的に要求していなければ、単発の写真OCRとしてこれまで通りその場でカメラを閉じ、
+  // バックグラウンド(corner PiP)で処理する。continuous指定時は、範囲を選ばない1回目の
+  // 読み取りもサムネイル付きの画面内フローに統一する(上記openCamera()のコメント参照)。
+  if (!hadSelection && captionOcrBuffer.length === 0 && !captionForceContinuous) {
     const resolve = detachCameraForBackgroundOcr();
     runOcrInBackground(blob, resolve);
     return;
@@ -2227,7 +2255,14 @@ async function runSelectionOcrInline(blob) {
   ocrActiveControllers.add(controller); // PiPの✕(全件中止)にも相乗りできるよう、共有Setにも登録しておく
   try {
     const text = await ocrImage(blob, { signal: controller.signal });
-    if (gen !== captionSelectionGen) { URL.revokeObjectURL(thumbUrl); return; } // その間に撮り直し/クローズ等で無効になったセッション
+    if (gen !== captionSelectionGen) {
+      // テキスト自体は取得できているが、その間に撮り直し/クローズ等でセッションが無効になった
+      // ため、サムネイルへは反映しない(このケースが疑われる場合は?debugパネルで確認できる
+      // よう記録しておく、2026年9月追加)。
+      camDebugLog(`続けて選択: gen不一致のため結果を破棄(呼び出し時gen=${gen}, 現在gen=${captionSelectionGen})`);
+      URL.revokeObjectURL(thumbUrl);
+      return;
+    }
     if (!text || text.includes('(テキストなし)')) {
       setCaptionThumbStatus(thumbEntry, 'empty');
       if (typeof setStatus === 'function') setStatus('この範囲では文字を検出できませんでした');
@@ -2278,6 +2313,7 @@ function handleSelectionFinish() {
   if (captionOcrBusy || captionOcrBuffer.length === 0) return;
   const combined = captionOcrBuffer.join('\n');
   captionOcrBuffer = [];
+  clearCaptionThumbs(); // サムネイルのBlob URLをこの時点で解放する(次回openCamera()を待たない)
   const resolve = detachCameraForBackgroundOcr();
   if (typeof setStatus === 'function') setStatus('読み取りました');
   resolve({ kind: 'text', text: combined });
@@ -2530,6 +2566,7 @@ function closeCamera() {
 
 function teardownCamera() {
   resolveCamera = null;
+  captionForceContinuous = false; // 次のopenCamera()呼び出し元(既定は単発扱い)へ引き継がない
   stopCameraStream(); // track.stop()がハードウェアを解放するため、トーチも自動的に消える
   camTorchOn = false;
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');

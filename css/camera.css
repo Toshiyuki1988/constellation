@@ -670,27 +670,36 @@
 }
 .cam-select-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cam-select-thumb-num {
-  position: absolute; left: 2px; top: 2px; font-family: inherit; font-size: 8px; line-height: 1;
+  position: absolute; left: 2px; top: 2px; z-index: 3; font-family: inherit; font-size: 8px; line-height: 1;
   color: #fff; background: rgba(0, 0, 0, 0.6); border-radius: 4px; padding: 1px 3px;
 }
+/* 状態表示は::afterではなく実体のDOM要素(span)にした(2026年9月、実機報告を受けて変更)。
+   ::after+position:absoluteの負のoffset(bottom:-1px)が親の overflow:hidden で欠けて見える
+   ケースがあったため、常に要素の内側(正のoffset)に収める・重要な状態は画像全面を覆う
+   はっきりした表示にする、の2点で作り直した。 */
+.cam-select-thumb-badge { position: absolute; z-index: 2; font-family: inherit; font-weight: 700; }
 .cam-select-thumb--pending { border-color: #fff; }
+.cam-select-thumb--pending .cam-select-thumb-badge {
+  inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.4);
+}
 .cam-select-thumb-spinner {
-  position: absolute; right: 3px; bottom: 3px; width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; animation: ocr-pip-spin 0.8s linear infinite;
+  width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff; animation: ocr-pip-spin 0.8s linear infinite;
 }
 .cam-select-thumb--done { border-color: #2e9e5b; }
-.cam-select-thumb--done::after {
-  content: '✓'; position: absolute; right: 2px; bottom: -1px; font-size: 12px; font-weight: 700; color: #4fd487;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+.cam-select-thumb--done .cam-select-thumb-badge {
+  right: 3px; bottom: 2px; font-size: 16px; color: #4fd487;
+  text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000;
 }
-.cam-select-thumb--failed, .cam-select-thumb--cancelled {
-  border-color: #d9534f;
+.cam-select-thumb--failed, .cam-select-thumb--cancelled { border-color: #d9534f; }
+.cam-select-thumb--failed .cam-select-thumb-badge, .cam-select-thumb--cancelled .cam-select-thumb-badge {
+  inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: #fff; background: rgba(217, 83, 79, 0.6);
 }
-.cam-select-thumb--failed::after, .cam-select-thumb--cancelled::after, .cam-select-thumb--empty::after {
-  content: '✕'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 16px; font-weight: 700; color: #ff8a70; background: rgba(0, 0, 0, 0.4);
+.cam-select-thumb--empty .cam-select-thumb-badge {
+  inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: #fff; background: rgba(0, 0, 0, 0.55);
 }
-.cam-select-thumb--empty::after { content: '?'; color: rgba(255, 255, 255, 0.8); }
 
 /* ---------- 動画 ---------- */
 .cam-video-timer {
