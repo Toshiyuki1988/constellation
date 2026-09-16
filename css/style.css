@@ -141,6 +141,14 @@ html, body {
   color: #0a2c14;
 }
 
+/* オフライン中インジケーター(js/app.jsのupdateOfflineIndicator()、2026年9月追加)。
+   警告ではなく「今の状態のお知らせ」程度の位置づけなので、赤系ではなく琥珀色にしている。
+   オンライン中はhiddenで非表示(平常時に主張しない)。 */
+#offline-indicator-btn {
+  background: rgba(230, 160, 60, 0.92);
+  color: #2c1a04;
+}
+
 /* コメント履歴モーダル(js/app.jsのopenCommentHistory()、2026年9月追加)。既存の.modal-overlay/
    .modalを流用しつつ、リスト部分だけ専用のスタイルを足す。 */
 .comment-history-modal { max-width: 460px; }

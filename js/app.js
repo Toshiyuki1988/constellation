@@ -102,6 +102,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (els.autoSaveToggleBtn) els.autoSaveToggleBtn.addEventListener('click', handleAutoSaveToggleClick);
   state.autoSaveEnabled = loadAutoSaveEnabledPref();
   updateAutoSaveToggleButton();
+  els.offlineIndicatorBtn = document.getElementById('offline-indicator-btn');
+  if (els.offlineIndicatorBtn) els.offlineIndicatorBtn.addEventListener('click', handleOfflineIndicatorClick);
+  window.addEventListener('online', updateOfflineIndicator);
+  window.addEventListener('offline', updateOfflineIndicator);
+  updateOfflineIndicator();
 
   initCanvas(els.viewport, els.content);
   initExtractRegionPicker();
@@ -686,6 +691,41 @@ function handleAutoSaveToggleClick() {
     // (「☁ Driveへ送信」ボタンと同じ、ユーザーが明示的にONにした操作をきっかけに送る作法)。
     saveImmediately();
   }
+}
+
+/* ---------------- オフライン中インジケーター(2026年9月追加) ----------------
+ * 「通信量節約のための導線」というユーザー要望への対応。navigator.onLine + online/offline
+ * イベントだけを見る単純な実装で、**このバッジの値で何かを自動的に止めたり送ったりすることは
+ * 一切しない**(表示専用)。理由: js/upload-queue.jsのDriveアップロードで、通信種別の自動判定
+ * (navigator.connection)に基づいて挙動そのものを自動で切り替える設計を採用した結果、
+ * iOS Safariには自動判定が無く「最後に手動で切り替えた状態」が何日も残り続け、気づかないまま
+ * モバイル回線で送信され続けた実機事故(3日間で計0.87GB消費)があった。**「自動判定はどれだけ
+ * 確実か」「間違った時の被害の大きさ」を天秤にかけ、被害が大きい判断は自動化せず明示的な
+ * 手動操作に任せる**という、その事故から得た教訓をここでも踏襲している。navigator.onLineは
+ * 「OSのネットワークアダプタが繋がっているか」しか見ておらず、Wi-Fiには繋がっているが実際の
+ * インターネットには繋がっていない(圏外の館内Wi-Fi等)ケースを検出できないという既知の限界が
+ * あるが、このバッジ自体は「新規のOCR・要約生成・Driveへの送信は待った方がいいかもしれない」と
+ * 伝えるだけの道しるべなので、多少不正確でも実害が無い(=このアプリの他の自動判定と違い、
+ * 間違えても通信量を無駄に消費したりデータを失ったりしない)と判断し、単純な実装で十分とした。
+ */
+function updateOfflineIndicator() {
+  if (!els.offlineIndicatorBtn) return;
+  els.offlineIndicatorBtn.hidden = navigator.onLine;
+}
+
+/** ステータス欄は1行で省略される(長文向きではない)ため、詳しい説明は簡易ダイアログで見せる。 */
+function handleOfflineIndicatorClick() {
+  showChoiceDialog({
+    title: '📡 オフライン中',
+    message:
+      'カード・セッションの閲覧、Almagestで既に読み込んだ本(Boy/Professorの要約を含む)は' +
+      '引き続き読めます。\n\n' +
+      '新規のOCR・要約生成・座談会・Astrometry Scope等、Geminiを呼ぶ操作にはオンラインへの' +
+      '復帰が必要です。\n\n' +
+      'カードの追加・編集自体は今のまま行えます。Driveへの保存・送信はオンラインに戻り次第、' +
+      '自動的に反映されます(操作した内容が失われることはありません)。',
+    options: [{ label: '閉じる', secondary: true }],
+  });
 }
 
 function scheduleAutoSave() {

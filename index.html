@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260916b">
+<link rel="stylesheet" href="css/style.css?v=20260916c">
 <link rel="stylesheet" href="css/camera.css?v=20260916d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -60,6 +60,15 @@
       <span class="info-ticker-progress" id="infoTickerProgress"></span>
     </div>
     <div class="toolbar-actions">
+      <!-- オフライン中インジケーター(2026年9月追加)。navigator.onLine + online/offlineイベント
+           だけを見る単純な実装(js/app.jsのupdateOfflineIndicator()参照)。**通信種別の自動判定で
+           挙動そのものを切り替える(=間違えると実害が出る)設計は、Wi-Fi/モバイル自動判定の実機
+           事故(本ファイル下記のDriveアップロード関連の注記、CLAUDE.md参照)で懲りているため
+           今回は採用しない**。このバッジは何かを自動で止めたり送ったりする判断には一切使わず、
+           あくまで「今オフラインらしいので、新規のOCR・要約生成・Driveへの送信は待った方がいい」
+           と伝えるだけの表示専用の道しるべ。オンライン時は非表示(平常時に主張しない)。
+           タップすると、今の状況で何ができる/できないかをステータス欄に表示する。 -->
+      <button id="offline-indicator-btn" class="offline-indicator-btn" hidden title="タップで詳しく表示">📡 オフライン中</button>
       <!-- Driveへのアップロードは完全手動化した(2026年9月、通信量節約のためのユーザー要望)。
            以前はnavigator.connectionでの自動判定+ヘッダーのWi-Fi/モバイル切り替えボタンで
            制御していたが、iOS Safariには自動判定が無いため「最後に手動で切り替えた状態」が
@@ -458,7 +467,7 @@
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260916a"></script>
+  <script src="js/app.js?v=20260916b"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260914b"></script>
