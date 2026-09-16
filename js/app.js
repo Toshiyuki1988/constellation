@@ -1101,16 +1101,28 @@ async function mergeQuickBundleIfAny() {
   return true;
 }
 
+/**
+ * 軽量インデックスが使えずフォールバックした場合の共通処理(2026年9月追加、実機報告を受けて)。
+ * 「作って中へ入る」というクイック系の体験は、フォールバックしても変えないようにする
+ * (以前はフォールバック時、通常のhandleCreateSession()を呼ぶだけで新規セッションの中へは
+ * 入らず、【現在の年】の全カードが見える状態のまま取り残される不具合があった)。
+ * 呼び出し前に必ずensureMainDataLoaded()が済んでいること(mainDataLoaded===true)が前提。
+ */
+async function createAndEnterSessionUnderCurrentYear(name) {
+  const yearId = getCurrentYearSessionId();
+  if (activeSessionId() !== yearId) {
+    await enterSession(yearId, true);
+  }
+  const session = createChildSessionCard(name);
+  await enterSession(session.id, false);
+}
+
 /** クイックセッションボタン。セッション名の入力方法(OCR/手入力)はhandleCreateSession()と
- *  同じ二択を踏襲する。軽量インデックスが使えない場合は、安全側に倒して通常の
- *  全データ読み込み(handleCreateSession())へフォールバックする。 */
+ *  同じ二択を踏襲する。軽量インデックスが使えない場合は、安全側に倒して通常の全データ
+ *  読み込みへフォールバックするが、その場合も新規セッションを作って中へ入るところまでは
+ *  必ず行う(createAndEnterSessionUnderCurrentYear()参照)。 */
 async function handleQuickSessionStart() {
   closeStartMenu();
-  if (!state.yearsIndexAvailable) {
-    setStatus('念のため通常読み込みに切り替えます…', { busy: true });
-    await withMainData(handleCreateSession);
-    return;
-  }
   const choice = await showChoiceDialog({
     title: 'セッション名の入力方法',
     options: [
@@ -1129,24 +1141,44 @@ async function handleQuickSessionStart() {
     if (!name) { openStartMenu(); return; }
     name = name.trim();
   }
-  startQuickSession(name);
-  setStatus(`「${name}」セッションを作成しました(クイックモード)`);
+  if (state.yearsIndexAvailable) {
+    startQuickSession(name);
+    setStatus(`「${name}」セッションを作成しました(クイックモード)`);
+  } else {
+    setStatus('初回だけ全データを読み込みます(次回からは軽量になります)…', { busy: true });
+    try {
+      await ensureMainDataLoaded();
+    } catch (err) {
+      openStartMenu();
+      return;
+    }
+    await createAndEnterSessionUnderCurrentYear(name);
+  }
 }
 
 /** クイックカメラボタン。カメラをその場で開く(この時点では通信ゼロ)。撮影が確定した
  *  瞬間だけ、【現在の年】の下に新規セッションを作って格納する(2回目以降の撮影は同じ
  *  セッションへ、通常のカメラボタン経由で追加できる)。軽量インデックスが使えない場合は
- *  安全側に倒して通常の全データ読み込みへフォールバックする。 */
+ *  安全側に倒して通常の全データ読み込みへフォールバックするが、その場合も新規セッションの
+ *  中へ入るところまでは必ず行う。 */
 async function handleQuickCameraStart() {
   closeStartMenu();
   const result = await openCamera('photo');
   if (!result || result.kind !== 'photo') { openStartMenu(); return; }
-  if (!state.yearsIndexAvailable) {
-    setStatus('念のため通常読み込みに切り替えます…', { busy: true });
-    await ensureMainDataLoaded().catch(() => {});
-    if (!mainDataLoaded) { openStartMenu(); return; }
-  } else if (!state.quickMode && !mainDataLoaded) {
-    startQuickSession(`クイック撮影 ${new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}`);
+  const sessionName = `クイック撮影 ${new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}`;
+  if (state.yearsIndexAvailable) {
+    if (!state.quickMode && !mainDataLoaded) {
+      startQuickSession(sessionName);
+    }
+  } else {
+    setStatus('初回だけ全データを読み込みます(次回からは軽量になります)…', { busy: true });
+    try {
+      await ensureMainDataLoaded();
+    } catch (err) {
+      openStartMenu();
+      return;
+    }
+    await createAndEnterSessionUnderCurrentYear(sessionName);
   }
   await createCardFromCapture({
     blob: result.blob,
@@ -1479,6 +1511,48 @@ function newCardSpawnPos() {
   return { x: center.x + (Math.random() * 80 - 40), y: center.y + (Math.random() * 80 - 40) };
 }
 
+/** 【現在アクティブなセッション】の直下に新規セッション+セッションカードを作る共通処理
+ *  (2026年9月、handleCreateSession()・クイックセッション/クイックカメラのフォールバック
+ *  経路の重複を解消するため切り出した)。作った側で「中へ入る」かどうかは呼び出し元に委ねる
+ *  (handleCreateSession()は今まで通り入らない、クイック系は作った直後にenterSession()する)。
+ *  @returns {object} 作成したセッションオブジェクト */
+function createChildSessionCard(name) {
+  const parentId = activeSessionId();
+  const session = {
+    id: crypto.randomUUID(),
+    type: 'session',
+    parentId,
+    name,
+    createdAt: new Date().toISOString(),
+  };
+  state.sessions.push(session);
+
+  const spawnPos = newCardSpawnPos();
+  const card = {
+    id: crypto.randomUUID(),
+    x: spawnPos.x,
+    y: spawnPos.y,
+    width: 190,
+    height: 150,
+    memo: '',
+    tags: [],
+    mediaType: 'session',
+    refSessionId: session.id,
+    imageFileId: null,
+    sessionId: parentId,
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(card);
+  // クイックモード中に作った入れ子セッションも、フルデータ読み込み無しで安全に出入りできる
+  // 対象へ加える(enterSession()のガード参照、2026年9月追加)。
+  if (state.quickMode && state.quickSessionIds) state.quickSessionIds.add(session.id);
+  renderCard(card);
+  redrawAsterismLines();
+  setStatus(`「${session.name}」セッションを作成しました`);
+  scheduleAutoSave();
+  return session;
+}
+
 async function handleCreateSession() {
   const choice = await showChoiceDialog({
     title: 'セッション名の入力方法',
@@ -1498,38 +1572,7 @@ async function handleCreateSession() {
     if (!name) return;
     name = name.trim();
   }
-  const session = {
-    id: crypto.randomUUID(),
-    type: 'session',
-    parentId: activeSessionId(),
-    name,
-    createdAt: new Date().toISOString(),
-  };
-  state.sessions.push(session);
-
-  const spawnPos = newCardSpawnPos();
-  const card = {
-    id: crypto.randomUUID(),
-    x: spawnPos.x,
-    y: spawnPos.y,
-    width: 190,
-    height: 150,
-    memo: '',
-    tags: [],
-    mediaType: 'session',
-    refSessionId: session.id,
-    imageFileId: null,
-    sessionId: activeSessionId(),
-    createdAt: new Date().toISOString(),
-  };
-  state.cards.push(card);
-  // クイックモード中に作った入れ子セッションも、フルデータ読み込み無しで安全に出入りできる
-  // 対象へ加える(enterSession()のガード参照、2026年9月追加)。
-  if (state.quickMode && state.quickSessionIds) state.quickSessionIds.add(session.id);
-  renderCard(card);
-  redrawAsterismLines();
-  setStatus(`「${session.name}」セッションを作成しました`);
-  scheduleAutoSave();
+  createChildSessionCard(name);
 }
 
 function renderAllCards() {
