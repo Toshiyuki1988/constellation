@@ -9,8 +9,8 @@
 // openCamera() / createTextCard() / createBookChatCard() / showChoiceDialog() /
 // escapeHtml() / setStatus() / cardElById() / EDIT_GUIDE_HANDLES_HTML / editGuideHexHtml() /
 // summarizeAlmagestText()(js/gemini.js) / findFileByName・loadNamedData・saveNamedData
-// (js/drive.js) / saveAlmagestLocalCache・loadAlmagestLocalCache(js/upload-queue.js) などの
-// 既存グローバルは直接参照する。
+// (js/drive.js) / saveAlmagestLocalCache・loadAlmagestLocalCache・listAlmagestBookCacheIds
+// (js/upload-queue.js) などの既存グローバルは直接参照する。
 //
 // 起動: js/module-launcher.js経由、コード"159"(洛書の対角線、123/456/789/147/258/369で
 // 埋まった残り2枠のうち採用した方。357はまだ空き)。
@@ -326,12 +326,20 @@
     if (!content && typeof loadAlmagestBookCache === 'function') {
       content = await loadAlmagestBookCache(entry.id).catch(() => null);
     }
-    entry.bodyText = (content && content.bodyText) || '';
-    entry.bodyImages = (content && content.bodyImages) || [];
-    entry.citation = (content && content.citation) || null;
-    entry.summaries = (content && content.summaries) || { easy: null, academic: null };
+    if (!content) {
+      // Driveからも端末内キャッシュからも本文を取得できなかった(オフラインかつ、この本を
+      // 開いたことがある端末でもない)場合、空の内容で「読み込み済み」と確定させない
+      // (2026年9月追加)。ここでcontentLoaded=trueにしてしまうと、以後isEntryContentLoaded()が
+      // 常にtrueを返すようになり、次にオンラインへ戻っても本文が空のまま固定される。呼び出し元
+      // (openReadingView())が、この「取得できなかった」状態を見て専用のエラー表示を出す。
+      return entry;
+    }
+    entry.bodyText = content.bodyText || '';
+    entry.bodyImages = content.bodyImages || [];
+    entry.citation = content.citation || null;
+    entry.summaries = content.summaries || { easy: null, academic: null };
     entry.contentLoaded = true;
-    if (content && typeof saveAlmagestBookCache === 'function') {
+    if (typeof saveAlmagestBookCache === 'function') {
       saveAlmagestBookCache(entry.id, content).catch(() => {});
     }
     return entry;
@@ -770,6 +778,20 @@
         display: block; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; font-weight: 400;
         color: rgba(255, 255, 255, 0.65); margin-top: 3px;
       }
+
+      /* オフライン可否バッジ(2026年9月追加、offlineBadgeHtml()参照)。種別バッジ(📷/📋)が
+         既に占めている角の反対側に置く: 通常の背表紙(バッジは右上)は左上、表紙付き(バッジは
+         左上)は右上。 */
+      .al-book-offline-badge {
+        position: absolute; z-index: 2; width: 14px; height: 14px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 8px; line-height: 1; font-weight: 700;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+      }
+      .al-book-offline-badge--top-left { top: 6px; left: 6px; }
+      .al-book-offline-badge--top-right { top: 8px; right: 8px; }
+      .al-book-offline-badge--ready { background: rgba(46, 158, 91, 0.9); color: #fff; }
+      .al-book-offline-badge--missing { background: rgba(255, 255, 255, 0.16); color: rgba(255, 255, 255, 0.7); border: 1px solid rgba(255, 255, 255, 0.3); }
 
       /* 呼び出し演出(2026年9月追加): しおり(URL)をタップした瞬間、「宇宙の書庫から
          データを呼び出す」イメージの一瞬の発光リング。重くならないよう1回きりのCSS
@@ -1345,6 +1367,7 @@
   function matchesTagFilter(entry) {
     if (!activeTagFilter) return true;
     if (activeTagFilter === '__unsummarized__') return isUnsummarized(entry);
+    if (activeTagFilter === '__offline_missing__') return isOfflineReady(entry) === false;
     return (entry.tags || []).includes(activeTagFilter);
   }
 
@@ -1354,15 +1377,32 @@
     return [...set].sort();
   }
 
+  /** 「🌐 未取得」フィルタ用の絞り込みチップ(2026年9月追加)。電車に乗る前など、Wi-Fi/回線が
+   *  ある間に「まだ端末に取り込んでいない本」だけを一覧して開いておく、Kindleのダウンロード
+   *  確認に近い使い方を想定している。1件も無ければ紛らわしいので出さない。 */
   function renderTagChips() {
+    const offlineMissingCount = getEntries().filter((e) => isOfflineReady(e) === false).length;
     const chips = [
       { key: null, label: 'すべて' },
       { key: '__unsummarized__', label: '未要約' },
+      ...(offlineMissingCount > 0 ? [{ key: '__offline_missing__', label: `🌐 未取得(${offlineMissingCount})` }] : []),
       ...collectAllTags().map((t) => ({ key: t, label: t })),
     ];
     alEls.tagsEl.innerHTML = chips
       .map((c) => `<span class="al-tag${activeTagFilter === c.key ? ' active' : ''}" data-tag-key="${escapeAttrLocal(c.key || '')}">${escapeHtml(c.label)}</span>`)
       .join('');
+  }
+
+  /** オフライン可否バッジのHTML(2026年9月追加)。isOfflineReady()がtrue(読める)なら緑の
+   *  ✓、false(まだ端末に取り込んでいない、通信が無いと開けない)なら灰色の☁を出す。
+   *  電車に乗る前に「☁のまま残っている本」を見つけて、Wi-Fi/回線がある間に一度開いておく、
+   *  というKindleのダウンロード状態に近い使い方を想定している。 */
+  function offlineBadgeHtml(entry, positionClass) {
+    const ready = isOfflineReady(entry);
+    if (ready === null) return ''; // しおり(url)は対象外
+    const cls = ready ? 'al-book-offline-badge--ready' : 'al-book-offline-badge--missing';
+    const title = ready ? 'オフラインで読めます' : 'まだ端末に取り込んでいません(通信が必要)';
+    return `<span class="al-book-offline-badge ${positionClass} ${cls}" title="${escapeAttrLocal(title)}">${ready ? '✓' : '☁'}</span>`;
   }
 
   function bookSpineHtml(entry) {
@@ -1374,12 +1414,14 @@
       return (
         `<div class="al-book al-book--cover ${kindClass}" data-book-id="${entry.id}" style="background-image:url('${escapeAttrLocal(entry.thumbDataUrl)}')">` +
         `<span class="al-book-cover-badge">${badge}</span>` +
+        offlineBadgeHtml(entry, 'al-book-offline-badge--top-right') +
         `<span class="al-book-title-overlay">${escapeHtml(entry.title || '(無題)')}${srcHtml}</span></div>`
       );
     }
     return (
       `<div class="al-book ${kindClass}" data-book-id="${entry.id}">` +
       `<span class="al-book-badge">${badge}</span>` +
+      offlineBadgeHtml(entry, 'al-book-offline-badge--top-left') +
       `<span class="al-book-spine-title">${escapeHtml(entry.title || '(無題)')}</span></div>`
     );
   }
@@ -1764,10 +1806,10 @@
     renderReadingSummaries(entry);
   }
 
-  /** 開いている間だけ、本文をまだ読み込んでいないことを軽く示す(2026年9月追加)。
-   *  タイトル・サムネイル・タグなど索引だけで分かる情報は先に出し、本文欄にだけ
-   *  「読み込み中…」を出す。 */
-  function renderReadingViewLoading(entry) {
+  /** 索引だけで分かる情報(タイトル・サムネイル・タグ)を先に描画する共通処理(2026年9月追加)。
+   *  「読み込み中…」表示・オフラインエラー表示の両方から使う(renderReadingViewLoading()/
+   *  renderReadingViewOfflineError()参照)。本文欄の中身だけ、呼び出し元がこの後で差し替える。 */
+  function renderReadingIndexOnlyHeader(entry) {
     rdEls.title.textContent = entry.title || '(無題)';
     rdEls.editBtn.classList.toggle('active', false);
     rdEls.display.hidden = false;
@@ -1785,11 +1827,25 @@
     rdEls.urlBox.hidden = true;
     rdEls.textControls.hidden = true;
     rdEls.textPanel.hidden = false;
-    rdEls.text.textContent = '読み込み中…';
     rdEls.bodyImages.hidden = true;
     rdEls.bodyImages.innerHTML = '';
     rdEls.summaryRow.hidden = true;
     rdEls.roundtableBtn.hidden = true;
+  }
+
+  /** 開いている間だけ、本文をまだ読み込んでいないことを軽く示す(2026年9月追加)。 */
+  function renderReadingViewLoading(entry) {
+    renderReadingIndexOnlyHeader(entry);
+    rdEls.text.textContent = '読み込み中…';
+  }
+
+  /** オフライン(かつこの端末に取り込んだことが無い)ため本文を取得できなかった時の表示
+   *  (2026年9月追加、「電車の中でオフラインで読みたい」という要望に伴う不具合対応)。以前は
+   *  取得できなかった場合も空の内容で「読み込み済み」扱いにしてしまい、本文が空欄のまま
+   *  何事もなかったかのように表示していた。 */
+  function renderReadingViewOfflineError(entry) {
+    renderReadingIndexOnlyHeader(entry);
+    rdEls.text.textContent = 'オフラインのため、この本の内容をまだ端末に取り込めていません。通信環境がある時に一度開くと、以降はオフラインでも読めるようになります。';
   }
 
   /** 2026年9月、本文の遅延読み込みに伴いasync化した。索引だけで分かる情報(タイトル・
@@ -1811,6 +1867,13 @@
       setStatus('本文を読み込み中…', { busy: true });
       await ensureEntryContentLoaded(entry);
       if (readingEntryId !== entryId) return; // 読み込み中に閉じられた/別の本を開いた
+      if (!isEntryContentLoaded(entry)) {
+        // オフライン等でDrive・端末キャッシュのどちらからも取得できなかった(2026年9月追加)。
+        editingEntry = false; // 編集フォームを開こうとしていた場合も、空の内容で開かせない
+        renderReadingViewOfflineError(entry);
+        setStatus('オフラインのため、この本はまだ端末に取り込まれていません', { important: true });
+        return;
+      }
       setStatus('本文を読み込みました');
     }
     renderReadingView(entry);
