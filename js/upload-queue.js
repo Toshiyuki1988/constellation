@@ -46,7 +46,13 @@ const ALMAGEST_CACHE_STORE = 'almagestCache';
 // 上げるが、onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーのpending/
 // dataBackup/almagestCacheは引き続き無事。下記「クイックバンドル」セクション参照。
 const QUICK_BUNDLE_STORE = 'quickBundle';
-const UPLOAD_QUEUE_DB_VERSION = 4;
+// Almagestの各本の本文・要約・出典(2026年9月追加、「本を開いた時だけ本文を読み込む」
+// 対応)。書庫の索引(almagest-library.json)は本文を含まない軽量な形に変えたため、
+// オフライン閲覧用の端末内キャッシュも索引とは別に、本ごとにここへ保持する。DBバージョンを
+// 5へ上げるが、onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーの
+// pending/dataBackup/almagestCache/quickBundleは引き続き無事。
+const ALMAGEST_BOOK_CACHE_STORE = 'almagestBookCache';
+const UPLOAD_QUEUE_DB_VERSION = 5;
 const UPLOAD_QUEUE_CONCURRENCY = 2;
 
 let uploadQueueDbPromise = null;
@@ -73,6 +79,9 @@ function openUploadQueueDb() {
       }
       if (!req.result.objectStoreNames.contains(QUICK_BUNDLE_STORE)) {
         req.result.createObjectStore(QUICK_BUNDLE_STORE, { keyPath: 'id' });
+      }
+      if (!req.result.objectStoreNames.contains(ALMAGEST_BOOK_CACHE_STORE)) {
+        req.result.createObjectStore(ALMAGEST_BOOK_CACHE_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -472,6 +481,45 @@ function loadAlmagestLocalCache() {
     console.error('Almagestローカルキャッシュの読み込みに失敗', err);
     return null;
   });
+}
+
+/* ---------------- Almagestの各本の本文キャッシュ(2026年9月追加) ----------------
+ * 書庫の索引(almagest-library.json)を本文を含まない軽量な形に変えたことに伴う対応。
+ * 上記のalmagestCacheが「書庫の一覧(索引)」のオフライン閲覧用キャッシュなのに対し、
+ * こちらは「開いたことのある本の本文・要約・出典」を本ごとに保持する、もう一段細かい
+ * キャッシュ。本を開く(js/modules/almagest.jsのensureEntryContentLoaded())たびに、
+ * Driveから取得した内容をここにも書いておくことで、次に同じ本をオフラインで開いた時にも
+ * 読める。削除はDrive側のファイルには一切触れず、この端末内キャッシュだけを消す
+ * (書庫からの削除時の後始末、hygiene目的)。 */
+
+function saveAlmagestBookCache(entryId, data) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ALMAGEST_BOOK_CACHE_STORE, 'readwrite');
+    tx.objectStore(ALMAGEST_BOOK_CACHE_STORE).put({ id: entryId, data, updatedAt: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function loadAlmagestBookCache(entryId) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ALMAGEST_BOOK_CACHE_STORE, 'readonly');
+    const req = tx.objectStore(ALMAGEST_BOOK_CACHE_STORE).get(entryId);
+    req.onsuccess = () => resolve(req.result ? req.result.data : null);
+    req.onerror = () => reject(req.error);
+  })).catch((err) => {
+    console.error('Almagestの本文キャッシュの読み込みに失敗', err);
+    return null;
+  });
+}
+
+function clearAlmagestBookCache(entryId) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ALMAGEST_BOOK_CACHE_STORE, 'readwrite');
+    tx.objectStore(ALMAGEST_BOOK_CACHE_STORE).delete(entryId);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  })).catch(() => {});
 }
 
 /* ---------------- クイックバンドル(クイックカメラ/クイックセッション、2026年9月追加) ----------------

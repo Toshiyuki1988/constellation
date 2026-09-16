@@ -2890,7 +2890,11 @@ function collectSessionTextContext(sessionId, sources, depth = 0) {
         // 何も足さない。
         const entry = window.getAlmagestEntryById ? window.getAlmagestEntryById(c.almagestEntryId) : null;
         if (entry) {
-          const snippet = entry.bodyText ? entry.bodyText.trim().slice(0, 200) : '';
+          // 本文が今メモリ上に無ければ(=このセッションでまだ開いていない本)、索引に
+          // 残してある抜粋(entry.excerpt)で代用する(2026年9月、Almagestの「本を開いた時に
+          // 内容をロードする」変更に伴う対応。全文を読み込みに行くとこの一覧関数自体が
+          // 重くなるため、あくまで既にある情報の範囲で済ませる)。
+          const snippet = (entry.bodyText || entry.excerpt || '').trim().slice(0, 200);
           sources.push(c.id);
           lines.push(`${indent}- [出典${sources.length}][Almagest]『${entry.title || '(無題)'}』${snippet}`);
         }
@@ -3476,7 +3480,7 @@ async function fetchChatReply(card, speaker, messages, imageParts) {
   // 内容そのものを会話の文脈として渡す(2026年9月追加、card.almagestEntryIdの有無で分岐)。
   const isBookChat = Boolean(card.almagestEntryId);
   const sessionContext = isBookChat
-    ? (window.buildAlmagestChatContext ? window.buildAlmagestChatContext(card.almagestEntryId) : '(この書物は書庫から削除されています)')
+    ? (window.buildAlmagestChatContext ? await window.buildAlmagestChatContext(card.almagestEntryId) : '(この書物は書庫から削除されています)')
     : collectSessionTextContext(card.sessionId, []);
   const contextIntro = isBookChat ? '以下はある書物の内容です:' : '以下はある美術展覧会・セッションの記録です:';
   const gatheringLabel = isBookChat ? 'これは1冊の本を巡って複数の立場が一言ずつ感想・意見を交わす読書会のチャットです。' : 'これは複数の立場が一言ずつ意見を交わす座談会のチャットです。';

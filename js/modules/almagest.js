@@ -137,14 +137,86 @@
 
   /* ---------------- Driveとの同期(2026年9月追加、上記「大規模修繕」1参照) ---------------- */
 
+  /* ---------------- 索引と本文の分離(2026年9月追加) ----------------
+   * 「本を開いた時に初めて内容を読み込みたい(全部の本を一気にロードしない)」という
+   * ユーザー要望への対応。以前はalmagest-library.json 1ファイルに、全ての本のbodyText
+   * (OCR/貼り付けした全文、長いと数十KB)・summaries(Boy/Professorの要約キャッシュ)を
+   * 丸ごと埋め込んで保存していたため、Almagestを開くだけで登録済みの本の数だけ重い
+   * ダウンロードが発生し、しかもタグ1つ変えるような軽い編集でも**全ての本の本文ごと**
+   * 再アップロードしていた。
+   *
+   * 対応: almagest-library.json自体は「索引」(id/title/サムネイル/タグ/抜粋/要約の有無
+   * だけを持つ軽量な一覧)に絞り、各本の本文・要約・出典は`almagest-book-<id>.json`という
+   * 本ごとの専用ファイルへ分離した。読み込みは索引だけを先に行い、本文は実際にその本を
+   * 開いた瞬間(ensureEntryContentLoaded())だけ取りに行く。
+   *
+   * **安全側に倒した移行方針**: ある本の本文が専用ファイルへの分離保存に一度でも成功する
+   * まで(entry.bodyFileIdが確定するまで)は、索引側にもその本のbodyText/summaries/citation を
+   * 埋め込んだままにする(toIndexEntry()参照)。分離が完了する前に索引だけを軽量化して
+   * しまうと、専用ファイルへの保存がオフライン等でまだ済んでいない本の内容を、索引からも
+   * 消してしまう(=読めなくなる)リスクがあるため。オフライン時などに分離が先送りされても、
+   * 本の内容自体が失われることは無い。 */
+
+  const ALMAGEST_EXCERPT_LENGTH = 300; // 索引に残す抜粋の長さ(検索・サマリー文脈への引用に使う)
+
+  function almagestBookFileName(entryId) {
+    return `almagest-book-${entryId}.json`;
+  }
+
+  /** 本文・要約・出典(重い内容)が既にメモリ上に読み込まれているか。しおり(url)は
+   *  元々本文を持たないため常にtrue扱い。 */
+  function isEntryContentLoaded(entry) {
+    return Boolean(entry) && (entry.kind === 'url' || entry.contentLoaded === true);
+  }
+
+  function computeExcerpt(entry) {
+    if (entry.kind === 'url') return '';
+    const parts = [];
+    if (entry.citation) parts.push(entry.citation);
+    if (entry.bodyText) parts.push(entry.bodyText);
+    return parts.join(' ').trim().slice(0, ALMAGEST_EXCERPT_LENGTH);
+  }
+
+  /** 索引(almagest-library.json)へ書き込む1件ぶんの軽量な形。本文の分離保存が
+   *  まだ確定していない本(entry.bodyFileIdが無い)は、安全のため本文ごと埋め込む
+   *  (上記コメント参照)。抜粋(excerpt)は、本文が今メモリ上に無ければ(=このセッションで
+   *  開いていない本)、前回索引から読み込んだ時の値をそのまま引き継ぐ(でないと索引を
+   *  再保存するたびに空へ上書きしてしまう)。 */
+  function toIndexEntry(entry) {
+    const base = {
+      id: entry.id,
+      kind: entry.kind,
+      title: entry.title,
+      sourceLabel: entry.sourceLabel,
+      url: entry.url,
+      thumbDataUrl: entry.thumbDataUrl,
+      tags: entry.tags,
+      createdAt: entry.createdAt,
+    };
+    if (entry.kind === 'url' || entry.bodyFileId) {
+      return {
+        ...base,
+        excerpt: entry.bodyText ? computeExcerpt(entry) : (entry.excerpt || ''),
+        summaries: { easy: Boolean(entry.summaries && entry.summaries.easy), academic: Boolean(entry.summaries && entry.summaries.academic) },
+        bodyFileId: entry.bodyFileId || null,
+      };
+    }
+    return {
+      ...base,
+      bodyText: entry.bodyText || null,
+      citation: entry.citation || null,
+      summaries: entry.summaries || { easy: null, academic: null },
+    };
+  }
+
   function almagestPayload() {
-    return { entries: getEntries(), updatedAt: Date.now() };
+    return { entries: getEntries().map(toIndexEntry), updatedAt: Date.now() };
   }
 
   /**
-   * 書庫データを専用ファイル(almagest-library.json)へ即座に保存する。オートセーブの
+   * 書庫の索引データを専用ファイル(almagest-library.json)へ即座に保存する。オートセーブの
    * ON/OFFトグルには一切従わない(常に送る)。失敗時・成功時ともIndexedDBへもミラーし、
-   * 次回読み込み時の突き合わせに使う。
+   * 次回読み込み時の突き合わせに使う。**本文自体はここでは保存しない**(saveAlmagestBookContentNow()参照)。
    * @returns {Promise<boolean>} Driveへの送信に成功したか
    */
   async function saveAlmagestDataNow() {
@@ -161,6 +233,115 @@
       console.error('Almagestの書庫データ保存に失敗', err);
       return false;
     }
+  }
+
+  /**
+   * 1冊分の本文・要約・出典を、その本専用のDriveファイル(almagest-book-<id>.json)へ
+   * 保存する。呼び出し元は保存後に必ずsaveAlmagestDataNow()も呼び、索引側の抜粋・
+   * 要約の有無・bodyFileIdを追従させること(この関数は本文だけを保存し、索引は触らない)。
+   * saveAlmagestDataNow()と同じく、常にIndexedDBへも先にミラーしてからDriveへ送る
+   * (オフライン時も内容自体を失わないため)。
+   * @returns {Promise<boolean>} Driveへの送信に成功したか
+   */
+  async function saveAlmagestBookContentNow(entry) {
+    const payload = {
+      bodyText: entry.bodyText || '',
+      citation: entry.citation || null,
+      summaries: entry.summaries || { easy: null, academic: null },
+      updatedAt: Date.now(),
+    };
+    if (typeof saveAlmagestBookCache === 'function') {
+      await saveAlmagestBookCache(entry.id, payload).catch(() => {});
+    }
+    if (!state.folderId) return false;
+    try {
+      entry.bodyFileId = await saveNamedData(state.folderId, entry.bodyFileId, payload, almagestBookFileName(entry.id));
+      entry.contentLoaded = true;
+      return true;
+    } catch (err) {
+      console.error('本の内容の保存に失敗', err);
+      return false;
+    }
+  }
+
+  /**
+   * 本文・要約・出典(重い内容)がまだ読み込まれていなければ、本専用のDriveファイルから
+   * 読み込む(2026年9月追加、「本を開いた時に内容をロードする」対応の中心)。しおり(url)は
+   * 元々本文を持たないため何もしない。オフライン等でDriveから読めない場合は端末内キャッシュ
+   * (almagestBookCache)へフォールバックする。専用ファイルがまだ存在しない(=索引にbodyFileIdが
+   * 無い、本文がまだ索引へ埋め込まれたまま分離されていない旧形式)場合は、既に索引から
+   * entry.bodyText等が埋め込み済みのはずなので、ここでは何もせずcontentLoadedを立てるだけでよい。
+   */
+  async function ensureEntryContentLoaded(entry) {
+    if (isEntryContentLoaded(entry)) return entry;
+    if (!entry.bodyFileId) {
+      // 旧形式(索引にbodyText等が直接埋め込まれたまま)。既にメモリ上にあるのでそのまま使う。
+      entry.contentLoaded = true;
+      return entry;
+    }
+    let content = null;
+    try {
+      if (state.folderId) {
+        const res = await loadNamedData(state.folderId, almagestBookFileName(entry.id));
+        if (res.data) content = res.data;
+      }
+    } catch (err) {
+      console.error('本の内容の読み込みに失敗(オフラインの可能性があります)', err);
+    }
+    if (!content && typeof loadAlmagestBookCache === 'function') {
+      content = await loadAlmagestBookCache(entry.id).catch(() => null);
+    }
+    entry.bodyText = (content && content.bodyText) || '';
+    entry.citation = (content && content.citation) || null;
+    entry.summaries = (content && content.summaries) || { easy: null, academic: null };
+    entry.contentLoaded = true;
+    if (content && typeof saveAlmagestBookCache === 'function') {
+      saveAlmagestBookCache(entry.id, content).catch(() => {});
+    }
+    return entry;
+  }
+
+  /**
+   * 新しく読み込んだ(軽量な)索引の配列に、現在メモリ上で既に読み込み済み(contentLoaded)の
+   * 本文・要約・出典を可能な限り引き継ぐ(2026年9月追加)。書庫データを更新するたび
+   * (バックグラウンド再取得・端末内キャッシュとの突き合わせ等)に呼び、開いている本の
+   * 表示が本文読み込み前の状態に巻き戻ってしまうのを防ぐ。
+   */
+  function carryOverLoadedContent(newEntries, oldEntries) {
+    if (!Array.isArray(oldEntries) || oldEntries.length === 0) return newEntries;
+    const oldById = new Map(oldEntries.map((e) => [e.id, e]));
+    newEntries.forEach((e) => {
+      const old = oldById.get(e.id);
+      if (old && old.contentLoaded) {
+        e.bodyText = old.bodyText;
+        e.summaries = old.summaries;
+        e.citation = old.citation;
+        e.contentLoaded = true;
+        e.bodyFileId = old.bodyFileId || e.bodyFileId;
+      }
+    });
+    return newEntries;
+  }
+
+  /**
+   * 一度きりの移行処理(2026年9月追加): 旧形式(索引にbodyText等が直接埋め込まれたまま、
+   * まだ本ごとのファイルへ分離されていない)の本を、専用ファイルへ分離する。読み込み直後に
+   * 1回だけ呼ぶ。オフライン等で分離保存に失敗した本は、次回このタイミングで再試行される
+   * (索引側にbodyTextが残ったままなので内容自体は失われない、toIndexEntry()参照)。
+   */
+  async function migrateAlmagestEntriesToSplitFiles() {
+    if (!state.folderId) return;
+    const legacyOnes = getEntries().filter((e) => e.kind !== 'url' && !e.bodyFileId && e.bodyText);
+    if (legacyOnes.length === 0) return;
+    setStatus(`書庫の保存形式を更新中…(0/${legacyOnes.length})`, { busy: true });
+    let done = 0;
+    for (const entry of legacyOnes) {
+      await saveAlmagestBookContentNow(entry);
+      done++;
+      setStatus(`書庫の保存形式を更新中…(${done}/${legacyOnes.length})`, { busy: true, progress: done / legacyOnes.length });
+    }
+    await saveAlmagestDataNow(); // 分離できた分だけ、索引側も軽量な形へ書き戻す
+    setStatus('書庫の保存形式を更新しました(次回からの読み込みが軽くなります)', { important: true });
   }
 
   /**
@@ -182,6 +363,7 @@
       almagestDataLoaded = true;
       return;
     }
+    const before = getEntries();
     try {
       const remote = await loadNamedData(state.folderId, CONFIG.ALMAGEST_FILE_NAME);
       if (remote.fileId) {
@@ -189,12 +371,12 @@
         const remoteData = remote.data || {};
         if (localCache && (localCache.updatedAt || 0) > (remoteData.updatedAt || 0)) {
           // 前回オフライン等でDriveへ送れなかった、端末内だけの新しい変更が残っている。
-          state.almagestEntries = localCache.entries || [];
+          state.almagestEntries = carryOverLoadedContent(localCache.entries || [], before);
           almagestUpdatedAt = localCache.updatedAt;
           await saveAlmagestDataNow();
           setStatus('端末に残っていた書庫の未送信の変更をDriveへ反映しました', { important: true });
         } else {
-          state.almagestEntries = remoteData.entries || [];
+          state.almagestEntries = carryOverLoadedContent(remoteData.entries || [], before);
           almagestUpdatedAt = remoteData.updatedAt || 0;
           if (typeof saveAlmagestLocalCache === 'function') saveAlmagestLocalCache(remoteData).catch(() => {});
         }
@@ -204,18 +386,19 @@
         await saveAlmagestDataNow();
         setStatus('書庫データを専用ファイルへ移行しました', { important: true });
       } else {
-        state.almagestEntries = (localCache && localCache.entries) || [];
+        state.almagestEntries = carryOverLoadedContent((localCache && localCache.entries) || [], before);
         almagestUpdatedAt = (localCache && localCache.updatedAt) || 0;
       }
     } catch (err) {
       console.error('Almagestデータの読み込みに失敗(オフラインの可能性があります)', err);
-      state.almagestEntries = (localCache && localCache.entries) || legacyEntries || [];
+      state.almagestEntries = carryOverLoadedContent((localCache && localCache.entries) || legacyEntries || [], before);
       almagestUpdatedAt = (localCache && localCache.updatedAt) || 0;
       if (state.almagestEntries.length) {
         setStatus('オフラインのため書庫は端末キャッシュから表示しています', { important: true });
       }
     }
     almagestDataLoaded = true;
+    await migrateAlmagestEntriesToSplitFiles().catch((err) => console.error('書庫の保存形式の更新に失敗', err));
   }
 
   /**
@@ -246,13 +429,19 @@
       if (!remote.fileId || !remote.data) return;
       if ((remote.data.updatedAt || 0) <= almagestUpdatedAt) return; // 今の内容の方が新しい(未送信の変更中 等)
       state.almagestFileId = remote.fileId;
-      state.almagestEntries = remote.data.entries || [];
+      // 今メモリ上で読み込み済み(開いている/開いたことがある)本の本文・要約は引き継ぐ。
+      // でないと、他端末での変更を拾っただけで、今読んでいる本の表示が「未読み込み」の
+      // 状態に巻き戻ってしまう(2026年9月、索引の軽量化に伴い追加)。
+      state.almagestEntries = carryOverLoadedContent(remote.data.entries || [], getEntries());
       almagestUpdatedAt = remote.data.updatedAt || 0;
       if (typeof saveAlmagestLocalCache === 'function') saveAlmagestLocalCache(remote.data).catch(() => {});
       if (alEls && alEls.overlay.classList.contains('open')) renderShelf();
       if (rdEls && rdEls.overlay.classList.contains('open') && readingEntryId) {
         const entry = getAlmagestEntryById(readingEntryId);
-        if (entry) renderReadingView(entry);
+        // 本文読み込み中(openReadingView()のensureEntryContentLoaded()待ち)にこの
+        // バックグラウンド更新が重なった場合は再描画しない。読み込み完了後、
+        // openReadingView()側が正しい内容で描画するのに任せる(2026年9月追加の防御)。
+        if (entry && isEntryContentLoaded(entry)) renderReadingView(entry);
       }
     } catch (err) {
       console.warn('Almagestの最新データ取得に失敗(オフラインの可能性)', err);
@@ -260,10 +449,15 @@
   }
 
   /** 「読書会」チャットカード(js/app.jsのcreateBookChatCard())が会話の文脈として使う、
-   *  本の内容のテキスト表現。タイトル・出典元・本文全文・既存の要約(あれば)をまとめて返す。 */
-  function buildAlmagestChatContext(entryId) {
+   *  本の内容のテキスト表現。タイトル・出典元・本文全文・既存の要約(あれば)をまとめて返す。
+   *  **2026年9月async化**: 過去に作られた読書会チャットカードへ新しい質問を送るだけの場合、
+   *  このセッション中に一度もその本を開いていない(=本文が未読み込みの)ことがあるため、
+   *  ensureEntryContentLoaded()で確実に読み込んでから使う。読み込まずに使うと、索引だけの
+   *  entry.summariesが{easy:真偽値, academic:真偽値}のままテンプレート文字列へ混ざってしまう。 */
+  async function buildAlmagestChatContext(entryId) {
     const entry = getAlmagestEntryById(entryId);
     if (!entry) return '(この書物は書庫から削除されています)';
+    await ensureEntryContentLoaded(entry);
     const parts = [`『${entry.title || '(無題)'}』`];
     if (entry.citation) parts.push(`出典: ${entry.citation}`);
     if (entry.bodyText) parts.push(entry.bodyText.trim());
@@ -957,17 +1151,28 @@
         createdAt: new Date().toISOString(),
       };
     }
+    entry.contentLoaded = true; // 作った直後なのでメモリ上に既に本文がある
     getEntries().push(entry);
     alEls.newPanel.hidden = true;
     renderShelf();
     setStatus('書庫に登録中…', { busy: true });
-    const ok = await saveAlmagestDataNow();
+    // 本文を持つ種別(book)は専用ファイルへ、索引はどちらの種別でも保存する(2026年9月変更)。
+    const contentOk = entry.kind === 'url' ? true : await saveAlmagestBookContentNow(entry);
+    const indexOk = await saveAlmagestDataNow();
+    const ok = contentOk && indexOk;
     setStatus(ok ? '書庫に登録しました' : '書庫に登録しました(Driveへの送信は保留中、後で自動的に再試行します)', { important: !ok });
   }
 
+  /**
+   * まだ本文を読み込んでいない本は、索引に残してある抜粋(entry.excerpt、先頭300字ぶん)で
+   * 近似的に検索する。開いたことのある本(entry.bodyText有り)は全文で検索する(2026年9月、
+   * 「本を開いた時だけ内容をロードする」対応に伴う変更。抜粋止まりのため、まだ開いていない
+   * 長い本の後半に出てくる語では見つからないことがある)。
+   */
   function matchesSearch(entry, q) {
     if (!q) return true;
-    const hay = [entry.title, entry.bodyText, entry.citation, (entry.tags || []).join(' ')].filter(Boolean).join(' ').toLowerCase();
+    const bodyForSearch = entry.bodyText || entry.excerpt || '';
+    const hay = [entry.title, bodyForSearch, entry.citation, (entry.tags || []).join(' ')].filter(Boolean).join(' ').toLowerCase();
     return hay.includes(q.toLowerCase());
   }
 
@@ -1374,7 +1579,36 @@
     renderReadingSummaries(entry);
   }
 
-  function openReadingView(entryId, opts) {
+  /** 開いている間だけ、本文をまだ読み込んでいないことを軽く示す(2026年9月追加)。
+   *  タイトル・サムネイル・タグなど索引だけで分かる情報は先に出し、本文欄にだけ
+   *  「読み込み中…」を出す。 */
+  function renderReadingViewLoading(entry) {
+    rdEls.title.textContent = entry.title || '(無題)';
+    rdEls.editBtn.classList.toggle('active', false);
+    rdEls.display.hidden = false;
+    rdEls.editForm.hidden = true;
+    if (entry.thumbDataUrl) {
+      rdEls.cover.src = entry.thumbDataUrl;
+      rdEls.cover.hidden = false;
+    } else {
+      rdEls.cover.hidden = true;
+    }
+    rdEls.src.textContent = entry.sourceLabel || '';
+    rdEls.src.hidden = !entry.sourceLabel;
+    rdEls.citation.hidden = true;
+    rdEls.tags.innerHTML = (entry.tags || []).map((t) => `<span class="al-read-tag">${escapeHtml(t)}</span>`).join('');
+    rdEls.urlBox.hidden = true;
+    rdEls.textControls.hidden = true;
+    rdEls.textPanel.hidden = false;
+    rdEls.text.textContent = '読み込み中…';
+    rdEls.summaryRow.hidden = true;
+    rdEls.roundtableBtn.hidden = true;
+  }
+
+  /** 2026年9月、本文の遅延読み込みに伴いasync化した。索引だけで分かる情報(タイトル・
+   *  サムネイル・タグ)は即座に表示し、本文・要約はensureEntryContentLoaded()で
+   *  取得できてから改めて描画する。 */
+  async function openReadingView(entryId, opts) {
     const entry = getAlmagestEntryById(entryId);
     if (!entry) {
       setStatus('この本は見つかりませんでした', { important: true });
@@ -1384,8 +1618,15 @@
     if (!rdEls) buildReadingDom();
     readingEntryId = entryId;
     editingEntry = Boolean(opts && opts.startEditing);
-    renderReadingView(entry);
     rdEls.overlay.classList.add('open');
+    if (!isEntryContentLoaded(entry)) {
+      renderReadingViewLoading(entry);
+      setStatus('本文を読み込み中…', { busy: true });
+      await ensureEntryContentLoaded(entry);
+      if (readingEntryId !== entryId) return; // 読み込み中に閉じられた/別の本を開いた
+      setStatus('本文を読み込みました');
+    }
+    renderReadingView(entry);
   }
 
   function closeReadingView() {
@@ -1404,7 +1645,11 @@
       entry.summaries = entry.summaries || {};
       if (mode === 'education') entry.summaries.easy = text; else entry.summaries.academic = text;
       renderReadingSummaries(entry);
-      const ok = await saveAlmagestDataNow();
+      // 要約はentry.summariesとして本の内容ファイルへ保存し、索引側の「未要約」フィルタ用に
+      // 有無のフラグも索引へ反映する(2026年9月、内容の分離保存に伴う変更)。
+      const contentOk = await saveAlmagestBookContentNow(entry);
+      const indexOk = await saveAlmagestDataNow();
+      const ok = contentOk && indexOk;
       setStatus(ok ? '要約しました' : '要約しました(Driveへの送信は保留中、後で自動的に再試行します)', { important: !ok });
     } catch (err) {
       console.error(err);
@@ -1424,6 +1669,7 @@
     }
     entry.title = title;
     entry.tags = parseTags(rdEls.editTagsInput.value);
+    let bodyChanged = false;
     if (entry.kind === 'url') {
       const url = rdEls.editUrlInput.value.trim();
       if (!url) {
@@ -1441,13 +1687,19 @@
       entry.bodyText = bodyText;
       entry.citation = rdEls.editCitationInput.value.trim() || null;
       entry.thumbDataUrl = editThumbDataUrl || null;
+      bodyChanged = true;
     }
     editingEntry = false;
     renderReadingView(entry);
     renderShelf();
     renderAllCards(); // タイトル・サムネイルの変更を、キャンバス上の参照カードの表示にも反映する
     setStatus('保存中…', { busy: true });
-    const ok = await saveAlmagestDataNow();
+    // 本文・出典・サムネイルを変更した場合は本の内容ファイルも保存する(2026年9月変更)。
+    // サムネイルはthumbDataUrl自体は索引側のフィールドだが、後続のsaveAlmagestDataNow()が
+    // 索引全体を書き戻すため個別の保存は不要。
+    const contentOk = bodyChanged ? await saveAlmagestBookContentNow(entry) : true;
+    const indexOk = await saveAlmagestDataNow();
+    const ok = contentOk && indexOk;
     setStatus(ok ? '書庫を更新しました' : '書庫を更新しました(Driveへの送信は保留中、後で自動的に再試行します)', { important: !ok });
   }
 
@@ -1474,6 +1726,10 @@
     });
     if (choice !== 'delete') return;
     state.almagestEntries = getEntries().filter((e) => e.id !== entry.id);
+    // この本専用のDriveファイル(almagest-book-<id>.json)は削除しない(「Drive上のデータは
+    // アプリ側から消さない」という既存方針を、この本文ファイルにも適用している)。孤立した
+    // まま残るだけの小さなJSONで実害は無い。端末内キャッシュ(ローカルのみ)だけは掃除する。
+    if (typeof clearAlmagestBookCache === 'function') clearAlmagestBookCache(entry.id).catch(() => {});
     if (readingEntryId === entryId) closeReadingView();
     renderShelf();
     renderAllCards(); // 参照カードの表示を「削除済み」の見た目へ更新する
