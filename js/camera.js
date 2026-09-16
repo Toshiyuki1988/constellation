@@ -268,6 +268,7 @@ function ensureCameraDom() {
     selectCountEl: document.getElementById('caption-select-count'),
     selectProgressEl: document.getElementById('caption-select-progress'),
     selectProgressCancelBtn: document.getElementById('caption-select-progress-cancel'),
+    selectThumbsEl: document.getElementById('caption-select-thumbs'),
 
     videoScreen: document.getElementById('camera-screen-video'),
     videoVideo: document.getElementById('camera-video-video'),
@@ -1843,6 +1844,11 @@ let captionOcrBusy = false;
 // (非同期)が、撮り直し・カメラを閉じる等で既に無効になった古いセッションのものであれば
 // captionOcrBufferへ書き戻さないようにするための踏み分け(2026年9月追加)。
 let captionSelectionGen = 0;
+// 続けて選択モードの範囲サムネイル一覧(2026年9月追加、下記renderCaptionThumbs()参照)。
+// {url, status: 'pending'|'done'|'empty'|'failed'|'cancelled'}[]。captionOcrBufferとは別に
+// 持つ(失敗・空振りもここには残して見た目で分かるようにするが、最終的なテキスト結合の対象には
+// しないため)。
+let captionThumbs = [];
 
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
@@ -1855,7 +1861,9 @@ function resetCaptionState() {
   captionOcrBuffer = [];
   captionOcrBusy = false;
   captionInlineController = null;
+  captionRunGuardActive = false;
   captionSelectionGen++;
+  clearCaptionThumbs();
   camEls.freezeWrap.classList.remove('show');
   camEls.freezeWrap.innerHTML = '';
   camEls.selectLayer.classList.remove('show');
@@ -2000,6 +2008,52 @@ function updateSelectionOcrUi() {
   camEls.selectCountEl.textContent = `読み取り済み: ${captionOcrBuffer.length}件`;
 }
 
+/* ---------------- 続けて選択モードの範囲サムネイル一覧(2026年9月追加) ----------------
+ * 「細かな範囲選択OCR作業が中心のモジュール」向けに、件数の数字だけでなく「どの範囲を・
+ * どんな状態で読んだか」を画面右側の縦一列のサムネイルで一目で追えるようにする。
+ * captionOcrBuffer(実際に結合されるテキスト)とは別に持ち、失敗・空振りの範囲も
+ * (テキストとしては使わないが)見た目の記録として残す。 */
+
+/** 1件ぶんのサムネイルを「読み取り中」状態で追加する。返した参照をsetCaptionThumbStatus()に渡す。 */
+function addCaptionThumb(url) {
+  const entry = { url, status: 'pending' };
+  captionThumbs.push(entry);
+  renderCaptionThumbs();
+  return entry;
+}
+
+function setCaptionThumbStatus(entry, status) {
+  entry.status = status;
+  renderCaptionThumbs();
+}
+
+function renderCaptionThumbs() {
+  if (!camEls.selectThumbsEl) return;
+  camEls.selectThumbsEl.classList.toggle('show', captionThumbs.length > 0);
+  camEls.selectThumbsEl.innerHTML = captionThumbs
+    .map((t, i) => (
+      `<div class="cam-select-thumb cam-select-thumb--${t.status}">` +
+      `<img src="${t.url}" alt="">` +
+      `<span class="cam-select-thumb-num">${i + 1}</span>` +
+      (t.status === 'pending' ? '<span class="cam-select-thumb-spinner"></span>' : '') +
+      '</div>'
+    ))
+    .join('');
+  // 新しいサムネイルが増えるたび、一覧の一番下(＝最新)が見えるようにスクロールする。
+  camEls.selectThumbsEl.scrollTop = camEls.selectThumbsEl.scrollHeight;
+}
+
+/** 読み取り中に生成したBlob URLはメモリに残り続けるため、撮り直し・カメラを閉じる・
+ *  読み取りを終えるタイミングで必ず解放する(resetCaptionState()から呼ぶ)。 */
+function clearCaptionThumbs() {
+  captionThumbs.forEach((t) => URL.revokeObjectURL(t.url));
+  captionThumbs = [];
+  if (camEls && camEls.selectThumbsEl) {
+    camEls.selectThumbsEl.innerHTML = '';
+    camEls.selectThumbsEl.classList.remove('show');
+  }
+}
+
 /** 選択レイヤー上のドラッグで矩形を描く。指を離すまで始点を固定し、終点だけ動かす。 */
 function wireSelectionLayer() {
   const layer = camEls.selectLayer;
@@ -2111,8 +2165,18 @@ function cropCanvasToBlob(sourceCanvas, containerEl, selRect, quality) {
  * 「✓ 読み取りを終える」を押した時点で、それまでに読み取った範囲を改行区切りで結合して
  * 呼び出し元へ渡す。
  */
+// handleSelectionRun()は「切り出し(cropCanvasToBlob、非同期)→OCR呼び出し」の2段階だが、
+// captionOcrBusyは後段(OCR呼び出し)が始まってから初めてtrueになる。前段の切り出し中に
+// 連打/連続タップされると、まだcaptionOcrBusyがfalseのままガードをすり抜け、同じ画像に対して
+// runSelectionOcrInline()が二重に走ってしまう(=結果が重複して積まれる、または片方が
+// 混線して見える)不具合があった(2026年9月、実機報告「2枚目以降の抽出が失敗する」の
+// 原因の一つとして修正)。切り出し中もブロックする専用フラグで塞ぐ。
+let captionRunGuardActive = false;
+
 async function handleSelectionRun() {
-  if (!captionFreezeCanvas || captionOcrBusy) return;
+  if (!captionFreezeCanvas || captionOcrBusy || captionRunGuardActive) return;
+  captionRunGuardActive = true;
+  camEls.selectRunBtn.disabled = true;
   let blob;
   try {
     // OCR用はダウンスケールを一切かけず、映像そのままの解像度・高画質で送る。
@@ -2124,8 +2188,11 @@ async function handleSelectionRun() {
   } catch (err) {
     console.error(err);
     showCameraError('画像の切り出しに失敗しました');
+    captionRunGuardActive = false;
+    camEls.selectRunBtn.disabled = captionOcrBusy;
     return;
   }
+  captionRunGuardActive = false;
   const hadSelection = Boolean(captionSelection);
   camDebugLog(`OCR送信(選択=${hadSelection ? 'あり' : 'なし(全体)'}) size=${blob.size}B type=${blob.type}`);
 
@@ -2151,16 +2218,22 @@ async function runSelectionOcrInline(blob) {
   const gen = captionSelectionGen;
   captionOcrBusy = true;
   updateSelectionOcrUi();
+  // このblob(切り出し済みの範囲画像)自体をサムネイルの表示元にする(改めて縮小加工しない、
+  // 既に範囲だけに切り出された小さめの画像のため、そのままCSSで表示枠に収める)。
+  const thumbUrl = URL.createObjectURL(blob);
+  const thumbEntry = addCaptionThumb(thumbUrl);
   const controller = new AbortController();
   captionInlineController = controller;
   ocrActiveControllers.add(controller); // PiPの✕(全件中止)にも相乗りできるよう、共有Setにも登録しておく
   try {
     const text = await ocrImage(blob, { signal: controller.signal });
-    if (gen !== captionSelectionGen) return; // その間に撮り直し/クローズ等で無効になったセッション
+    if (gen !== captionSelectionGen) { URL.revokeObjectURL(thumbUrl); return; } // その間に撮り直し/クローズ等で無効になったセッション
     if (!text || text.includes('(テキストなし)')) {
+      setCaptionThumbStatus(thumbEntry, 'empty');
       if (typeof setStatus === 'function') setStatus('この範囲では文字を検出できませんでした');
     } else {
       captionOcrBuffer.push(text);
+      setCaptionThumbStatus(thumbEntry, 'done');
       if (typeof setStatus === 'function') setStatus(`範囲を読み取りました(${captionOcrBuffer.length}件目)`);
     }
   } catch (err) {
@@ -2168,10 +2241,14 @@ async function runSelectionOcrInline(blob) {
     camDebugLog('OCRエラー(続けて選択): ' + err.message);
     if (gen === captionSelectionGen) {
       if (err && err.cancelled) {
+        setCaptionThumbStatus(thumbEntry, 'cancelled');
         if (typeof setStatus === 'function') setStatus('読み取りを中止しました');
-      } else if (typeof setStatus === 'function') {
-        setStatus(`読み取りに失敗しました: ${err.message}`, { important: true });
+      } else {
+        setCaptionThumbStatus(thumbEntry, 'failed');
+        if (typeof setStatus === 'function') setStatus(`読み取りに失敗しました: ${err.message}`, { important: true });
       }
+    } else {
+      URL.revokeObjectURL(thumbUrl);
     }
   } finally {
     ocrActiveControllers.delete(controller);

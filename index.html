@@ -314,6 +314,11 @@
           <button type="button" class="cam-select-progress-cancel" id="caption-select-progress-cancel" title="この範囲の読み取りを中止">✕</button>
         </span>
       </div>
+      <!-- 続けて選択モード専用: 読み取った(読み取り中の)範囲を画面右側にサムネイルで
+           縦に並べる(2026年9月追加)。範囲選択OCRが中心的な作業になるモジュール
+           (Almagest等)向けに、「今どこまで/どの範囲を読めたか」を件数の数字だけでなく
+           見た目でも追えるようにする。 -->
+      <div class="cam-select-thumbs" id="caption-select-thumbs" hidden></div>
       <div class="cam-select-actions" id="caption-select-actions">
         <button class="cam-select-btn cam-select-retake" id="caption-select-retake">撮り直す</button>
         <button class="cam-select-btn cam-select-run" id="caption-select-run">全体を読み取る</button>
@@ -448,8 +453,8 @@
   <script src="js/drive.js?v=20260916a"></script>
   <script src="js/upload-queue.js?v=20260916a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
-  <script src="js/gemini.js?v=20260916a"></script>
-  <script src="js/camera.js?v=20260916c"></script>
+  <script src="js/gemini.js?v=20260916b"></script>
+  <script src="js/camera.js?v=20260916d"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
@@ -465,6 +470,6 @@
   <script src="js/modules/flight-engineer.js?v=20260914a"></script>
   <script src="js/modules/astrometry-scope.js?v=20260914d"></script>
   <script src="js/modules/star-pencil.js?v=20260914c"></script>
-  <script src="js/modules/almagest.js?v=20260916b"></script>
+  <script src="js/modules/almagest.js?v=20260916c"></script>
 </body>
 </html>

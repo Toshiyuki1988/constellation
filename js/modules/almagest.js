@@ -393,6 +393,10 @@
         width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px;
         padding: 7px 9px; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 12px; color: #fff; line-height: 1.6;
         box-sizing: border-box;
+        /* OCR結果は空白の無い長い英数字の並び(URL・型番等)を含むことがあり、それが原因で
+           テキストエリアの外(ウィンドウの外)へ見切れる実機報告があった(2026年9月)ため、
+           強制的に折り返す。 */
+        overflow-wrap: anywhere; word-break: break-word;
       }
       .al-field input::placeholder, .al-field textarea::placeholder { color: rgba(255, 255, 255, 0.3); }
       .al-new-body-input { min-height: 96px; resize: vertical; }
@@ -445,7 +449,7 @@
       .al-book-spine-title {
         writing-mode: vertical-rl; text-orientation: mixed;
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px; font-weight: 700; color: #e8d9a8;
-        line-height: 1.45; white-space: normal; overflow: visible; max-height: none;
+        line-height: 1.45; white-space: normal; overflow: visible; max-height: none; overflow-wrap: anywhere;
       }
       /* しおり(URL)の背表紙だけに常設する小さなアクション行(2026年9月追加)。本(OCR/貼り付け)は
          読書ビューを開いてから📌/✎/🗑を使うため、シェルフ上には持たせない(タップで即座に
@@ -469,6 +473,7 @@
         display: block; width: 100%; padding: 22px 8px 8px; box-sizing: border-box;
         background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
         color: #fff; font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; font-weight: 700; line-height: 1.35;
+        overflow-wrap: anywhere;
       }
       .al-book-src {
         display: block; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; font-weight: 400;
@@ -521,7 +526,7 @@
       .al-read-icon { font-size: 15px; flex: none; }
       .al-read-title {
         flex: 1; min-width: 0; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 13.5px; color: #f1e4bd;
-        white-space: normal; line-height: 1.4;
+        white-space: normal; line-height: 1.4; overflow-wrap: anywhere;
       }
       .al-read-edit-btn, .al-read-close {
         width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
@@ -531,7 +536,7 @@
       .al-read-edit-btn:hover, .al-read-close:hover { background: rgba(201, 162, 39, 0.25); }
       .al-read-edit-btn.active { background: rgba(201, 162, 39, 0.4); color: #f1e4bd; }
 
-      .al-read-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+      .al-read-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 16px; }
       .al-read-cover { width: 100%; max-height: 220px; object-fit: cover; border-radius: 10px; margin-bottom: 14px; display: block; }
       .al-read-src { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.4); margin-bottom: 4px; }
       .al-read-citation {
@@ -566,7 +571,7 @@
       }
       .al-read-text {
         font-family: 'Zen Kaku Gothic New', sans-serif; color: #241c05; line-height: 1.9;
-        white-space: normal; word-break: break-word;
+        white-space: normal; word-break: break-word; overflow-wrap: anywhere;
       }
       .al-read-text p { margin: 0 0 0.9em; }
       .al-read-text p:last-child { margin-bottom: 0; }
@@ -855,6 +860,33 @@
     }
   }
 
+  /** 読書ビューの編集フォーム版のOCR追記(2026年9月追加、上記handleOcrIntoDraft()と同じ
+   *  パターン)。**以前は編集フォームにOCRボタン自体が無く、「登録後に本文を直そうとしても
+   *  カメラが呼び出せない」という実機報告があった**ため追加した。バックグラウンド実行中に
+   *  編集を終了/別の本を開き直した場合に備え、対象の本のID(targetEntryId)と編集フォームが
+   *  今も同じ本を表示中かを確認し、一致しなければ(handleOcrIntoDraft()と同様)読み取った
+   *  文字を失わないよう新規テクストカードとして残す。 */
+  async function handleOcrIntoEdit(btnEl) {
+    const targetEntryId = readingEntryId;
+    if (btnEl) btnEl.disabled = true;
+    try {
+      const result = await openCamera('caption');
+      if (!result || result.kind !== 'text' || !result.text.trim()) return;
+      const stillEditingSame =
+        editingEntry && readingEntryId === targetEntryId &&
+        rdEls.editBodyInput.isConnected && !rdEls.editBodyField.hidden;
+      if (!stillEditingSame) {
+        createTextCard(result.text.trim());
+        setStatus('編集画面が閉じられていたため、読み取った文字は新しいテクストカードに残しました');
+        return;
+      }
+      const existing = rdEls.editBodyInput.value.trim();
+      rdEls.editBodyInput.value = existing ? `${existing}\n${result.text.trim()}` : result.text.trim();
+    } finally {
+      if (btnEl) btnEl.disabled = false;
+    }
+  }
+
   async function handleSaveNewEntry() {
     let entry;
     if (newEntryKind === 'book') {
@@ -1077,7 +1109,10 @@
             <input type="file" accept="image/*" class="al-edit-thumb-file" hidden>
           </div>
           <div class="al-field al-edit-body-field">
-            <label>本文</label>
+            <div class="al-field-label-row">
+              <label>本文</label>
+              <button type="button" class="al-new-ocr-btn al-edit-ocr-btn" title="カメラでOCR読み取り(追記)">📷</button>
+            </div>
             <textarea class="al-edit-body-input al-new-body-input"></textarea>
           </div>
           <div class="al-field al-edit-citation-field">
@@ -1129,6 +1164,7 @@
       editThumbFile: overlay.querySelector('.al-edit-thumb-file'),
       editBodyField: overlay.querySelector('.al-edit-body-field'),
       editBodyInput: overlay.querySelector('.al-edit-body-input'),
+      editOcrBtn: overlay.querySelector('.al-edit-ocr-btn'),
       editCitationField: overlay.querySelector('.al-edit-citation-field'),
       editCitationInput: overlay.querySelector('.al-edit-citation-input'),
       editUrlField: overlay.querySelector('.al-edit-url-field'),
@@ -1195,6 +1231,7 @@
       if (blob) await applyEditThumbBlob(blob);
     });
 
+    rdEls.editOcrBtn.addEventListener('click', () => handleOcrIntoEdit(rdEls.editOcrBtn));
     rdEls.editSaveBtn.addEventListener('click', handleSaveEdit);
     rdEls.editCancelBtn.addEventListener('click', handleCancelEdit);
 

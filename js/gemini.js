@@ -88,7 +88,20 @@ async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal,
   } finally {
     cleanup();
   }
-  if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const bodyText = await res.text();
+    // 「続けて選択」モードのように短時間に複数回OCRを呼ぶ運用では、無料枠の分あたりの
+    // リクエスト数上限(RPM)に触れて429になることがある(日あたりの上限とは別の枠、
+    // 2026年9月追加)。「読み取りに失敗しました」とだけ表示されると原因が分かりにくいため、
+    // 429の場合は待って再試行するよう明示する。
+    if (res.status === 429) {
+      throw new Error(
+        `Gemini APIの利用上限(429)に達しました。無料枠は1分あたり・1日あたりそれぞれ上限があるため、` +
+        `短時間に連続で読み取ると起きることがあります。少し間隔を空けてから再試行してください。詳細: ${bodyText}`
+      );
+    }
+    throw new Error(`Gemini API error ${res.status}: ${bodyText}`);
+  }
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') ?? '';
 }
