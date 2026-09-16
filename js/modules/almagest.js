@@ -104,6 +104,10 @@
   // 書庫データの読み込み状況(2026年9月追加)。詳細はensureAlmagestDataLoaded()参照。
   let almagestDataLoaded = false;
   let almagestDataLoadPromise = null;
+  // 端末内キャッシュ(almagestBookCache)に本文を持っている本のid一覧(2026年9月追加)。
+  // 「電車の中でもオフラインで読めるか本棚で一目で分かるようにしたい」というユーザー要望への
+  // 対応で、isOfflineReady()・renderShelf()が参照する。refreshOfflineCacheStatus()参照。
+  let offlineCachedBookIds = new Set();
 
   /* ---------------- データアクセス(app.js側からwindow経由で参照される) ---------------- */
 
@@ -171,6 +175,31 @@
    *  元々本文を持たないため常にtrue扱い。 */
   function isEntryContentLoaded(entry) {
     return Boolean(entry) && (entry.kind === 'url' || entry.contentLoaded === true);
+  }
+
+  /**
+   * この本を今オフラインで開いても読めるか(2026年9月追加、「電車の中でKindleのように
+   * オフラインで読みたい」というユーザー要望への対応)。しおり(url)はタップすると外部URLへ
+   * 通信が必要なため対象外(null)とし、本棚上のバッジは出さない。
+   * - 未分離(旧形式、entry.bodyFileIdが無い): 索引読み込みの時点で既に本文が埋め込まれている
+   * - 今回のセッションで既に開いた(entry.contentLoaded): メモリ上にある
+   * - 過去に一度でも開いたことがある(offlineCachedBookIdsに含まれる): 端末内キャッシュにある
+   * これらのいずれにも当てはまらない本だけが「まだ内容を取得しておらず、通信が無いと開けない」。
+   */
+  function isOfflineReady(entry) {
+    if (entry.kind === 'url') return null;
+    if (!entry.bodyFileId) return true;
+    if (entry.contentLoaded) return true;
+    return offlineCachedBookIds.has(entry.id);
+  }
+
+  /** 端末内キャッシュ(almagestBookCache)に本文を持っている本のid一覧を取得し直す
+   *  (js/upload-queue.jsのlistAlmagestBookCacheIds()、グローバル関数)。本棚を開くたびと、
+   *  本の内容を新しく取得/保存した直後に呼び、offlineCachedBookIdsを最新化する。 */
+  async function refreshOfflineCacheStatus() {
+    if (typeof listAlmagestBookCacheIds !== 'function') return;
+    const ids = await listAlmagestBookCacheIds();
+    offlineCachedBookIds = new Set(ids);
   }
 
   function computeExcerpt(entry) {
@@ -403,10 +432,24 @@
       almagestUpdatedAt = (localCache && localCache.updatedAt) || 0;
       if (state.almagestEntries.length) {
         setStatus('オフラインのため書庫は端末キャッシュから表示しています', { important: true });
+      } else {
+        // 端末キャッシュも空(=この端末で一度も開いたことがない)場合、何も出さないと
+        // 「書庫が空になった」ように見えてしまう(2026年9月、実機報告で判明)。読み込み失敗
+        // であることが伝わるようにする。
+        setStatus('書庫を読み込めませんでした(通信を確認し、もう一度Almagestを開いてください)', { important: true });
       }
     }
     almagestDataLoaded = true;
-    await migrateAlmagestEntriesToSplitFiles().catch((err) => console.error('書庫の保存形式の更新に失敗', err));
+    // **重大バグ修正(2026年9月、実機報告)**: 以前はここで移行処理の完了を`await`していたため、
+    // 未分離(旧形式)の本がまとまった数だけ残っていると、1件ずつ順番にDriveへ書き込む
+    // (`saveAlmagestBookContentNow()`)この移行処理全体が終わるまで、この関数(および
+    // これを`Promise.all()`で待つ`js/app.js`の`loadMainData()`)自体が完了しなかった。
+    // 結果、「スマホでAlmagestを開いても本が1冊も表示されない(実際は移行中で描画待ちだった)」
+    // 「通常のスタートで全セッション読み込みが終わらない(同じ理由でloadMainData()がブロックされていた)」
+    // という2つの不具合につながった。移行はいつ完了しても安全な処理(索引にはまだbodyText等が
+    // 残っているため、移行前でも本の内容自体は既にメモリ上で完全に読める)なので、初期表示を
+    // 一切ブロックしないバックグラウンド処理に変更した。
+    migrateAlmagestEntriesToSplitFiles().catch((err) => console.error('書庫の保存形式の更新に失敗', err));
   }
 
   /**
@@ -1409,6 +1452,9 @@
     alEls.newPanel.hidden = true;
     alEls.overlay.classList.add('open');
     document.body.style.overflow = 'hidden';
+    // オフライン可否バッジ(IndexedDBの端末内キャッシュ一覧、通信を伴わない)は、書庫データの
+    // 読み込みとは独立に、開くたびに取り直す(2026年9月追加)。
+    await refreshOfflineCacheStatus();
     if (!almagestDataLoaded) {
       setStatus('書庫を読み込み中…', { busy: true });
       await ensureAlmagestDataLoaded();
@@ -1774,6 +1820,10 @@
     readingEntryId = null;
     editingEntry = false;
     if (rdEls) rdEls.overlay.classList.remove('open');
+    // 読んだだけで編集・削除をしていなくても、この本がオフライン対応バッジ(isOfflineReady()、
+    // entry.contentLoadedを見る)の対象なら状態が変わっているはずなので、本棚に戻った時点の
+    // 表示を最新化する(2026年9月追加)。
+    if (alEls && alEls.overlay.classList.contains('open')) renderShelf();
   }
 
   async function handleSummarize(mode, btnEl) {
