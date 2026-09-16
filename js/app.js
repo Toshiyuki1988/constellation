@@ -50,6 +50,19 @@ const state = {
   // 溜まる」取りこぼしが起きうることから、シンプルな「オンライン中は自動保存・オフライン中は
   // 端末内バックアップのみ」という接続状態そのものへの連動に置き換えた。
   autoSaveEnabled: navigator.onLine,
+  // クイックカメラ/クイックセッション(2026年9月追加、スタートメニュー)。
+  // trueの間は、メインデータ(state.cards/sessions全体)を読み込んでいない代わりに、
+  // 【現在の年】セッション+今回新規に作ったセッションだけを持つ軽量な状態で動いている。
+  // この間の保存はDriveのメインファイルへは行わず、IndexedDBのクイックバンドルへ留める
+  // (js/upload-queue.jsのsaveQuickBundle()、js/app.jsのscheduleAutoSave()参照)。
+  quickMode: false,
+  // クイックモード中、フルデータを読み込まずに安全に出入りできるセッションID一覧
+  // (年セッション+今回作った新規セッションのみ)。enterSession()がこれを見て、
+  // 範囲外のセッションへ移動しようとした瞬間だけensureMainDataLoaded()を先に待つ。
+  quickSessionIds: null,
+  // 年セッションだけの軽量インデックス(constellation-years.json)のファイルID・読み込み状況。
+  yearsIndexFileId: null,
+  yearsIndexAvailable: false,
 };
 
 const FIRST_YEAR = 2025;
@@ -724,6 +737,15 @@ function handleOfflineIndicatorClick() {
 }
 
 function scheduleAutoSave() {
+  // クイックモード中(state.quickMode)は、メインデータを読み込んでいない軽量な状態なので、
+  // 通常のmainDataLoadedゲートより先にこちらを見る。Driveのメインファイルには一切触れず、
+  // IndexedDBのクイックバンドルへだけ保存する(runScheduledSave()参照)。
+  if (state.quickMode) {
+    pendingSave = true;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(runScheduledSave, AUTO_SAVE_DELAY_MS);
+    return;
+  }
   // サインイン前、またはメインデータ(state.cards/sessions等)をまだ読み込んでいない間は
   // 何もしない。**mainDataLoadedのチェックは安全上必須**: 2026年9月にonSignedIn()を
   // 「Almagestだけ先に使える」フェーズと「メインデータの読み込み(ensureMainDataLoaded())」
@@ -738,8 +760,15 @@ function scheduleAutoSave() {
 }
 
 /** デバウンスを待たず、今すぐ保存する(新規カード追加など、タブが閉じられる前に必ず
- *  残しておきたい変更で使う)。scheduleAutoSave()と同じ安全上の理由でmainDataLoadedも見る。 */
+ *  残しておきたい変更で使う)。scheduleAutoSave()と同じ安全上の理由でmainDataLoaded/
+ *  quickModeも見る。 */
 function saveImmediately() {
+  if (state.quickMode) {
+    pendingSave = true;
+    clearTimeout(autoSaveTimer);
+    runScheduledSave();
+    return;
+  }
   if (!state.folderId || !mainDataLoaded) return;
   pendingSave = true;
   clearTimeout(autoSaveTimer);
@@ -753,6 +782,15 @@ async function runScheduledSave() {
   }
   saveInFlight = true;
   try {
+    // クイックモード中は、Driveのメインファイルにもオートセーブのローカルバックアップにも
+    // 触れず、専用のクイックバンドル(IndexedDB)へだけ保存する(js/upload-queue.js参照)。
+    // メインデータを読み込んでいない軽量な状態でhandleSave()/handleLocalBackupSave()を
+    // 呼ぶと、まだ空のstate.cards/sessionsで既存の記録を上書きしてしまう危険があるため、
+    // 他の分岐より先に判定する。
+    if (state.quickMode) {
+      await handleQuickModeSave();
+      return;
+    }
     // オートセーブOFF中はDriveへ送らず、端末内(IndexedDB)へのバックアップに留める
     // (js/upload-queue.jsのsaveLocalDataBackup()参照、モバイル通信量節約のため2026年9月追加)。
     if (state.autoSaveEnabled) {
@@ -794,13 +832,18 @@ window.addEventListener('beforeunload', (e) => {
  * 最小限にするため、onSignedIn()を2段階に分割した:
  *   フェーズ1(この関数、常に即座に実行): フォルダ解決(小さなJSON照会のみ)と、
  *     Almagestの専用ファイル(almagest-library.json、カードのサムネイルを含まないため
- *     メインデータよりずっと軽い)の読み込みだけを行う。この時点でAlmagestはすぐ使える。
+ *     メインデータよりずっと軽い)、年セッションだけの軽量インデックス(constellation-years.json)
+ *     の読み込みを行う。この時点でAlmagestはすぐ使える。
  *   フェーズ2(ensureMainDataLoaded()/loadMainData()、必要になるまで呼ばない): カード・
  *     セッション全体(各カードのサムネイルをbase64で埋め込んだ、普段いちばん重い
  *     constellation-data.json)の読み込み。年タブ・ボトムツールバー・モジュールキーパッドの
  *     Almagest以外のコード等、実際にメインのキャンバスを触る操作をした時に初めて読み込む
  *     (呼び出し箇所は下記ensureMainDataLoaded()のコメント参照)。Almagestだけで使い終える
  *     セッションでは、このフェーズの通信は一切発生しない。
+ *
+ * **2026年9月、スタートメニューを追加**: フェーズ1完了後、いきなりメインデータを読み込みに
+ * 行くのではなく、まず「スタートメニュー」(クイックカメラ/クイックセッション/Almagest/
+ * スタート)を開き、ユーザー自身にどの通信量で始めるかを選んでもらう(openStartMenu()参照)。
  */
 async function onSignedIn() {
   toggleAuthUI(true);
@@ -812,13 +855,294 @@ async function onSignedIn() {
     // 旧形式(メインJSON埋め込み)からの移行は、専用ファイルが見つからずlegacyEntriesも
     // 渡せない場合に限り、loadMainData()側でメインデータ読み込み後に改めて行う(下記参照)。
     if (window.initAlmagestData) await window.initAlmagestData();
-    renderYearTabsPlaceholder();
+    await loadYearsIndex(); // クイックカメラ/クイックセッションが「今年のセッション」を知るための軽量インデックス
     refreshDriveQuota(); // ヘッダーのDrive使用量表示(メインデータ不要)
-    setStatus('サインインしました(Almagestはすぐ使えます。年タブをタップすると続きを読み込みます)');
+    setStatus('サインインしました');
+    openStartMenu();
   } catch (err) {
     console.error(err);
     setStatus('同期に失敗しました(コンソールを確認)');
   }
+}
+
+/* ---------------- スタートメニュー・クイックカメラ・クイックセッション(2026年9月追加) ----------------
+ * 「これまでは起動のたびにメインデータ(全セッション・全カードのサムネイル)を読み込んでいたが、
+ * 個展を1件記録して帰るだけならその通信量は要らない」というユーザー要望への対応。
+ * サインイン直後にこのメニューを出し、ユーザーが選んだ入口だけの通信量で始められるようにする。
+ *
+ *   - クイックカメラ: カメラだけをその場で開く(通信ゼロ)。撮影した瞬間だけ、【現在の年】
+ *     セッションの下に新規セッションを作って格納する(この判定に必要な「今年のセッションID」は
+ *     上記の軽量インデックスから分かる)。以降の追加撮影・編集はこの1セッション分の通信量で完結する。
+ *   - クイックセッション: 【現在の年】の下に空の新規セッションを作ってすぐ中へ入る。
+ *   - Almagest: 既存のフェーズ1のまま、そのまま開く(メインデータ不要)。
+ *   - スタート: 今まで通りの全データ読み込み。
+ *
+ * クイックカメラ/クイックセッションで動いている間(state.quickMode)は、state.cards/sessionsが
+ * 「今回新規に作った分だけ」の軽量な状態になる。この間の保存はDriveのメインファイルには一切
+ * 触れず、IndexedDBのクイックバンドルに留める(scheduleAutoSave()/saveImmediately()参照)。
+ * 実際にメインファイルへ書き戻されるのは、ユーザーが他のセッションへ移動しようとして
+ * ensureMainDataLoaded()が呼ばれた瞬間(=「他セッションに移動した時に初めて全データを
+ * 読み込む」というユーザー指定の境界)で、その時にメインデータへ追記の形でマージする
+ * (mergeQuickBundleIfAny()参照、削除・上書きは一切行わない)。
+ */
+
+/** 年セッションだけの軽量インデックス(constellation-years.json)を読み込む。無ければ
+ *  (初回利用、または過去に一度もこのファイルが作られていない古いアカウント)、
+ *  state.yearsIndexAvailable=falseのままにする。クイックカメラ/クイックセッションは、
+ *  この値がtrueの時だけ「安全に今年のセッションIDが分かる」と判断して即座に動く。
+ *  falseの場合は、安全側に倒して先にensureMainDataLoaded()(通常の全データ読み込み)へ
+ *  フォールバックする(=重複した年セッションを作ってしまうリスクを避ける)。 */
+async function loadYearsIndex() {
+  state.yearsIndexAvailable = false;
+  try {
+    const { data } = await loadNamedData(state.folderId, CONFIG.YEARS_INDEX_FILE_NAME);
+    // **data===null(ファイル自体が無い)を「年セッション0件」として扱ってはいけない**:
+    // このミラーファイルは今回の機能追加で新設したものなので、既にconstellation-data.jsonに
+    // 年セッションが実在する既存アカウントでも、ミラーへ一度も保存していない間は同じく
+    // data===nullになる。ここで「0件」と誤認して新しい年セッションを作ってしまうと、
+    // 後でメインデータとマージした際に同じ年のセッションが重複してしまう。ファイルが
+    // 見つからない場合は「まだ分からない」として安全側(yearsIndexAvailable=false)に倒し、
+    // クイック系は一度だけ通常の全データ読み込みへフォールバックする。フォールバック後の
+    // 保存(handleSave())でこのミラーが作られるため、次回以降はクイックに動ける。
+    if (data && Array.isArray(data.years)) {
+      // state.sessionsはまだ空(メインデータ未読み込み)のはずだが、念のため重複を避けて足す。
+      const existingIds = new Set(state.sessions.map((s) => s.id));
+      data.years.forEach((y) => {
+        if (!existingIds.has(y.id)) state.sessions.push(y);
+      });
+      state.yearsIndexAvailable = true;
+    }
+  } catch (err) {
+    console.error('年セッションの軽量インデックス読み込みに失敗', err);
+    // 読み込み失敗時はyearsIndexAvailable=falseのまま(=クイック系はフォールバックする)
+  }
+}
+
+/** handleSave()(メインデータの保存)成功後に呼ぶ、年セッションだけのミラーの書き戻し。
+ *  失敗してもメインデータの保存自体には影響させない(ベストエフォート、次回のloadYearsIndex()で
+ *  古い内容が残っていてもyearsIndexAvailableのフォールバックが安全側に効くため実害は小さい)。 */
+async function saveYearsIndexMirror() {
+  try {
+    const years = state.sessions.filter((s) => s.type === 'year');
+    await saveNamedData(state.folderId, state.yearsIndexFileId, { years, updatedAt: Date.now() }, CONFIG.YEARS_INDEX_FILE_NAME)
+      .then((id) => { state.yearsIndexFileId = id; });
+  } catch (err) {
+    console.error('年セッションの軽量インデックス書き込みに失敗', err);
+  }
+}
+
+let startMenuEls = null;
+
+function buildStartMenu() {
+  const overlay = document.createElement('div');
+  overlay.id = 'start-menu-overlay';
+  overlay.className = 'start-menu-overlay';
+  overlay.innerHTML = `
+    <div class="start-menu-panel">
+      <h2 class="start-menu-title">CONSTELLATION</h2>
+      <p class="start-menu-sub">どの通信量で始めますか</p>
+      <button class="start-menu-btn" id="start-menu-quick-camera">
+        <span class="start-menu-btn-icon">📷</span>
+        <span class="start-menu-btn-text"><strong>クイックカメラ</strong><small>カメラだけをすぐ開く。撮影した写真は【今年】に新規セッションとして格納</small></span>
+      </button>
+      <button class="start-menu-btn" id="start-menu-quick-session">
+        <span class="start-menu-btn-icon">🗂</span>
+        <span class="start-menu-btn-text"><strong>クイックセッション</strong><small>【今年】に新規セッションを作ってすぐ中へ。このセッション分の通信量だけで完結</small></span>
+      </button>
+      <button class="start-menu-btn" id="start-menu-almagest">
+        <span class="start-menu-btn-icon">📚</span>
+        <span class="start-menu-btn-text"><strong>Almagest</strong><small>書庫をそのまま開く</small></span>
+      </button>
+      <button class="start-menu-btn start-menu-btn--full" id="start-menu-start">
+        <span class="start-menu-btn-icon">▶</span>
+        <span class="start-menu-btn-text"><strong>スタート</strong><small>いつも通り、全セッションを読み込む</small></span>
+      </button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  startMenuEls = { overlay };
+  overlay.querySelector('#start-menu-quick-camera').addEventListener('click', handleQuickCameraStart);
+  overlay.querySelector('#start-menu-quick-session').addEventListener('click', handleQuickSessionStart);
+  overlay.querySelector('#start-menu-almagest').addEventListener('click', () => {
+    closeStartMenu();
+    if (window.openAlmagest) window.openAlmagest();
+  });
+  overlay.querySelector('#start-menu-start').addEventListener('click', () => {
+    closeStartMenu();
+    withMainData(() => {});
+  });
+}
+
+function openStartMenu() {
+  if (!startMenuEls) buildStartMenu();
+  startMenuEls.overlay.classList.add('open');
+}
+
+function closeStartMenu() {
+  if (!startMenuEls) return;
+  startMenuEls.overlay.classList.remove('open');
+}
+
+/** 現在(端末のローカル日時)の西暦年。 */
+function currentCalendarYear() {
+  return new Date().getFullYear();
+}
+
+/**
+ * 【現在の年】セッションを、メインデータを読み込まずに解決/作成する。
+ * @returns {{ok: true, session: object} | {ok: false}} yearsIndexAvailableがfalseの場合は
+ *   安全側に倒してok:falseを返す(呼び出し元はensureMainDataLoaded()へフォールバックすること)。
+ */
+function findOrCreateCurrentYearSessionQuick() {
+  if (!state.yearsIndexAvailable) return { ok: false };
+  const year = currentCalendarYear();
+  let session = state.sessions.find((s) => s.type === 'year' && s.year === year);
+  if (!session) {
+    session = {
+      id: crypto.randomUUID(),
+      type: 'year',
+      parentId: null,
+      name: String(year),
+      year,
+      createdAt: new Date().toISOString(),
+    };
+    state.sessions.push(session);
+  }
+  return { ok: true, session };
+}
+
+/** クイックカメラ/クイックセッション共通: 【現在の年】の下に新規セッションを作り、
+ *  クイックモードへ入る。セッションカード(親=年セッション)も合わせて作る。 */
+function startQuickSession(name) {
+  const { session: yearSession } = findOrCreateCurrentYearSessionQuick();
+  const session = {
+    id: crypto.randomUUID(),
+    type: 'session',
+    parentId: yearSession.id,
+    name,
+    createdAt: new Date().toISOString(),
+  };
+  state.sessions.push(session);
+
+  const spawnPos = newCardSpawnPos();
+  const sessionCard = {
+    id: crypto.randomUUID(),
+    x: spawnPos.x,
+    y: spawnPos.y,
+    width: 190,
+    height: 150,
+    memo: '',
+    tags: [],
+    mediaType: 'session',
+    refSessionId: session.id,
+    imageFileId: null,
+    sessionId: yearSession.id,
+    createdAt: new Date().toISOString(),
+  };
+  state.cards.push(sessionCard);
+
+  state.quickMode = true;
+  state.quickSessionIds = new Set([yearSession.id, session.id]);
+  state.breadcrumb = [yearSession.id, session.id];
+  renderYearTabs();
+  renderBreadcrumb();
+  renderAllCards();
+  return session;
+}
+
+/**
+ * loadMainData()から呼ぶ。IndexedDBのクイックバンドル(クイックカメラ/クイックセッションで
+ * 作った、まだDriveのメインファイルに無い新規セッション・新規カード)があれば、今しがた
+ * Driveから読み込んだ完全なstate.sessions/cards等へ**追記のみ**で合流させる(既にfresh側に
+ * 存在するidは上書きしない=常に既存データを優先し、失う/壊すことは無い)。
+ * @returns {Promise<boolean>} 何かをマージしたか(呼び出し元はtrueの時だけ追加のDrive保存を行う)
+ */
+async function mergeQuickBundleIfAny() {
+  if (typeof loadQuickBundle !== 'function') return false;
+  let bundle;
+  try {
+    bundle = await loadQuickBundle();
+  } catch (err) {
+    console.error('クイックバンドルの読み込みに失敗', err);
+    return false;
+  }
+  if (!bundle) return false;
+
+  const mergeArray = (targetArr, sourceArr) => {
+    if (!Array.isArray(sourceArr) || sourceArr.length === 0) return;
+    const existingIds = new Set(targetArr.map((x) => x.id));
+    sourceArr.forEach((item) => {
+      if (!existingIds.has(item.id)) {
+        targetArr.push(item);
+        existingIds.add(item.id);
+      }
+    });
+  };
+  mergeArray(state.sessions, bundle.sessions);
+  mergeArray(state.cards, bundle.cards);
+  mergeArray(state.connections, bundle.connections);
+  mergeArray(state.hiddenAutoLinks, bundle.hiddenAutoLinks);
+  // **意図的に触れないフィールド**: bundleはcollectSaveData()と同じ形をしているため
+  // crews/commentHistory/exhibitionCalendarId/feHistory等も持っているが、これらは
+  // クイックモード中に一度も読み込んでいない「空の初期値」でしかない。もしここで
+  // state.crews等をbundle側の値で上書きしていたら、今しがたDriveから読み込んだ本物の
+  // データを空配列で消してしまうところだった。sessions/cards/connections/hiddenAutoLinks
+  // だけが「クイックモードで確かに新規に作られた」フィールドなので、この4つだけを対象にする。
+  return true;
+}
+
+/** クイックセッションボタン。セッション名の入力方法(OCR/手入力)はhandleCreateSession()と
+ *  同じ二択を踏襲する。軽量インデックスが使えない場合は、安全側に倒して通常の
+ *  全データ読み込み(handleCreateSession())へフォールバックする。 */
+async function handleQuickSessionStart() {
+  closeStartMenu();
+  if (!state.yearsIndexAvailable) {
+    setStatus('念のため通常読み込みに切り替えます…', { busy: true });
+    await withMainData(handleCreateSession);
+    return;
+  }
+  const choice = await showChoiceDialog({
+    title: 'セッション名の入力方法',
+    options: [
+      { label: 'OCRで読み取る', value: 'ocr' },
+      { label: '手入力する', value: 'manual', secondary: true },
+    ],
+  });
+  if (!choice) { openStartMenu(); return; }
+  let name;
+  if (choice === 'ocr') {
+    const result = await openCamera('caption');
+    if (!result || result.kind !== 'text' || !result.text.trim()) { openStartMenu(); return; }
+    name = result.text.trim();
+  } else {
+    name = window.prompt('新規セッションの名前(展覧会名や作品名など)');
+    if (!name) { openStartMenu(); return; }
+    name = name.trim();
+  }
+  startQuickSession(name);
+  setStatus(`「${name}」セッションを作成しました(クイックモード)`);
+}
+
+/** クイックカメラボタン。カメラをその場で開く(この時点では通信ゼロ)。撮影が確定した
+ *  瞬間だけ、【現在の年】の下に新規セッションを作って格納する(2回目以降の撮影は同じ
+ *  セッションへ、通常のカメラボタン経由で追加できる)。軽量インデックスが使えない場合は
+ *  安全側に倒して通常の全データ読み込みへフォールバックする。 */
+async function handleQuickCameraStart() {
+  closeStartMenu();
+  const result = await openCamera('photo');
+  if (!result || result.kind !== 'photo') { openStartMenu(); return; }
+  if (!state.yearsIndexAvailable) {
+    setStatus('念のため通常読み込みに切り替えます…', { busy: true });
+    await ensureMainDataLoaded().catch(() => {});
+    if (!mainDataLoaded) { openStartMenu(); return; }
+  } else if (!state.quickMode && !mainDataLoaded) {
+    startQuickSession(`クイック撮影 ${new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}`);
+  }
+  await createCardFromCapture({
+    blob: result.blob,
+    filename: `${Date.now()}-photo.jpg`,
+    mediaType: 'image',
+  });
 }
 
 let mainDataLoaded = false; // メインデータ(state.cards/sessions等)を読み込み終えたか
@@ -830,12 +1154,14 @@ let mainDataLoadPromise = null;
  * **呼び出し箇所(=メインのキャンバスを実際に触りうる操作)**: ボトムツールバーの各ボタン
  * (アップロード/カメラ/テクスト/動画/音声/セッション/インフォ/サマリー/ストリートビュー)、
  * モジュールキーパッドでAlmagest(159)以外のコードを入力した時(js/module-launcher.js)、
- * 年タブのプレースホルダー(renderYearTabsPlaceholder())、設定モーダルの「☁ Driveへ送信」
- * 「📤 端末へ保存」「📋 アップロード状況を見る」(いずれもstate.cardsを前提にする)。
+ * 年タブの「🌐 他の記録を読み込む」ボタン(quickMode中のrenderYearTabs()参照)、設定モーダルの
+ * 「☁ Driveへ送信」「📤 端末へ保存」「📋 アップロード状況を見る」(いずれもstate.cardsを前提にする)、
+ * enterSession()がクイックモードの範囲外のセッションへ移動しようとした時(2026年9月追加)。
  * **scheduleAutoSave()/saveImmediately()側にも、空のstateでDriveを上書きしてしまわない
- * ための二重の安全策(mainDataLoadedチェック)を入れてある**ため、万が一ここでの呼び出し
- * 漏れがあっても、保存だけは確実に防がれる(=最悪でも「操作が効かない」で済み、
- * データが消えることはない)。
+ * ための二重の安全策(mainDataLoaded/quickModeチェック)を入れてある**ため、万が一ここでの
+ * 呼び出し漏れがあっても、保存だけは確実に防がれる(=最悪でも「操作が効かない」で済み、
+ * データが消えることはない)。**loadMainData()自体もmergeQuickBundleIfAny()で、クイックモード中に
+ * 溜まった変更をここで初めてメインデータへ合流させる**(削除・上書きは一切行わない)。
  */
 function ensureMainDataLoaded() {
   if (mainDataLoaded) return Promise.resolve();
@@ -847,8 +1173,16 @@ function ensureMainDataLoaded() {
 /** メインデータの読み込みを待ってから実行する共通ラッパー(ボトムツールバー等の各ボタンから
  *  呼ぶ、上記ensureMainDataLoaded()のコメント参照)。読み込みに失敗した場合はloadMainData()
  *  側で既にエラーのステータス表示が済んでいるため、ここでは何もせず処理を諦める
- *  (中途半端な状態、例えばsessionIdの無いカードを作ってしまう等を避ける)。 */
+ *  (中途半端な状態、例えばsessionIdの無いカードを作ってしまう等を避ける)。
+ *  **クイックモード中(state.quickMode)は素通りする(2026年9月追加)**: ボトムツールバーの
+ *  各ボタンは「今アクティブなセッションにカードを1枚追加する」だけの操作で、クイックモード中の
+ *  軽量なstate.cards/sessionsでも安全に完結する(=わざわざ全データを読み込む必要が無い)。
+ *  全データが必要になるのは、他のセッションへ移動しようとした瞬間だけ(enterSession()参照)。 */
 async function withMainData(fn) {
+  if (state.quickMode) {
+    fn();
+    return;
+  }
   try {
     await ensureMainDataLoaded();
   } catch (err) {
@@ -865,6 +1199,13 @@ async function loadMainData() {
   if (!state.folderId) {
     setStatus('まだサインイン処理中です。少し待ってからもう一度お試しください', { important: true });
     throw new Error('state.folderIdがまだ設定されていません');
+  }
+  // クイックモード中(state.quickMode)にensureMainDataLoaded()が呼ばれた=「他セッションに
+  // 移動しようとした」瞬間。今持っている(新規に作った分だけの)state.cards/sessions等を
+  // 失わないよう、まずクイックバンドル(IndexedDB)へ最新の内容を確実に書き出してから、
+  // Driveのメインデータを読みに行く(下でmergeQuickBundleIfAny()が読み戻して合流させる)。
+  if (state.quickMode) {
+    await handleQuickModeSave();
   }
   setStatus('続きを読み込み中…', { busy: true });
   try {
@@ -916,6 +1257,15 @@ async function loadMainData() {
       state.feHistory = [];
       state.feHistoryIndex = 0;
     }
+    // クイックカメラ/クイックセッションで作った、まだDriveのメインファイルに無い新規セッション・
+    // 新規カードをここでマージする(2026年9月追加)。追記のみ・削除や上書きは一切行わない
+    // (mergeQuickBundleIfAny()参照)。**ensureYearSessions()より必ず先に行うこと**:
+    // クイックバンドルが(年をまたいだ直後などで)新しい年セッションを含んでいる場合、
+    // 先にこちらをマージしておかないと、直後のensureYearSessions()が「まだ無い」と誤認して
+    // 同じ年のセッションをもう1つ作ってしまう(=重複)。
+    const mergedQuickBundle = await mergeQuickBundleIfAny();
+    state.quickMode = false;
+    state.quickSessionIds = null;
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -974,7 +1324,16 @@ async function loadMainData() {
     await restoreUploadQueueOnLoad();
     maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
     maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
-    setStatus(`読み込み完了(${state.cards.length}件)`);
+    if (mergedQuickBundle) {
+      // マージした内容を即座にDriveへ書き戻す(=クイックモード中に溜まった変更を確実に
+      // 永続化する)。成功した時だけIndexedDB上のバンドルを消す(失敗時は次回このタイミングで
+      // 再度マージを試みればよく、二重にマージしても追記のみのため実害は無い)。
+      const saved = await handleSave();
+      if (saved && typeof clearQuickBundle === 'function') await clearQuickBundle();
+      setStatus(`読み込み完了(${state.cards.length}件、クイック記録を統合しました)`, { important: true });
+    } else {
+      setStatus(`読み込み完了(${state.cards.length}件)`);
+    }
   } catch (err) {
     console.error(err);
     setStatus('同期に失敗しました(コンソールを確認)', { important: true });
@@ -1020,20 +1379,6 @@ function getCurrentYearSessionId() {
   return session ? session.id : state.sessions.find((s) => s.type === 'year').id;
 }
 
-/** メインデータ読み込み前(onSignedIn()のフェーズ1直後)の年タブ欄。実際の年タブが
- *  読めるようになるまでの間、タップすればメインデータの読み込みを開始できる入口を
- *  1つだけ置いておく(でないと年タブ欄が空のままで「読み込み方が分からない」状態になる)。
- *  ensureMainDataLoaded()完了後はloadMainData()内のrenderYearTabs()が中身を差し替える。 */
-function renderYearTabsPlaceholder() {
-  if (mainDataLoaded) return;
-  els.yearTabs.innerHTML = '';
-  const btn = document.createElement('button');
-  btn.className = 'year-tab';
-  btn.textContent = '📅 タップして読み込む';
-  btn.addEventListener('click', () => withMainData(() => {}));
-  els.yearTabs.appendChild(btn);
-}
-
 function renderYearTabs() {
   const years = state.sessions
     .filter((s) => s.type === 'year')
@@ -1046,6 +1391,18 @@ function renderYearTabs() {
     btn.addEventListener('click', () => enterSession(session.id, true));
     els.yearTabs.appendChild(btn);
   });
+  // クイックモード中(2026年9月追加): state.sessionsは今回新規に作った分だけの軽量な状態
+  // なので、年タブには他の年・他の展覧会が一切出てこない。「消えたわけではない、読めば
+  // 出てくる」ことが伝わるよう、全データを読み込む入口を明示的に添える。
+  if (state.quickMode) {
+    const btn = document.createElement('button');
+    btn.className = 'year-tab year-tab--load-all';
+    btn.textContent = '🌐 他の記録を読み込む';
+    // withMainData()はクイックモード中は素通りする仕様(トップの各ボタン用)のため、ここは
+    // 直接ensureMainDataLoaded()を呼ぶ(=意図的に全データ読み込みの境界を越える操作)。
+    btn.addEventListener('click', () => ensureMainDataLoaded().catch(() => {}));
+    els.yearTabs.appendChild(btn);
+  }
 }
 
 function renderBreadcrumb() {
@@ -1073,8 +1430,19 @@ function renderBreadcrumb() {
   });
 }
 
-/** セッションに入る。isYear=true のときは年タブからの切り替えとして breadcrumb をリセットする */
-function enterSession(id, isYear) {
+/** セッションに入る。isYear=true のときは年タブからの切り替えとして breadcrumb をリセットする。
+ *  **クイックモード中の境界(2026年9月追加)**: 今回のクイックカメラ/クイックセッションで
+ *  作った範囲(state.quickSessionIds)の外へ出ようとした瞬間だけ、先にensureMainDataLoaded()
+ *  (全データ読み込み+クイックバンドルのマージ)を待つ。これが「他セッションに移動した時に
+ *  初めて全データを読み込む」というユーザー指定の境界そのもの。 */
+async function enterSession(id, isYear) {
+  if (!mainDataLoaded && !(state.quickSessionIds && state.quickSessionIds.has(id))) {
+    try {
+      await ensureMainDataLoaded();
+    } catch (err) {
+      return;
+    }
+  }
   if (isYear) {
     state.breadcrumb = [id];
   } else {
@@ -1145,6 +1513,9 @@ async function handleCreateSession() {
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
+  // クイックモード中に作った入れ子セッションも、フルデータ読み込み無しで安全に出入りできる
+  // 対象へ加える(enterSession()のガード参照、2026年9月追加)。
+  if (state.quickMode && state.quickSessionIds) state.quickSessionIds.add(session.id);
   renderCard(card);
   redrawAsterismLines();
   setStatus(`「${session.name}」セッションを作成しました`);
@@ -3335,6 +3706,9 @@ function writeDailyCommentProgress(progress) {
 }
 
 async function maybeShowDailyComment() {
+  // クイックモード中(2026年9月追加)は自動的にGeminiを呼ばない。「クイックカメラは撮影しただけ
+  // では通信しない(美術様式リサーチを使った時だけ)」というユーザー指定を守るため。
+  if (state.quickMode) return;
   const progress = readDailyCommentProgress();
   if (progress.count >= DAILY_COMMENT_MAX_PER_DAY) return;
   // 2026年9月: Crewsペルソナが1つもONになっていないと誰も喋らず「何も起きない」ままだった
@@ -5551,19 +5925,27 @@ function collectSaveData() {
   };
 }
 
+/** @returns {Promise<boolean>} Driveへの保存に成功したか。mergeQuickBundleIfAny()が、
+ *  クイックバンドルをIndexedDBから消してよいか判断するために使う(2026年9月追加)。 */
 async function handleSave() {
   setStatus('自動保存中…');
   const data = collectSaveData();
   try {
     state.fileId = await saveData(state.folderId, state.fileId, data);
     if (typeof clearLocalDataBackup === 'function') clearLocalDataBackup();
+    // 年セッションだけの軽量インデックス(constellation-years.json)も追従させる(2026年9月追加、
+    // クイックカメラ/クイックセッションが読む。ベストエフォート、失敗してもメイン保存の
+    // 成否には影響させない)。
+    saveYearsIndexMirror().catch(() => {});
     setStatus('自動保存しました');
+    return true;
   } catch (err) {
     console.error(err);
     // Driveへの送信自体が(オフライン等で)失敗しても変更を失わないよう、端末内バックアップへ
     // 逃がしておく(2026年9月追加、オートセーブOFF中の保護と同じ仕組みを再利用する)。
     if (typeof saveLocalDataBackup === 'function') await saveLocalDataBackup(data).catch(() => {});
     setStatus('自動保存に失敗しました(端末に保持、コンソールを確認)', { important: true });
+    return false;
   }
 }
 
@@ -5576,6 +5958,20 @@ async function handleLocalBackupSave() {
     setStatus('端末に保存しました(Drive未送信)');
   } catch (err) {
     console.error('ローカルバックアップの保存に失敗', err);
+    setStatus('端末への保存に失敗しました(コンソールを確認)', { important: true });
+  }
+}
+
+/** クイックモード中(state.quickMode)の保存先。Driveのメインファイルには一切触れず、
+ *  IndexedDBの専用バンドルへ現在のstate(=今回新規に作った分だけ)を保存するだけに
+ *  留める(2026年9月追加、js/upload-queue.jsのsaveQuickBundle()参照)。 */
+async function handleQuickModeSave() {
+  if (typeof saveQuickBundle !== 'function') return;
+  try {
+    await saveQuickBundle(collectSaveData());
+    setStatus('端末に保存しました(クイックモード、Drive未送信)');
+  } catch (err) {
+    console.error('クイックバンドルの保存に失敗', err);
     setStatus('端末への保存に失敗しました(コンソールを確認)', { important: true });
   }
 }

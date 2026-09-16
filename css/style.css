@@ -258,6 +258,107 @@ html, body {
 .year-tab:hover { color: var(--text); }
 .year-tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--text); }
 
+/* クイックモード中、年タブに添える「他の記録を読み込む」入口(2026年9月追加)。
+   通常の年タブと紛れないよう、うっすら枠を付けて別カテゴリの操作であることを示す。 */
+.year-tab--load-all {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  margin-left: 4px;
+  padding: 4px 10px;
+}
+
+/* ---------------- スタートメニュー(2026年9月追加) ----------------
+ * サインイン直後、メインデータ(全セッション・全カードのサムネイル)を読み込む前に、
+ * どの通信量で始めるかを選んでもらう入口(js/app.jsのopenStartMenu()参照)。
+ * モジュール群の宇宙的なグラスモーフィズムとは別系統の、アプリ本体の白ベース+セリフ体という
+ * 既存の意匠(.modal等)をそのまま踏襲する。 */
+.start-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.94);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease-out;
+  padding: 20px;
+}
+
+.start-menu-overlay.open { opacity: 1; pointer-events: auto; }
+
+.start-menu-panel {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.start-menu-title {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 26px;
+  margin: 0;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.start-menu-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  margin: 0 0 10px;
+}
+
+.start-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  font-family: var(--sans);
+  color: var(--text);
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.start-menu-btn:hover { border-color: var(--text); }
+.start-menu-btn:active { transform: scale(0.98); }
+
+.start-menu-btn--full { border-color: var(--rust); }
+.start-menu-btn--full .start-menu-btn-icon { color: var(--rust); }
+
+.start-menu-btn-icon {
+  flex: none;
+  font-size: 22px;
+  width: 30px;
+  text-align: center;
+}
+
+.start-menu-btn-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.start-menu-btn-text strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.start-menu-btn-text small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .breadcrumb {
   flex: none;
   min-width: 0;

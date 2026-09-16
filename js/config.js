@@ -43,6 +43,13 @@ const CONFIG = {
   // あったため、独立したファイルとして常にDriveへ即時保存する(js/modules/almagest.js参照)。
   ALMAGEST_FILE_NAME: 'almagest-library.json',
 
+  // 年セッションだけを写した軽量インデックスファイル名(2026年9月、スタートメニュー機能で追加)。
+  // メインのDATA_FILE_NAME(全カードのサムネイルを含む、いちばん重いファイル)を読み込まずに
+  // 「今年のセッション」のIDだけを知りたい(クイックカメラ/クイックセッション)場面のために、
+  // 年セッションのメタデータ(id/name/year/createdAt)だけを持つ極小のミラーを別ファイルとして
+  // 持つ。メインデータの保存(handleSave())のたびに追従して書き込む(js/app.js参照)。
+  YEARS_INDEX_FILE_NAME: 'constellation-years.json',
+
   // メディア(画像・動画・音声)を置くフォルダ名(APP_FOLDER_NAME直下)。
   // この下に「年セッション名/セッション名/.../ファイル」という入れ子構造でアップロードする。
   MEDIA_FOLDER_NAME: 'media',

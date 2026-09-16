@@ -41,7 +41,12 @@ const DATA_BACKUP_STORE = 'dataBackup';
 // onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーのpending/dataBackupは
 // 引き続き無事。
 const ALMAGEST_CACHE_STORE = 'almagestCache';
-const UPLOAD_QUEUE_DB_VERSION = 3;
+// クイックカメラ/クイックセッション(2026年9月追加)が、メインデータ(state.cards/sessions全体)を
+// 読み込まずに作った「新規セッション+新規カードだけ」を一時的に置く場所。DBバージョンを4へ
+// 上げるが、onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーのpending/
+// dataBackup/almagestCacheは引き続き無事。下記「クイックバンドル」セクション参照。
+const QUICK_BUNDLE_STORE = 'quickBundle';
+const UPLOAD_QUEUE_DB_VERSION = 4;
 const UPLOAD_QUEUE_CONCURRENCY = 2;
 
 let uploadQueueDbPromise = null;
@@ -65,6 +70,9 @@ function openUploadQueueDb() {
       }
       if (!req.result.objectStoreNames.contains(ALMAGEST_CACHE_STORE)) {
         req.result.createObjectStore(ALMAGEST_CACHE_STORE, { keyPath: 'id' });
+      }
+      if (!req.result.objectStoreNames.contains(QUICK_BUNDLE_STORE)) {
+        req.result.createObjectStore(QUICK_BUNDLE_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -464,4 +472,56 @@ function loadAlmagestLocalCache() {
     console.error('Almagestローカルキャッシュの読み込みに失敗', err);
     return null;
   });
+}
+
+/* ---------------- クイックバンドル(クイックカメラ/クイックセッション、2026年9月追加) ----------------
+ * 「スタートメニュー」機能の一部。クイックカメラ/クイックセッションは、メインデータ
+ * (constellation-data.json、全セッション・全カードのサムネイルを含む、いちばん重いファイル)を
+ * 一切読み込まずに、【現在の年】セッションの下へ新規セッション+新規カードを作る。この間、
+ * js/app.jsのstate.cards/sessions等は「新規に作った分だけ」を持つ軽量な状態のままなので、
+ * 既存のhandleSave()(state全体でDrive上のメインファイルを丸ごと上書きする)を呼んでしまうと
+ * 過去の全記録を消してしまう。そのため、この間の保存先はDriveのメインファイルではなく、
+ * ここ(IndexedDB)に留める。
+ *
+ * 実際にDriveへ反映されるのは、ユーザーが別のセッション(このクイックバンドルに含まれない
+ * セッション)へ移動しようとした瞬間(js/app.jsのensureMainDataLoaded()経由)で、その時点で
+ * 初めてメインファイルを読み込み、このバンドルの中身(新規セッション・新規カードだけ)を
+ * 既存データへ追記の形でマージしてから、通常のhandleSave()で書き戻す(js/app.jsの
+ * mergeQuickBundleIfAny()参照)。**削除・上書きは一切行わず、常に追記のみ**という、
+ * 既存の「Driveの元データには触れない」方針と同じ考え方をここでも徹底している。
+ *
+ * 保存する中身はjs/app.jsのcollectSaveData()と同じ形(cards/sessions/connections/
+ * hiddenAutoLinks等)をそのまま流用する。クイックモード中はstate自体が「新規に作った分だけ」
+ * なので、collectSaveData()の戻り値がそのまま「マージすべき差分」になる。単一キー('latest')で
+ * 1件だけを保持する(1回のクイック外出につき1つのバンドルという単純な設計、複数のクイック
+ * セッションを同時並行では持たない)。 */
+
+function saveQuickBundle(data) {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(QUICK_BUNDLE_STORE, 'readwrite');
+    tx.objectStore(QUICK_BUNDLE_STORE).put({ id: 'latest', data, updatedAt: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function loadQuickBundle() {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(QUICK_BUNDLE_STORE, 'readonly');
+    const req = tx.objectStore(QUICK_BUNDLE_STORE).get('latest');
+    req.onsuccess = () => resolve(req.result ? req.result.data : null);
+    req.onerror = () => reject(req.error);
+  })).catch((err) => {
+    console.error('クイックバンドルの読み込みに失敗', err);
+    return null;
+  });
+}
+
+function clearQuickBundle() {
+  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(QUICK_BUNDLE_STORE, 'readwrite');
+    tx.objectStore(QUICK_BUNDLE_STORE).delete('latest');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  })).catch(() => {});
 }
