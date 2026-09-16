@@ -743,17 +743,24 @@
          既定(.al-book)の金茶色より後に置いて上書きする。 */
       .al-book--ocr { background: linear-gradient(160deg, #6b3838, #3a1c1c); border-color: rgba(217, 140, 110, 0.5); }
       .al-book--paste { background: linear-gradient(160deg, #2f4a63, #17242f); border-color: rgba(120, 170, 217, 0.5); }
-      .al-book--url { background: linear-gradient(160deg, #4a3f1f, #241f0f); border-color: rgba(201, 162, 39, 0.65); padding-bottom: 32px; }
+      /* しおり(URL)は本と違い、幅を56px固定にせず内容に応じて広がれるようにする
+         (下記.al-book-bookmark-titleが複数列に折り返す時に幅が必要なため、2026年9月変更)。 */
+      .al-book--url { background: linear-gradient(160deg, #4a3f1f, #241f0f); border-color: rgba(201, 162, 39, 0.65); padding-bottom: 32px; width: auto; min-width: 56px; }
       .al-book-badge { position: absolute; top: 6px; right: 6px; font-size: 10px; opacity: 0.85; }
+      /* 本(OCR/貼り付け、カバー画像無し)の背表紙タイトルは横書き(2026年9月、ユーザー指定で
+         しおりと書き分け)。切り詰めず、折り返して全文をそのまま表示する。 */
       .al-book-spine-title {
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; font-weight: 700; color: #e8d9a8;
+        line-height: 1.4; overflow-wrap: anywhere; white-space: normal; text-align: center;
+      }
+      /* しおり(URL)の背表紙タイトルは縦書きのまま残し、本(横書き)と見た目で区別する
+         (2026年9月、ユーザー指定)。高さの上限に達すると複数列に折り返す(=カードが横へ
+         広がる)ことで、長いタイトルでも文字を省略せず全て表示する(以前試したellipsis省略は
+         ユーザー判断で撤回)。 */
+      .al-book-bookmark-title {
         writing-mode: vertical-rl; text-orientation: mixed;
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11px; font-weight: 700; color: #e8d9a8;
-        line-height: 1.45; overflow-wrap: anywhere;
-        /* 長いタイトル(展覧会名など)で背表紙が際限なく縦長になる不具合の対応(2026年9月、
-           実機報告)。writing-mode:vertical-rlでは高さ方向が「行内方向」にあたり、高さを
-           制約しないと折り返し(複数列化)が起きず無制限に伸びてしまう。高さの上限を決めた
-           上でellipsis省略に変更した(全文は背表紙のホバー時のtitle属性で見られる)。 */
-        display: inline-block; max-height: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+        line-height: 1.45; overflow-wrap: anywhere; white-space: normal; max-height: 140px;
       }
       /* しおり(URL)の背表紙だけに常設する小さなアクション行(2026年9月追加)。本(OCR/貼り付け)は
          読書ビューを開いてから📌/✎/🗑を使うため、シェルフ上には持たせない(タップで即座に
@@ -1433,13 +1440,15 @@
 
   /** しおり(URL)の背表紙。タップ(本文以外の部分)で外部URLを開く。📌/✎/🗑は常設のフッター
    *  アイコンから、読書ビューを経由せず直接呼べる(本と違いこの種別には読書ビューが無いため)。
-   *  外側の要素にtitle属性(2026年9月追加)を持たせ、タイトルが長くて背表紙上では省略
-   *  表示(ellipsis)になっても、PCでのホバーで全文を確認できるようにしている。 */
+   *  タイトルは縦書き(al-book-bookmark-title)のままにして、横書きの本(bookSpineHtml())と
+   *  見た目で区別する(2026年9月、ユーザー指定)。長いタイトルは複数列に折り返して全文を
+   *  表示する(切り詰めない)。外側の要素のtitle属性は、折り返し後も一目で分かるよう補助的に
+   *  全文を持たせている(PCでのホバー用)。 */
   function bookmarkSpineHtml(entry) {
     return (
       `<div class="al-book al-book--url" data-mark-id="${entry.id}" title="${escapeAttrLocal(entry.title || '(無題)')}">` +
       `<span class="al-book-badge">🔖</span>` +
-      `<span class="al-book-spine-title">${escapeHtml(entry.title || '(無題)')}</span>` +
+      `<span class="al-book-bookmark-title">${escapeHtml(entry.title || '(無題)')}</span>` +
       `<div class="al-book-footer">` +
       `<button type="button" class="al-book-footer-btn" data-pin-id="${entry.id}" title="このセッションに置く">📌</button>` +
       `<button type="button" class="al-book-footer-btn" data-edit-id="${entry.id}" title="編集">✎</button>` +

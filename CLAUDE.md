@@ -644,9 +644,16 @@ Calendar APIの`calendar.app.created`スコープは、Google Cloud Consoleの�
 
 **重大バグ(2026年9月、実機報告・修正済み): 移行処理の`await`が原因で「本が1冊も表示されない」「通常スタートで全セッション読み込みが終わらない」の2つが同時に発生していた。** `initAlmagestData()`末尾の一度きりの移行処理(`migrateAlmagestEntriesToSplitFiles()`、未分離の旧形式の本を1件ずつ順番にDriveへ書き込んで専用ファイルへ分離する)を`await`していたため、未分離の本がまとまった数残っている状態(索引と本文の分離を導入する前に登録した本が多いアカウント)では、**この移行が全件終わるまで`initAlmagestData()`自体が完了しなかった**。これが2つの症状を同時に説明する: (1) スタートメニューからAlmagestを開いた直後は`renderShelf()`がまだ呼ばれておらず、移行が終わるまで本棚が空のまま(「本が1冊も表示されない」ように見える)。(2) 通常の「スタート」(`js/app.js`の`loadMainData()`)は`Promise.all([loadData(), ensureAlmagestDataLoaded()])`でこの関数も待つ設計のため、Almagestの移行がボトルネックになり、**セッション本体の読み込みまで巻き込まれて終わらなくなる**。特にモバイル回線でDriveへの書き込みが1件ごとに数秒かかるような状況だと、本の冊数分だけ待ち時間が積み重なり、体感「永遠に終わらない」状態になる。**対応**: 移行処理はいつ完了しても安全(索引側にまだ`bodyText`等が残っているため、移行前でも本の内容自体はメモリ上で既に完全に読める、`toIndexEntry()`参照)と判断し、`await`を外してバックグラウンドの非同期処理(fire-and-forget、他の`refreshAlmagestFromDriveInBackground()`等と同じ作法)に変更した。**教訓**: 「一度きりの移行処理だから多少時間がかかっても良い」という設計判断をした際、それを`await`する呼び出し元(今回は`initAlmagestData()`)自体が、さらに別の場所(`Promise.all()`等)から待たれていないか確認すること。移行処理の実行時間が「本の冊数×Driveへの書き込み1回」のように**データ量に比例して伸びる**設計である場合、待たれる場所を1つでも見落とすと、データ量が増えた瞬間に初めて顕在化する遅延バグになる。
 
-### 背表紙(しおり・本)が長いタイトルで際限なく縦長になる不具合(2026年9月、実機報告・修正済み)
+### 背表紙(しおり・本)が長いタイトルで際限なく縦長になる不具合(2026年9月、実機報告・修正済み。同日中に方針変更あり)
 
-本棚の背表紙タイトル(`.al-book-spine-title`、`writing-mode: vertical-rl`の縦書き)は、以前`white-space: normal; overflow: visible; max-height: none;`と、意図的に折り返し・省略を一切行わない設定にしていた。しかし`writing-mode: vertical-rl`では高さ方向が「行内方向」にあたり、**高さを制約しない限り折り返し(複数列化)が発生せず、1本の縦の列としてどこまでも伸び続ける**。長い展覧会名をタイトルに持つしおり(URL、カバー画像を持たないため常にこの縦書き表示になる)で、背表紙が他のカードより何倍も縦長になり、`align-items: flex-end`の本棚レイアウトの見た目を崩す実機報告があった。**対応**: `max-height: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;`へ変更し、長いタイトルは省略(…)で収まるようにした。省略されても全文を確認できるよう、背表紙の外側要素(`bookSpineHtml()`/`bookmarkSpineHtml()`)に`title`属性を追加し、PCでのホバーで全文が見えるようにしている。**この問題はしおりだけでなく、カバー画像を持たない本(OCR/貼り付けでサムネイルを設定しなかったもの)の背表紙にも同じ`.al-book-spine-title`が使われているため同様に起きうる**(カバー画像付きの本は横書きの`.al-book-title-overlay`を使うため対象外)。
+本棚の背表紙タイトル(`writing-mode: vertical-rl`の縦書き)は、以前`white-space: normal; overflow: visible; max-height: none;`と、意図的に折り返し・省略を一切行わない設定にしていた。しかし`writing-mode: vertical-rl`では高さ方向が「行内方向」にあたり、**高さを制約しない限り折り返し(複数列化)が発生せず、1本の縦の列としてどこまでも伸び続ける**。長い展覧会名をタイトルに持つしおり(URL、カバー画像を持たないため常にこの縦書き表示になる)で、背表紙が他のカードより何倍も縦長になり、`align-items: flex-end`の本棚レイアウトの見た目を崩す実機報告があった。
+
+**最初の対応(同日中に撤回)**: `max-height: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;`で長いタイトルを省略(…)する案を一度実装したが、**「タイトルは見切れないでほしい」というユーザーの明確な指示で撤回**した。
+
+**最終的な対応**: 「本棚はOCRブック(本)のタイトルを横書き、URLブック(しおり)は縦書きのままにして区別する」というユーザー指定の設計に変更した。
+- `.al-book-spine-title`(本=OCR/貼り付け、カバー画像を持たない場合のみ表示)は横書きに変更(`writing-mode`指定を外し、`white-space: normal; overflow-wrap: anywhere;`で折り返すだけ、切り詰めない)。カバー画像を持つ本は元々横書きの`.al-book-title-overlay`を使うため変更不要。
+- `.al-book-bookmark-title`という新しいクラスをしおり(URL)専用に用意し、縦書き(`writing-mode: vertical-rl`)のまま残した。`max-height: 140px`で高さの上限を決め、そこに達したら`white-space: normal`により**複数列に折り返す**(=文字を省略せず、カードが横に広がる形で全文を収める)。合わせて`.al-book--url`の幅を`width: 56px`固定から`width: auto; min-width: 56px;`へ変更し、複数列になった分だけ横に伸びられるようにした。
+- 背表紙の外側要素(`bookSpineHtml()`/`bookmarkSpineHtml()`)に付けた`title`属性(PCでのホバーで全文表示)は、折り返し後も一目で分かる補助として残してある。
 
 ### オフライン可否の可視化(電車の中でKindleのように読みたい、2026年9月)
 
