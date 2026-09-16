@@ -97,6 +97,9 @@
   let newEntryUsedOcr = false; // 今開いているフォームでOCRを使ったか(kind='ocr'|'paste'の判定用)
   let newEntryThumbDataUrl = null; // 新規登録フォームで設定したサムネイル(book限定)
   let almagestUpdatedAt = 0; // 最後に確定した(Driveへ送った、またはDriveから読んだ)書庫データの時刻
+  // 書庫データの読み込み状況(2026年9月追加)。詳細はensureAlmagestDataLoaded()参照。
+  let almagestDataLoaded = false;
+  let almagestDataLoadPromise = null;
 
   /* ---------------- データアクセス(app.js側からwindow経由で参照される) ---------------- */
 
@@ -161,7 +164,8 @@
   }
 
   /**
-   * onSignedIn()から呼ばれる(js/app.js)。専用ファイルからの読み込み、端末に残っている
+   * js/app.jsのloadMainData()(旧形式からの移行の安全網)、またはこのファイル自身の
+   * ensureAlmagestDataLoaded()から呼ばれる。専用ファイルからの読み込み、端末に残っている
    * 未送信の変更との突き合わせ、旧形式(メインJSON埋め込み)からの一度きりの移行を行う。
    * @param {Array|undefined} legacyEntries 旧constellation-data.jsonのalmagestEntries(移行元)
    */
@@ -175,6 +179,7 @@
     if (!state.folderId) {
       state.almagestEntries = (localCache && localCache.entries) || legacyEntries || [];
       almagestUpdatedAt = (localCache && localCache.updatedAt) || 0;
+      almagestDataLoaded = true;
       return;
     }
     try {
@@ -210,6 +215,24 @@
         setStatus('オフラインのため書庫は端末キャッシュから表示しています', { important: true });
       }
     }
+    almagestDataLoaded = true;
+  }
+
+  /**
+   * 書庫データ(state.almagestEntries)がまだ読み込まれていなければ読み込む(2026年9月追加)。
+   * **背景**: 以前はサインイン直後(onSignedIn()のフェーズ1)に毎回無条件でinitAlmagestData()を
+   * 呼んでいたが、これはalmagest-library.json(サムネイル付きの本が多いとそれなりの容量になる)
+   * を、ユーザーがAlmagestを開くかどうかに関わらず**必ず**ダウンロードすることを意味していた。
+   * スタートメニュー導入後、クイックカメラ/クイックセッションを選ぶだけの場面でもこの通信が
+   * 発生してしまい、「ログインからクイックメニュー表示までの待ち時間が長い」という実機報告が
+   * あった。対応として、この読み込み自体をAlmagestを実際に開く瞬間(openAlmagest())まで
+   * 遅延させ、onSignedIn()側からは呼ばなくした(js/app.jsのensureMainDataLoaded()と同じ
+   * Promiseキャッシュの作法)。 */
+  function ensureAlmagestDataLoaded() {
+    if (almagestDataLoaded) return Promise.resolve();
+    if (almagestDataLoadPromise) return almagestDataLoadPromise;
+    almagestDataLoadPromise = initAlmagestData().finally(() => { almagestDataLoadPromise = null; });
+    return almagestDataLoadPromise;
   }
 
   /**
@@ -1050,16 +1073,24 @@
       : '検索条件に一致するものがありません。';
   }
 
-  function openAlmagest() {
+  /** 2026年9月、書庫データの読み込みを遅延させたことに伴いasync化した。overlay自体は
+   *  データが揃うのを待たず先に開き(体感の即応性を優先)、読み込み中は本棚を空のまま
+   *  「読み込み中…」のステータスで示してから、揃い次第renderShelf()する。 */
+  async function openAlmagest() {
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
     if (!alEls) buildShelfDom();
     searchQuery = '';
     activeTagFilter = null;
     alEls.searchInput.value = '';
     alEls.newPanel.hidden = true;
-    renderShelf();
     alEls.overlay.classList.add('open');
     document.body.style.overflow = 'hidden';
+    if (!almagestDataLoaded) {
+      setStatus('書庫を読み込み中…', { busy: true });
+      await ensureAlmagestDataLoaded();
+      setStatus('書庫を読み込みました');
+    }
+    renderShelf();
     // 他端末での変更を拾う(2026年9月追加)。失敗(オフライン等)しても今の表示のまま続行する。
     refreshAlmagestFromDriveInBackground();
   }
@@ -1504,7 +1535,11 @@
   /** 写真カードの編集ガイド「📖 Almagest」から呼ばれる: 元の書庫エントリの読書ビューへ
    *  ジャンプする。参照先が削除済みならその旨を知らせるだけ(js/app.jsのhexクリック
    *  ディスパッチャからwindow経由で呼ばれる、Astrometry Scope/Star Pencilと同じ薄い統合)。 */
-  function jumpToAlmagestEntry(entryId) {
+  async function jumpToAlmagestEntry(entryId) {
+    // 通常は本カードが描画済み(=loadMainData()の並行読み込みで既に揃っている)時点でしか
+    // 呼ばれないため実質no-opだが、念のため（js/app.jsのensureMainDataLoaded()と同じ作法の)
+    // 防御として待つ。
+    await ensureAlmagestDataLoaded();
     const entry = getAlmagestEntryById(entryId);
     if (!entry) {
       setStatus('この参照先は書庫から削除されています', { important: true });

@@ -831,31 +831,37 @@ window.addEventListener('beforeunload', (e) => {
  * 2026年9月、電車内など「サインイン→すぐAlmagestで読書」だけで済ませたい場面での通信量を
  * 最小限にするため、onSignedIn()を2段階に分割した:
  *   フェーズ1(この関数、常に即座に実行): フォルダ解決(小さなJSON照会のみ)と、
- *     Almagestの専用ファイル(almagest-library.json、カードのサムネイルを含まないため
- *     メインデータよりずっと軽い)、年セッションだけの軽量インデックス(constellation-years.json)
- *     の読み込みを行う。この時点でAlmagestはすぐ使える。
+ *     年セッションだけの軽量インデックス(constellation-years.json)の読み込みを行う。
  *   フェーズ2(ensureMainDataLoaded()/loadMainData()、必要になるまで呼ばない): カード・
  *     セッション全体(各カードのサムネイルをbase64で埋め込んだ、普段いちばん重い
  *     constellation-data.json)の読み込み。年タブ・ボトムツールバー・モジュールキーパッドの
  *     Almagest以外のコード等、実際にメインのキャンバスを触る操作をした時に初めて読み込む
- *     (呼び出し箇所は下記ensureMainDataLoaded()のコメント参照)。Almagestだけで使い終える
- *     セッションでは、このフェーズの通信は一切発生しない。
+ *     (呼び出し箇所は下記ensureMainDataLoaded()のコメント参照)。
  *
  * **2026年9月、スタートメニューを追加**: フェーズ1完了後、いきなりメインデータを読み込みに
  * 行くのではなく、まず「スタートメニュー」(クイックカメラ/クイックセッション/Almagest/
  * スタート)を開き、ユーザー自身にどの通信量で始めるかを選んでもらう(openStartMenu()参照)。
+ *
+ * **2026年9月、Almagestの書庫データ読み込みも遅延化**: 以前はこのフェーズ1で
+ * `window.initAlmagestData()`を無条件に呼び、Almagestの専用ファイル(almagest-library.json、
+ * サムネイル付きの本が多いとそれなりの容量になる)を毎回ダウンロードしていた。スタートメニュー
+ * 導入後、クイックカメラ/クイックセッションを選ぶだけの場面でもこの通信が走ってしまい、
+ * 「ログインからスタートメニュー表示までが長い」という実機報告があったため、この読み込みを
+ * Almagestを実際に開く瞬間(`js/modules/almagest.js`の`openAlmagest()`/
+ * `ensureAlmagestDataLoaded()`)まで遅延させ、ここからは呼ばないようにした。あわせて、
+ * 互いに依存しない残り2つの読み込み(メディアフォルダ解決・年インデックス)は
+ * `Promise.all()`で並行に行い、逐次待ちによる遅延も減らしている。
  */
 async function onSignedIn() {
   toggleAuthUI(true);
   setStatus('Google Driveと同期中…', { busy: true });
   try {
     state.folderId = await findOrCreateAppFolder();
-    state.mediaFolderId = await findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId);
-    // Almagestは専用ファイルだけで完結するため、メインデータを待たずここで読み込む。
-    // 旧形式(メインJSON埋め込み)からの移行は、専用ファイルが見つからずlegacyEntriesも
-    // 渡せない場合に限り、loadMainData()側でメインデータ読み込み後に改めて行う(下記参照)。
-    if (window.initAlmagestData) await window.initAlmagestData();
-    await loadYearsIndex(); // クイックカメラ/クイックセッションが「今年のセッション」を知るための軽量インデックス
+    const [mediaFolderId] = await Promise.all([
+      findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId),
+      loadYearsIndex(), // クイックカメラ/クイックセッションが「今年のセッション」を知るための軽量インデックス
+    ]);
+    state.mediaFolderId = mediaFolderId;
     refreshDriveQuota(); // ヘッダーのDrive使用量表示(メインデータ不要)
     setStatus('サインインしました');
     openStartMenu();
@@ -1251,7 +1257,17 @@ async function loadMainData() {
   }
   setStatus('続きを読み込み中…', { busy: true });
   try {
-    const { fileId, data: driveData } = await loadData(state.folderId);
+    // Almagestの書庫データ(almagest-library.json)も、メインデータと並行して確実に読み込んで
+    // おく(2026年9月追加)。書庫データの読み込みはopenAlmagest()まで遅延させる設計にしたが、
+    // 全データ読み込み(=このloadMainData())が走る場面は「本」カード(mediaType:'book')の
+    // 描画(almagestBookCardInnerHtml())やその編集ガイドからのジャンプ(jumpToAlmagestEntry())が
+    // 起こりうる場面でもあり、書庫データが未読み込みのままだと本来存在する参照まで
+    // 「書庫から削除されました」と誤表示してしまう。ここで一緒に読み込むことで、
+    // renderAllCards()が呼ばれる時点には必ず揃っているようにする。
+    const [{ fileId, data: driveData }] = await Promise.all([
+      loadData(state.folderId),
+      typeof ensureAlmagestDataLoaded === 'function' ? ensureAlmagestDataLoaded() : Promise.resolve(),
+    ]);
     state.fileId = fileId;
     // オートセーブOFF中に端末内だけへ保存された変更(js/upload-queue.jsのsaveLocalDataBackup())が
     // Drive側より新しければ、そちらを採用する(2026年9月追加。Driveへ送れないままブラウザが
