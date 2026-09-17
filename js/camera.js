@@ -1899,6 +1899,11 @@ let selectPointerActive = false;
 let selectPointerId = null;
 let selectStartX = 0;
 let selectStartY = 0;
+// 直前のジェスチャー終了時点で有効だった選択(浮動ボタン表示中)の退避先(2026年9月追加)。
+// 「浮動ボタンへの精密なタップに頼らず、フリーズ画像上のどこでも軽くタップすれば直前の
+// 選択を確定できる」というフォールバックのために使う(下記wireSelectionLayer()参照)。
+let selectPendingConfirmSelection = null;
+const SELECT_TAP_CONFIRM_TOLERANCE = 20; // これ以下の移動量なら「タップ」とみなす(px)
 // 「続けて選択」モード(2026年9月追加、下記handleSelectionRun()参照): 書籍のような複数段組みの
 // ページを段ごとに範囲選択→読み取りを繰り返すための、同じ静止フレーム上での連続OCR。
 // 一度でも範囲選択でOCRを実行すると、このバッファへ結果を積みながらカメラを開いたままにし、
@@ -2231,6 +2236,14 @@ function wireSelectionLayer() {
       `target=${e.target.tagName}.${e.target.className} hitScanBtn=${hitScanBtn} btnHidden=${camEls.selectScanBtn ? camEls.selectScanBtn.hidden : 'なし'}`
     );
     if (hitScanBtn) return; // 浮動ボタン自体の操作は新規ドラッグにしない
+    // 2026年9月追加: 「浮動ボタンの真上を正確にタップしたつもりでも実際には少し外れた場所への
+    // 操作として処理され、選択が失われる」という実機報告があり、原因(座標系のズレか、単に
+    // 別の場所を押しているのか)を完全には特定できなかった。精密な当たり判定に依存せず済むよう、
+    // 今すでに有効な選択(浮動ボタン表示中)があれば退避しておき、今回の操作の結果が
+    // 「新しい範囲を描くドラッグ」ではなく「ほぼ動かないタップ」だった場合(pointerup側で判定)、
+    // その退避した選択をそのまま確定に使う。これにより、フリーズ画像上のどこであっても軽く
+    // タップするだけで直前の選択を確定できるようになる。
+    selectPendingConfirmSelection = captionSelection;
     hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
     // 前回の失敗時のエラーバナー(#camera-error)は、成功/失敗に関わらず明示的に消さない限り
     // 画面に残り続ける設計だった(2026年9月、実機報告を受けて発見)。#camera-errorはbottom付近を
@@ -2260,16 +2273,35 @@ function wireSelectionLayer() {
     if (e.pointerId !== selectPointerId) return;
     selectPointerActive = false;
     selectPointerId = null;
+    const rect = layer.getBoundingClientRect();
+    const endX = e.clientX - rect.left;
+    const endY = e.clientY - rect.top;
+    const moved = Math.hypot(endX - selectStartX, endY - selectStartY);
+    if (moved <= SELECT_TAP_CONFIRM_TOLERANCE && selectPendingConfirmSelection) {
+      // 2026年9月追加: 「ほぼ動かないタップ」+「直前に有効な選択があった」の組み合わせを
+      // 「その選択を確定する」操作として扱う(上記pointerdownのコメント参照)。
+      camDebugLog(`タップ確定フォールバック発動 moved=${moved.toFixed(1)}px`);
+      captionSelection = selectPendingConfirmSelection;
+      selectPendingConfirmSelection = null;
+      camEls.selectRect.hidden = false;
+      camEls.selectRect.style.left = `${captionSelection.x}px`;
+      camEls.selectRect.style.top = `${captionSelection.y}px`;
+      camEls.selectRect.style.width = `${captionSelection.w}px`;
+      camEls.selectRect.style.height = `${captionSelection.h}px`;
+      handleSelectionRun();
+      return;
+    }
+    selectPendingConfirmSelection = null;
     // 指を離した位置(=選択矩形の角)に、その場で確定できる浮動スキャンボタンを出す
     // (2026年9月追加)。範囲が無ければ(=誤タップで即離した等)出す意味が無いので何もしない。
     if (captionSelection) {
-      const rect = layer.getBoundingClientRect();
-      showSelectScanBtnAt(e.clientX - rect.left, e.clientY - rect.top, rect);
-      camDebugLog(`浮動スキャンボタン表示 x=${Math.round(e.clientX - rect.left)} y=${Math.round(e.clientY - rect.top)}`);
+      showSelectScanBtnAt(endX, endY, rect);
+      camDebugLog(`浮動スキャンボタン表示 x=${Math.round(endX)} y=${Math.round(endY)}`);
     }
   });
   layer.addEventListener('pointercancel', (e) => {
     camDebugLog(`layer pointercancel id=${e.pointerId} expect=${selectPointerId}`); // 診断用(2026年9月追加)
+    selectPendingConfirmSelection = null;
     if (e.pointerId !== selectPointerId) return;
     selectPointerActive = false;
     selectPointerId = null;
