@@ -1632,9 +1632,31 @@ function captureFrameToCanvas(videoEl, maxEdge, digitalZoom = 1) {
   return canvas;
 }
 
+const CANVAS_TO_BLOB_TIMEOUT_MS = 10000;
+
+/**
+ * canvas.toBlob()には元々タイムアウトの保険が無かった(2026年9月、実機報告を受けて追加)。
+ * 「範囲選択OCRを7〜8回連続で行うとスキャン確定ボタンが反応しなくなる」という報告を調査した
+ * 結果、canvas.toBlob()のコールバックはブラウザ側のメモリ圧迫等で**永久に呼ばれないことが
+ * ある**(エラーにもならず、Promiseが解決も拒否もされないまま止まる)ことが分かった。これに
+ * よりhandleSelectionRun()のawaitが永遠に止まり、その間trueにしていたcaptionRunGuardActive/
+ * captionOcrBusyが二度とfalseに戻らず、以降のタップが早期returnで無反応になっていたと考え
+ * られる。タイムアウトで確実にreject()し、呼び出し元の既存のcatchへ必ず処理を戻すようにした。
+ */
 function canvasToBlob(canvas, quality) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の生成に失敗しました'))), 'image/jpeg', quality);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('画像の生成がタイムアウトしました(メモリ不足の可能性があります)'));
+    }, CANVAS_TO_BLOB_TIMEOUT_MS);
+    canvas.toBlob((blob) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      blob ? resolve(blob) : reject(new Error('画像の生成に失敗しました'));
+    }, 'image/jpeg', quality);
   });
 }
 
@@ -2426,7 +2448,8 @@ async function handleSelectionRun() {
       : await canvasToBlob(captionFreezeCanvas, 0.92);
   } catch (err) {
     console.error(err);
-    showCameraError('画像の切り出しに失敗しました');
+    camDebugLog('画像の切り出しに失敗: ' + err.message); // 診断用(2026年9月追加)
+    showCameraError(`画像の切り出しに失敗しました: ${err.message}`);
     captionRunGuardActive = false;
     camEls.selectRunBtn.disabled = captionOcrBusy;
     return;
