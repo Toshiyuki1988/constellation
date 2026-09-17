@@ -535,11 +535,28 @@
     return { photo, text };
   }
 
+  // 「写真を最大サイズに」の対象(2026年9月追加)。ユーザー要望は「写真カード」限定だったため、
+  // 動画・音声は対象に含めない(mergeTargets等と同じ絞り方)。
+  const RESIZE_MAX_MEDIA_TYPES = ['image'];
+
+  function resizeMaxTargets(cards) {
+    return cards.filter((c) => RESIZE_MAX_MEDIA_TYPES.includes(c.mediaType) && (c.width !== CARD_MAX_SIZE || c.height !== CARD_MAX_SIZE));
+  }
+
+  // 「端末保存済みにする」の対象(2026年9月追加)。js/app.jsのDEVICE_BADGE_MEDIA_TYPES
+  // (「📵 端末未保存」バッジを持ちうるカード種別)をそのまま参照し、既にdeviceSaved済みの
+  // カードは除く(=バッジが実際に消える枚数だけをカウントする)。
+  function clearDeviceBadgeTargets(cards) {
+    return cards.filter((c) => DEVICE_BADGE_MEDIA_TYPES.includes(c.mediaType) && !c.deviceSaved);
+  }
+
   function showCommandPanelAt(left, top) {
     if (panelEl) panelEl.remove();
     const cards = Array.from(selection).map(getCardById).filter(Boolean);
     const soloSession = cards.length === 1 && cards[0].mediaType === 'session';
     const mergeable = Boolean(mergeTargets(cards));
+    const clearableCount = clearDeviceBadgeTargets(cards).length;
+    const resizableCount = resizeMaxTargets(cards).length;
 
     panelEl = document.createElement('div');
     panelEl.className = 'fe-panel';
@@ -552,6 +569,8 @@
       <div class="fe-panel-actions">
         <button class="fe-btn" data-fe-action="stow">⇲ 新規セッションに格納</button>
         <button class="fe-btn" data-fe-action="tidy" ${cards.length < 2 ? 'disabled' : ''}>≋ その場で整理</button>
+        <button class="fe-btn" data-fe-action="resize-max" ${resizableCount ? '' : 'disabled'}>⛶ 写真を最大サイズに${resizableCount ? `(${resizableCount})` : ''}</button>
+        <button class="fe-btn" data-fe-action="clear-device-badge" ${clearableCount ? '' : 'disabled'}>📵 端末保存済みにする${clearableCount ? `(${clearableCount})` : ''}</button>
         <button class="fe-btn" data-fe-action="merge" ${mergeable ? '' : 'disabled'}>🖇 テキストを写真へ統合</button>
         <button class="fe-btn fe-btn--danger" data-fe-action="disband" ${soloSession ? '' : 'disabled'}>⌁ セッションを解体</button>
         <button class="fe-btn fe-btn--ghost" data-fe-action="cancel">✕ キャンセル</button>
@@ -560,6 +579,8 @@
     panelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
     panelEl.querySelector('[data-fe-action="stow"]').addEventListener('click', doStow);
     panelEl.querySelector('[data-fe-action="tidy"]').addEventListener('click', doTidy);
+    panelEl.querySelector('[data-fe-action="resize-max"]').addEventListener('click', doResizeMax);
+    panelEl.querySelector('[data-fe-action="clear-device-badge"]').addEventListener('click', doClearDeviceBadge);
     panelEl.querySelector('[data-fe-action="merge"]').addEventListener('click', doMerge);
     panelEl.querySelector('[data-fe-action="disband"]').addEventListener('click', doDisband);
     panelEl.querySelector('[data-fe-action="cancel"]').addEventListener('click', clearSelectionAndPanel);
@@ -870,6 +891,66 @@
     scheduleAutoSave();
     playFlightEngineerStowSound(); // 「吸い込まれる」質感の音を流用(テキストが写真へ取り込まれるイメージ)
     setStatus('テキストを写真のキャプションへ統合しました');
+  }
+
+  /* ---------------- 実行: 写真を最大サイズにリサイズ(履歴に残らない) ---------------- */
+
+  /**
+   * 選択中の写真カード(mediaType:'image'のみ)を、js/canvas.jsの既存のリサイズハンドル
+   * クランプ上限(CARD_MAX_SIZE、ハンドルドラッグで際限なく巨大化しないための上限と同じ値)
+   * まで一括で拡大する(2026年9月追加)。カードごとの中心座標を保ったまま拡大する(ハンドル
+   * ドラッグのような特定の角を固定点にすると、選んだ角によって他のカードと重なる向きが
+   * バラつくため、ボタン操作にはどの写真でも同じ結果になる中心固定の方が向くと判断した)。
+   * 「整理」と同じ、配置だけを変える単発の操作のため履歴(Undo)は持たせていない。
+   */
+  function doResizeMax() {
+    const cards = Array.from(selection).map(getCardById).filter(Boolean);
+    const targets = resizeMaxTargets(cards);
+    if (targets.length === 0) return;
+    targets.forEach((c) => {
+      const cx = c.x + c.width / 2;
+      const cy = c.y + c.height / 2;
+      c.width = CARD_MAX_SIZE;
+      c.height = CARD_MAX_SIZE;
+      c.x = cx - CARD_MAX_SIZE / 2;
+      c.y = cy - CARD_MAX_SIZE / 2;
+      const el = cardElById(c.id);
+      if (!el) return;
+      el.style.width = `${c.width}px`;
+      el.style.height = `${c.height}px`;
+      el.dataset.x = String(c.x);
+      el.dataset.y = String(c.y);
+      applyCardTransform(el);
+      fitMediaToCardHeight(el);
+    });
+    redrawAsterismLines();
+    clearSelectionAndPanel();
+    scheduleAutoSave();
+    playFlightEngineerTidySound(); // 「配置が変わる」系の演出を流用
+    setStatus(`${targets.length}枚の写真を最大サイズにリサイズしました`);
+  }
+
+  /* ---------------- 実行: 端末保存済みにする(履歴に残らない) ---------------- */
+
+  /**
+   * 選択中の写真・動画・音声カードの「📵 端末未保存」バッジを一括で消す(2026年9月追加)。
+   * js/app.jsのカード個別の同バッジタップ(card.deviceSaved = trueを立てるだけ)と全く同じ
+   * 動作を選択範囲ぶんまとめて行うショートカット。実際に端末の写真アプリ等へコピーする
+   * 処理(exportPendingUploadsToPhotos())は一切呼ばない、あくまで「もう手元にあるので
+   * この表示は不要」という手動申告であることに注意。
+   */
+  function doClearDeviceBadge() {
+    const cards = Array.from(selection).map(getCardById).filter(Boolean);
+    const targets = clearDeviceBadgeTargets(cards);
+    if (targets.length === 0) return;
+    targets.forEach((c) => {
+      c.deviceSaved = true;
+      const el = cardElById(c.id);
+      if (el) updateCardStatusBadges(el, c);
+    });
+    clearSelectionAndPanel();
+    scheduleAutoSave();
+    setStatus(`${targets.length}枚の「端末未保存」表示を消しました`);
   }
 
   /* ---------------- 編集履歴(格納/解体のみ、最大10件、constellation-data.jsonへ永続化) ---------------- */
