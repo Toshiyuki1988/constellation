@@ -2257,7 +2257,10 @@ function hideSelectScanBtn() {
   selectScanPointerId = null;
 }
 
-const SELECT_SCAN_TAP_MOVE_TOLERANCE = 14; // これを超えて動いたらタップではなくドラッグとみなす(px)
+const SELECT_SCAN_TAP_MOVE_TOLERANCE = 28; // これを超えて動いたらタップではなくドラッグとみなす(px)。
+// 実機で「ボタンが反応しなくなった」報告を受け、14pxでは実際の指のブレ(接地面の変化による
+// 座標のズレ)に対して厳しすぎる可能性を疑い、他の丸ボタン(Eclipseの当たり判定拡大など)と
+// 同程度まで緩和した(2026年9月)。
 let selectScanStartX = 0;
 let selectScanStartY = 0;
 
@@ -2277,7 +2280,10 @@ function wireSelectScanBtn() {
   if (!btn) return;
   btn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
-    if (btn.disabled) return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
+    if (btn.disabled) {
+      camDebugLog('スキャンボタン: pointerdown無視(disabled中)'); // 診断用(2026年9月追加)
+      return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
+    }
     selectScanPointerId = e.pointerId;
     selectScanStartX = e.clientX;
     selectScanStartY = e.clientY;
@@ -2288,9 +2294,15 @@ function wireSelectScanBtn() {
     if (e.pointerId !== selectScanPointerId) return;
     selectScanPointerId = null;
     btn.classList.remove('pressing');
-    if (e.type === 'pointercancel') return;
+    if (e.type === 'pointercancel') {
+      camDebugLog('スキャンボタン: pointercancelで確定されず'); // 診断用(2026年9月追加)
+      return;
+    }
     const moved = Math.hypot(e.clientX - selectScanStartX, e.clientY - selectScanStartY);
-    if (moved > SELECT_SCAN_TAP_MOVE_TOLERANCE) return; // 大きく動いた場合はタップとみなさない
+    if (moved > SELECT_SCAN_TAP_MOVE_TOLERANCE) {
+      camDebugLog(`スキャンボタン: 移動量${moved.toFixed(1)}pxでタップ扱いされず`); // 診断用(2026年9月追加)
+      return; // 大きく動いた場合はタップとみなさない
+    }
     hideSelectScanBtn();
     handleSelectionRun();
   };
@@ -2392,7 +2404,16 @@ function cropCanvasToBlob(sourceCanvas, containerEl, selRect, quality) {
 let captionRunGuardActive = false;
 
 async function handleSelectionRun() {
-  if (!captionFreezeCanvas || captionOcrBusy || captionRunGuardActive) return;
+  if (!captionFreezeCanvas || captionOcrBusy || captionRunGuardActive) {
+    // 診断用(2026年9月追加): スキャンボタンをタップしても無反応になる不具合の原因切り分け。
+    // ここで無条件returnすると呼び出し元(ボタン)からは何も起きなかったように見えるため、
+    // どのガードで止まったかを?debugパネルへ残す。
+    camDebugLog(
+      `handleSelectionRun: 早期return(freezeCanvas=${!!captionFreezeCanvas}, ` +
+      `ocrBusy=${captionOcrBusy}, runGuard=${captionRunGuardActive})`
+    );
+    return;
+  }
   captionRunGuardActive = true;
   camEls.selectRunBtn.disabled = true;
   let blob;
