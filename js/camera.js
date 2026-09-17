@@ -272,6 +272,7 @@ function ensureCameraDom() {
     freezeWrap: document.getElementById('caption-freeze-wrap'),
     selectLayer: document.getElementById('caption-select-layer'),
     selectRect: document.getElementById('caption-select-rect'),
+    selectScanBtn: document.getElementById('caption-select-scan-btn'),
     selectActions: document.getElementById('caption-select-actions'),
     selectRetakeBtn: document.getElementById('caption-select-retake'),
     selectRunBtn: document.getElementById('caption-select-run'),
@@ -321,6 +322,7 @@ function wireCameraEvents() {
   camEls.selectFinishBtn.addEventListener('click', handleSelectionFinish);
   camEls.selectProgressCancelBtn.addEventListener('click', handleSelectionOcrCancel);
   wireSelectionLayer();
+  wireSelectScanBtn();
 
   camEls.videoRecBtn.addEventListener('click', () => {
     if (isRecording()) {
@@ -774,6 +776,7 @@ function stopCameraStream() {
 function teardownModeExtras() {
   teardownWaveform();
   disarmAutoShutter(); // モードを抜けたら監視・タイマーを必ず止める(devicemotionリスナーの残留防止)
+  hideSelectScanBtn();
   // トーチを点けたままモードを切り替える/カメラを閉じる事故を防ぐ(誤って点灯させたままの
   // フラッシュ撮影を避けたいというユーザー方針、本ファイル上部の既存の注記を参照)。
   if (camTorchOn) setTorch(false);
@@ -1889,6 +1892,11 @@ let captionThumbs = [];
 // captionThumbs(読み取った「範囲」の履歴)とは別の概念(こちらは「ページ」そのもの)。
 let captionPages = [];
 let captionPageIndex = -1;
+// 範囲確定用の浮動スキャンボタン(2026年9月追加、上記index.html/css/camera.cssのコメント参照)。
+// 選択矩形の角に出現させ、長押しでその範囲を確定できるようにする。長押し時間はここで一元管理。
+const SELECT_SCAN_LONG_PRESS_MS = 450;
+let selectScanPressTimer = null;
+let selectScanPointerId = null;
 
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
@@ -1911,6 +1919,7 @@ function resetCaptionState() {
   camEls.freezeWrap.innerHTML = '';
   camEls.selectLayer.classList.remove('show');
   camEls.selectRect.hidden = true;
+  hideSelectScanBtn();
   camEls.selectActions.classList.remove('show');
   camEls.selectRunBtn.disabled = false;
   camEls.selectRetakeBtn.disabled = false;
@@ -2071,6 +2080,7 @@ function switchCaptionPage(index) {
   camEls.freezeWrap.appendChild(captionFreezeCanvas);
   captionSelection = null;
   camEls.selectRect.hidden = true;
+  hideSelectScanBtn();
   updateSelectRunLabel();
   renderCaptionPageStrip();
 }
@@ -2120,6 +2130,7 @@ function updateSelectionOcrUi() {
   camEls.selectRetakeBtn.disabled = captionOcrBusy;
   camEls.selectFinishBtn.hidden = captionOcrBuffer.length === 0;
   camEls.selectFinishBtn.disabled = captionOcrBusy;
+  if (camEls.selectScanBtn) camEls.selectScanBtn.disabled = captionOcrBusy;
   camEls.selectCountEl.hidden = captionOcrBuffer.length === 0;
   camEls.selectCountEl.textContent = `読み取り済み: ${captionOcrBuffer.length}件`;
 }
@@ -2186,6 +2197,8 @@ function clearCaptionThumbs() {
 function wireSelectionLayer() {
   const layer = camEls.selectLayer;
   layer.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.cam-select-scan-btn')) return; // 浮動ボタン自体の操作は新規ドラッグにしない
+    hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
     const rect = layer.getBoundingClientRect();
     selectStartX = e.clientX - rect.left;
     selectStartY = e.clientY - rect.top;
@@ -2199,13 +2212,76 @@ function wireSelectionLayer() {
     const rect = layer.getBoundingClientRect();
     updateSelectRectFromPoints(selectStartX, selectStartY, e.clientX - rect.left, e.clientY - rect.top);
   });
-  const endSelect = (e) => {
+  layer.addEventListener('pointerup', (e) => {
     if (e.pointerId !== selectPointerId) return;
     selectPointerActive = false;
     selectPointerId = null;
+    // 指を離した位置(=選択矩形の角)に、その場で確定できる浮動スキャンボタンを出す
+    // (2026年9月追加)。範囲が無ければ(=誤タップで即離した等)出す意味が無いので何もしない。
+    if (captionSelection) {
+      const rect = layer.getBoundingClientRect();
+      showSelectScanBtnAt(e.clientX - rect.left, e.clientY - rect.top, rect);
+    }
+  });
+  layer.addEventListener('pointercancel', (e) => {
+    if (e.pointerId !== selectPointerId) return;
+    selectPointerActive = false;
+    selectPointerId = null;
+    hideSelectScanBtn();
+  });
+}
+
+const SELECT_SCAN_BTN_MARGIN = 26; // ボタン半径+余白ぶん、画面端からクランプする距離
+
+/** 浮動スキャンボタンを指定座標(選択レイヤー内のCSSピクセル)へ表示する。画面外に
+ *  はみ出さないよう、レイヤーの矩形サイズでクランプする。 */
+function showSelectScanBtnAt(x, y, layerRect) {
+  const btn = camEls.selectScanBtn;
+  if (!btn) return;
+  const cx = Math.min(Math.max(x, SELECT_SCAN_BTN_MARGIN), layerRect.width - SELECT_SCAN_BTN_MARGIN);
+  const cy = Math.min(Math.max(y, SELECT_SCAN_BTN_MARGIN), layerRect.height - SELECT_SCAN_BTN_MARGIN);
+  btn.style.left = `${cx}px`;
+  btn.style.top = `${cy}px`;
+  btn.hidden = false;
+}
+
+function hideSelectScanBtn() {
+  const btn = camEls.selectScanBtn;
+  if (!btn) return;
+  btn.hidden = true;
+  btn.classList.remove('pressing');
+  if (selectScanPressTimer) { clearTimeout(selectScanPressTimer); selectScanPressTimer = null; }
+  selectScanPointerId = null;
+}
+
+/** 浮動スキャンボタンの長押し判定。しきい値(SELECT_SCAN_LONG_PRESS_MS)まで押し続けると
+ *  handleSelectionRun()(下部の固定ボタンと同じ確定処理)を呼ぶ。誤タップ防止のため
+ *  クリック相当の短いタップでは確定しない。 */
+function wireSelectScanBtn() {
+  const btn = camEls.selectScanBtn;
+  if (!btn) return;
+  btn.style.setProperty('--cam-scan-press-ms', `${SELECT_SCAN_LONG_PRESS_MS}ms`);
+  btn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (btn.disabled) return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
+    selectScanPointerId = e.pointerId;
+    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* 無効なpointerIdは無視 */ }
+    btn.classList.add('pressing');
+    selectScanPressTimer = setTimeout(() => {
+      selectScanPressTimer = null;
+      hideSelectScanBtn();
+      handleSelectionRun();
+    }, SELECT_SCAN_LONG_PRESS_MS);
+  });
+  const cancelPress = (e) => {
+    if (e.pointerId !== selectScanPointerId) return;
+    if (selectScanPressTimer) { clearTimeout(selectScanPressTimer); selectScanPressTimer = null; }
+    btn.classList.remove('pressing');
+    selectScanPointerId = null;
   };
-  layer.addEventListener('pointerup', endSelect);
-  layer.addEventListener('pointercancel', endSelect);
+  btn.addEventListener('pointerup', cancelPress);
+  btn.addEventListener('pointercancel', cancelPress);
 }
 
 function updateSelectRectFromPoints(x0, y0, x1, y1) {
@@ -2395,6 +2471,7 @@ async function runSelectionOcrInline(blob) {
       // 次の範囲をすぐ選べるよう、選択矩形だけリセットして同じ画像は表示したままにする。
       captionSelection = null;
       camEls.selectRect.hidden = true;
+      hideSelectScanBtn();
       updateSelectRunLabel();
       updateSelectionOcrUi();
     }
@@ -2677,6 +2754,7 @@ function teardownCamera() {
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
   teardownWaveform();
   disarmAutoShutter();
+  hideSelectScanBtn();
   clearTimeout(camOrientationFadeTimer);
   camOrientationFadeTimer = null;
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });

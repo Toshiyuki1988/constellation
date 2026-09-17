@@ -612,6 +612,47 @@
   box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.5);
 }
 
+/* 範囲確定用の浮動スキャンボタン(2026年9月追加、上記index.htmlのコメント参照)。
+   選択矩形の角に直接出現し、長押しでその範囲を確定できる。長押し中はリングが
+   時計回りに満ちていき、しきい値に達すると確定(js/camera.jsのSELECT_SCAN_LONG_PRESS_MS)。 */
+.cam-select-scan-btn {
+  position: absolute;
+  width: 46px; height: 46px;
+  margin: 0; padding: 0; border: none; border-radius: 50%;
+  background: rgba(20, 20, 24, 0.82);
+  color: #fff; font-size: 19px;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease;
+}
+.cam-select-scan-btn[hidden] { display: none; }
+.cam-select-scan-btn:disabled { opacity: 0.4; }
+.cam-select-scan-btn.pressing { transform: translate(-50%, -50%) scale(0.9); }
+@property --cam-scan-deg {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+.cam-select-scan-btn-ring {
+  position: absolute; inset: -4px; border-radius: 50%;
+  --cam-scan-deg: 0deg;
+  background: conic-gradient(#5ad1e0 var(--cam-scan-deg), transparent var(--cam-scan-deg));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  opacity: 0;
+}
+.cam-select-scan-btn.pressing .cam-select-scan-btn-ring {
+  opacity: 1;
+  animation: cam-select-scan-fill var(--cam-scan-press-ms, 450ms) linear forwards;
+}
+@keyframes cam-select-scan-fill {
+  from { --cam-scan-deg: 0deg; }
+  to { --cam-scan-deg: 360deg; }
+}
+
 .cam-select-actions {
   position: absolute; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; z-index: 8;
   display: none; justify-content: center; gap: 10px; padding: 0 16px; flex-wrap: wrap;
