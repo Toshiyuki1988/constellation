@@ -852,7 +852,13 @@ function tryApplyFocusPoint(x, y, width, height) {
 
 function wireTapFocus(screenEl, focusLayerEl, getVideoEl) {
   screenEl.addEventListener('click', (e) => {
-    // 選択モード中(静止フレームを見ている間)はタップフォーカスの対象外
+    // 選択モード中(静止フレームを見ている間)はタップフォーカスの対象外。
+    // targetベースの判定(button/.cam-select-layerの子孫か)だけでは、選択レイヤーが
+    // pointerdownでsetPointerCapture()している影響で、指がわずかにボタン外へずれた際に
+    // ブラウザが合成するclickイベントのtargetがヒットテスト結果(下層のvideo等)にずれ、
+    // 判定をすり抜けてピント合わせが誤発火する不具合があった(2026年9月、実機報告)。
+    // 選択レイヤーが表示中かどうか自体で確実にガードする。
+    if (camEls.selectLayer && camEls.selectLayer.classList.contains('show')) return;
     if (e.target.closest('button, .cam-select-layer')) return;
     const rect = screenEl.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -1893,9 +1899,7 @@ let captionThumbs = [];
 let captionPages = [];
 let captionPageIndex = -1;
 // 範囲確定用の浮動スキャンボタン(2026年9月追加、上記index.html/css/camera.cssのコメント参照)。
-// 選択矩形の角に出現させ、長押しでその範囲を確定できるようにする。長押し時間はここで一元管理。
-const SELECT_SCAN_LONG_PRESS_MS = 450;
-let selectScanPressTimer = null;
+// 選択矩形の角に出現させ、タップでその範囲を確定できるようにする。
 let selectScanPointerId = null;
 
 function resetCaptionState() {
@@ -2250,38 +2254,48 @@ function hideSelectScanBtn() {
   if (!btn) return;
   btn.hidden = true;
   btn.classList.remove('pressing');
-  if (selectScanPressTimer) { clearTimeout(selectScanPressTimer); selectScanPressTimer = null; }
   selectScanPointerId = null;
 }
 
-/** 浮動スキャンボタンの長押し判定。しきい値(SELECT_SCAN_LONG_PRESS_MS)まで押し続けると
- *  handleSelectionRun()(下部の固定ボタンと同じ確定処理)を呼ぶ。誤タップ防止のため
- *  クリック相当の短いタップでは確定しない。 */
+const SELECT_SCAN_TAP_MOVE_TOLERANCE = 14; // これを超えて動いたらタップではなくドラッグとみなす(px)
+let selectScanStartX = 0;
+let selectScanStartY = 0;
+
+/**
+ * 浮動スキャンボタンのタップ判定(2026年9月、長押し方式から変更)。
+ * 当初は誤タップ防止のため長押し確定にしていたが、実機で「わずかにボタンから外れて指を
+ * 離すと、選択レイヤーの背後にあるタップフォーカス(wireTapFocus())が誤発火し、以降ボタンが
+ * 反応しなくなる」という報告があり、長押しをやめてタップ一発で確定する方式に作り直した
+ * (誤タップ防止自体は、下記のwireTapFocus()側の選択モード判定強化で別途対応する)。
+ * pointerdown→pointerup(同一ポインタ、移動量が小さい)を自前でタップとみなす。ブラウザが
+ * 合成する`click`イベントには依存しない(pointerdown側でstopPropagation()するため、
+ * clickイベントのターゲットがヒットテストの結果によってボタン以外にずれる可能性があり、
+ * 頼るとフォーカス誤発火と同じ問題を抱えるため)。
+ */
 function wireSelectScanBtn() {
   const btn = camEls.selectScanBtn;
   if (!btn) return;
-  btn.style.setProperty('--cam-scan-press-ms', `${SELECT_SCAN_LONG_PRESS_MS}ms`);
   btn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
-    e.preventDefault();
     if (btn.disabled) return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
     selectScanPointerId = e.pointerId;
+    selectScanStartX = e.clientX;
+    selectScanStartY = e.clientY;
     try { btn.setPointerCapture(e.pointerId); } catch (err) { /* 無効なpointerIdは無視 */ }
     btn.classList.add('pressing');
-    selectScanPressTimer = setTimeout(() => {
-      selectScanPressTimer = null;
-      hideSelectScanBtn();
-      handleSelectionRun();
-    }, SELECT_SCAN_LONG_PRESS_MS);
   });
-  const cancelPress = (e) => {
+  const finishPress = (e) => {
     if (e.pointerId !== selectScanPointerId) return;
-    if (selectScanPressTimer) { clearTimeout(selectScanPressTimer); selectScanPressTimer = null; }
-    btn.classList.remove('pressing');
     selectScanPointerId = null;
+    btn.classList.remove('pressing');
+    if (e.type === 'pointercancel') return;
+    const moved = Math.hypot(e.clientX - selectScanStartX, e.clientY - selectScanStartY);
+    if (moved > SELECT_SCAN_TAP_MOVE_TOLERANCE) return; // 大きく動いた場合はタップとみなさない
+    hideSelectScanBtn();
+    handleSelectionRun();
   };
-  btn.addEventListener('pointerup', cancelPress);
-  btn.addEventListener('pointercancel', cancelPress);
+  btn.addEventListener('pointerup', finishPress);
+  btn.addEventListener('pointercancel', finishPress);
 }
 
 function updateSelectRectFromPoints(x0, y0, x1, y1) {

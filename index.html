@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260916f">
-<link rel="stylesheet" href="css/camera.css?v=20260917b">
+<link rel="stylesheet" href="css/camera.css?v=20260917c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -316,10 +316,8 @@
       <div class="cam-select-layer" id="caption-select-layer">
         <div class="cam-select-rect" id="caption-select-rect" hidden></div>
         <!-- 範囲確定用の浮動スキャンボタン(2026年9月追加): 指を離した位置(選択矩形の角)に
-             直接出現させ、下部の固定ボタンまで指を運ばずその場で長押しして確定できるようにする。
-             誤タップ防止のため長押し(SELECT_SCAN_LONG_PRESS_MS)を要求する。 -->
-        <button type="button" class="cam-select-scan-btn" id="caption-select-scan-btn" hidden aria-label="長押しでこの範囲を読み取る">
-          <span class="cam-select-scan-btn-ring"></span>
+             直接出現させ、下部の固定ボタンまで指を運ばずその場でタップして確定できるようにする。 -->
+        <button type="button" class="cam-select-scan-btn" id="caption-select-scan-btn" hidden aria-label="この範囲を読み取る">
           <span class="cam-select-scan-btn-icon">🔍</span>
         </button>
       </div>
@@ -487,7 +485,7 @@
   <script src="js/upload-queue.js?v=20260916d"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260916b"></script>
-  <script src="js/camera.js?v=20260917b"></script>
+  <script src="js/camera.js?v=20260917c"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
