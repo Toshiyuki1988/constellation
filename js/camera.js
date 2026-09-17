@@ -2226,7 +2226,10 @@ function wireSelectionLayer() {
     // 診断用(2026年9月追加): 「範囲選択が出にくい」報告の原因切り分け。このpointerdown自体が
     // 期待通りの頻度で発火しているか、closest()判定で誤ってスキップされていないかを常時記録する。
     const hitScanBtn = Boolean(e.target.closest('.cam-select-scan-btn'));
-    camDebugLog(`layer pointerdown id=${e.pointerId} target=${e.target.tagName}.${e.target.className} hitScanBtn=${hitScanBtn}`);
+    camDebugLog(
+      `layer pointerdown id=${e.pointerId} client=(${Math.round(e.clientX)},${Math.round(e.clientY)}) ` +
+      `target=${e.target.tagName}.${e.target.className} hitScanBtn=${hitScanBtn} btnHidden=${camEls.selectScanBtn ? camEls.selectScanBtn.hidden : 'なし'}`
+    );
     if (hitScanBtn) return; // 浮動ボタン自体の操作は新規ドラッグにしない
     hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
     // 前回の失敗時のエラーバナー(#camera-error)は、成功/失敗に関わらず明示的に消さない限り
@@ -2286,6 +2289,17 @@ function showSelectScanBtnAt(x, y, layerRect) {
   btn.style.left = `${cx}px`;
   btn.style.top = `${cy}px`;
   btn.hidden = false;
+  // 診断用(2026年9月追加): 「ボタンが表示された位置」と「実際にブラウザが描画した位置
+  // (getBoundingClientRect、ビューポート座標)」を両方記録する。前者はlayer相対、後者は
+  // viewport相対で座標系が違うため単純比較はできないが、layerRect.left/topを足せば
+  // viewport座標に揃えられる。次のクリックがhitScanBtn=falseになる場合、この2つを比べて
+  // 実際のボタンの当たり判定がどこにあるかを確認する。
+  const actualRect = btn.getBoundingClientRect();
+  camDebugLog(
+    `浮動スキャンボタン実測: 期待center=(${Math.round(layerRect.left + cx)}, ${Math.round(layerRect.top + cy)}) ` +
+    `実際rect=(${Math.round(actualRect.left)},${Math.round(actualRect.top)})-(${Math.round(actualRect.right)},${Math.round(actualRect.bottom)}) ` +
+    `layerRect=(${Math.round(layerRect.left)},${Math.round(layerRect.top)},w${Math.round(layerRect.width)},h${Math.round(layerRect.height)})`
+  );
 }
 
 function hideSelectScanBtn() {
