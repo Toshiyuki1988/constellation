@@ -2225,6 +2225,12 @@ function wireSelectionLayer() {
   layer.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.cam-select-scan-btn')) return; // 浮動ボタン自体の操作は新規ドラッグにしない
     hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
+    // 前回の失敗時のエラーバナー(#camera-error)は、成功/失敗に関わらず明示的に消さない限り
+    // 画面に残り続ける設計だった(2026年9月、実機報告を受けて発見)。#camera-errorはbottom付近を
+    // left:16〜right:16の帯で覆い、pointer-eventsも既定(auto)のため、そこに重なる範囲を
+    // 選ぼうとしてもタップがバナーに吸われて選択矩形が始まらない、という不具合になっていた。
+    // 新しい範囲選択を始める操作自体を「もう一度試す」意思表示とみなし、ここで確実に消す。
+    clearCameraError();
     const rect = layer.getBoundingClientRect();
     selectStartX = e.clientX - rect.left;
     selectStartY = e.clientY - rect.top;
@@ -2394,7 +2400,15 @@ function cropCanvasToBlob(sourceCanvas, containerEl, selRect, quality) {
   out.width = Math.round(cropW);
   out.height = Math.round(cropH);
   out.getContext('2d').drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, out.width, out.height);
-  return canvasToBlob(out, quality);
+  // blob化した直後に一時canvasの描画バッファを明示的に解放する(2026年9月追加)。
+  // iOS Safari等では、使い終わった<canvas>の実データがGCで回収されるまで確保され続ける
+  // ことがあり、範囲選択OCRを何度も連続実行するとその分だけ積み上がって重くなる(=選択矩形の
+  // 描画やタップ判定が遅く/鈍く感じられる)ことが実機で疑われた。width/heightを0にすると
+  // ブラウザがその場でバッキングストアを解放してくれる、という既知の対策。
+  return canvasToBlob(out, quality).finally(() => {
+    out.width = 0;
+    out.height = 0;
+  });
 }
 
 /**
