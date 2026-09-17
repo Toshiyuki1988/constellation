@@ -514,6 +514,13 @@ Calendar APIの`calendar.app.created`スコープは、Google Cloud Consoleの�
 - 旧実装にあった、撮影直後に静止フレーム上へ文字プレビューを表示する「hold chip」(`.cam-hold-chip`)と、オーバーレイ内の不定進捗スライドバー(`.cam-ocr-progress`)は、どちらもオーバーレイを開いたまま待つ設計を前提にしていたため完全に削除した(index.html・css/camera.css・js/camera.js)
 - サウンドは追加していない(YAGNI。PiP表示とステータス欄の文言だけで足りると判断した。今後「気づきにくい」という実機報告が出たら検討する)
 
+## 範囲選択OCR: 画面上部からのドラッグが選択レイヤーに届かない不具合・浮動スキャンボタンの撤去(2026年9月)
+
+Almagestでの本のOCR取り込み(複数ページ・段組みを範囲選択しながら読み取る運用)で2件の実機報告があった。
+
+- **①「左上から矩形選択すると選択範囲が出ない、右下から選ぶと出る」**: `?debug`ログを精査したところ、失敗するケースだけ`layer pointerup id=1 expect=null`(=`selectPointerId`が`null`のまま、つまりこのドラッグの`pointerdown`が`.cam-select-layer`自身の`pointerdown`リスナーに一度も届いていない)というログになっていた。原因は、画面上部にある`.cam-page-strip`(複数ページ取り込み時のページ切り替えサムネイル一覧、`top:48px; left:46px; right:46px; z-index:9`)と`.cam-select-actions`(下部の「全体を読み取る」等のボタン行、`left:0; right:0`)が、どちらも**コンテナ自体が画面幅いっぱいの`position:absolute`ボックスとして存在し、ボタン/チップの隙間の「空白」部分まで含めてクリック可能(`pointer-events:auto`が既定)なまま、選択レイヤー(`.cam-select-layer`、z-index:6)より上に重なっていた**こと。ページを複数取り込んでいる時は画面上部のほぼ全幅がこの見えない当たり判定に覆われ、そこから選択ドラッグを始めても`.cam-page-strip`のコンテナ自身がタップを吸ってしまい、指を動かした先(選択レイヤーの上)で`pointerup`だけが発火する(`selectPointerId`と噛み合わず何も起きない)という挙動になっていた。**実はこのアプリには既に同じ問題への対策パターンが存在していた**: 同じ並びにある`.cam-select-status`(進捗表示)・`.cam-select-thumbs`(範囲サムネイル一覧)は、コンテナに`pointer-events:none`、実際に押せる子要素(中止ボタン等)にだけ`pointer-events:auto`を個別に付ける対策が2026年9月の別の機会に既に入っていた。`.cam-page-strip`と`.cam-select-actions`にはこの対策が漏れていたため、同じ`pointer-events:none`(コンテナ)+`pointer-events:auto`(`.cam-page-chip`/`.cam-select-btn`)のペアを追加して揃えた。**教訓**: 「コンテナが透明・見た目上は何も無い」ことと「クリックを吸わない」ことはイコールではない。`position:absolute`で画面の広い範囲を覆うコンテナ(特に`left:0;right:0`や左右マージン指定で全幅に近いもの)を追加する際は、実際のボタン以外の空白部分がその下のレイヤーの操作を邪魔していないか確認し、同じアプリ内に既にある「コンテナ`pointer-events:none`+子要素`auto`」パターンを横展開すること
+- **②浮動スキャンボタン(🔍、選択範囲の角に出現し押すとOCR実行)の撤去**: 同じく2026年9月に追加された「選択範囲の内側を軽くタップするだけで、精密なボタン操作に頼らず確定できる」フォールバック(`wireSelectionLayer()`のpointerup内、`selectPendingConfirmSelection`を使った判定)が実用上十分に機能することが実機で確認できたため、二重になっていた浮動ボタン自体(`js/camera.js`の`showSelectScanBtnAt()`/`hideSelectScanBtn()`/`wireSelectScanBtn()`、`index.html`の`#caption-select-scan-btn`、`css/camera.css`の`.cam-select-scan-btn*`)を丸ごと削除した。範囲選択後の確定操作は、(a) 下部の「この範囲を読み取る」/「＋この範囲を追加」ボタン、(b) 選択範囲の内側をもう一度軽くタップ、の2通りに整理された
+
 ## セッションカードの入室手段が失われた不具合(2026年9月、連鎖的な実機事故)
 
 **前提となるバグ(2026年9月12日、修正済み)**: セッションカードのタイトル編集用OCRボタン(`.star-card-title-ocr-btn`、Titleガイドでの編集中だけ現れる想定)は、`js/app.js`側で`ocrBtn.hidden = true`を設定していたが、CSS側の`.star-card-title-ocr-btn { display: flex; ... }`(クラスセレクタ、著者スタイル)が、常にUA既定の`[hidden]{display:none}`(ユーザーエージェントスタイル)より詳細度で優先されてしまい、実際には**常時表示され続けていた**。この24x24pxの丸ボタンがセッションカード右上に常時重なっていたため、セッションへ入ろうとタップした位置がたまたまそこに重なると、入室ではなくOCR(タイトル編集用)が誤って起動する不具合になっていた。`css/style.css`に`.star-card-title-ocr-btn[hidden] { display: none; }`を追加し、意図通りTitle編集中だけ表示されるよう修正した。

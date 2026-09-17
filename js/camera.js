@@ -272,7 +272,6 @@ function ensureCameraDom() {
     freezeWrap: document.getElementById('caption-freeze-wrap'),
     selectLayer: document.getElementById('caption-select-layer'),
     selectRect: document.getElementById('caption-select-rect'),
-    selectScanBtn: document.getElementById('caption-select-scan-btn'),
     selectActions: document.getElementById('caption-select-actions'),
     selectRetakeBtn: document.getElementById('caption-select-retake'),
     selectRunBtn: document.getElementById('caption-select-run'),
@@ -322,7 +321,6 @@ function wireCameraEvents() {
   camEls.selectFinishBtn.addEventListener('click', handleSelectionFinish);
   camEls.selectProgressCancelBtn.addEventListener('click', handleSelectionOcrCancel);
   wireSelectionLayer();
-  wireSelectScanBtn();
 
   camEls.videoRecBtn.addEventListener('click', () => {
     if (isRecording()) {
@@ -776,7 +774,6 @@ function stopCameraStream() {
 function teardownModeExtras() {
   teardownWaveform();
   disarmAutoShutter(); // モードを抜けたら監視・タイマーを必ず止める(devicemotionリスナーの残留防止)
-  hideSelectScanBtn();
   // トーチを点けたままモードを切り替える/カメラを閉じる事故を防ぐ(誤って点灯させたままの
   // フラッシュ撮影を避けたいというユーザー方針、本ファイル上部の既存の注記を参照)。
   if (camTorchOn) setTorch(false);
@@ -1929,9 +1926,6 @@ let captionThumbs = [];
 // captionThumbs(読み取った「範囲」の履歴)とは別の概念(こちらは「ページ」そのもの)。
 let captionPages = [];
 let captionPageIndex = -1;
-// 範囲確定用の浮動スキャンボタン(2026年9月追加、上記index.html/css/camera.cssのコメント参照)。
-// 選択矩形の角に出現させ、タップでその範囲を確定できるようにする。
-let selectScanPointerId = null;
 
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
@@ -1955,7 +1949,6 @@ function resetCaptionState() {
   camEls.selectLayer.classList.remove('show');
   camEls.selectRect.hidden = true;
   camEls.selectRect.classList.remove('scanning');
-  hideSelectScanBtn();
   camEls.selectActions.classList.remove('show');
   camEls.selectRunBtn.disabled = false;
   camEls.selectRetakeBtn.disabled = false;
@@ -2117,7 +2110,6 @@ function switchCaptionPage(index) {
   captionSelection = null;
   camEls.selectRect.hidden = true;
   camEls.selectRect.classList.remove('scanning');
-  hideSelectScanBtn();
   updateSelectRunLabel();
   renderCaptionPageStrip();
 }
@@ -2167,7 +2159,6 @@ function updateSelectionOcrUi() {
   camEls.selectRetakeBtn.disabled = captionOcrBusy;
   camEls.selectFinishBtn.hidden = captionOcrBuffer.length === 0;
   camEls.selectFinishBtn.disabled = captionOcrBusy;
-  if (camEls.selectScanBtn) camEls.selectScanBtn.disabled = captionOcrBusy;
   camEls.selectCountEl.hidden = captionOcrBuffer.length === 0;
   camEls.selectCountEl.textContent = `読み取り済み: ${captionOcrBuffer.length}件`;
 }
@@ -2236,21 +2227,16 @@ function wireSelectionLayer() {
   layer.addEventListener('pointerdown', (e) => {
     // 診断用(2026年9月追加): 「範囲選択が出にくい」報告の原因切り分け。このpointerdown自体が
     // 期待通りの頻度で発火しているか、closest()判定で誤ってスキップされていないかを常時記録する。
-    const hitScanBtn = Boolean(e.target.closest('.cam-select-scan-btn'));
     camDebugLog(
       `layer pointerdown id=${e.pointerId} client=(${Math.round(e.clientX)},${Math.round(e.clientY)}) ` +
-      `target=${e.target.tagName}.${e.target.className} hitScanBtn=${hitScanBtn} btnHidden=${camEls.selectScanBtn ? camEls.selectScanBtn.hidden : 'なし'}`
+      `target=${e.target.tagName}.${e.target.className}`
     );
-    if (hitScanBtn) return; // 浮動ボタン自体の操作は新規ドラッグにしない
-    // 2026年9月追加: 「浮動ボタンの真上を正確にタップしたつもりでも実際には少し外れた場所への
-    // 操作として処理され、選択が失われる」という実機報告があり、原因(座標系のズレか、単に
-    // 別の場所を押しているのか)を完全には特定できなかった。精密な当たり判定に依存せず済むよう、
-    // 今すでに有効な選択(浮動ボタン表示中)があれば退避しておき、今回の操作の結果が
+    // 2026年9月追加: 直前に選択済みの範囲があれば退避しておき、今回の操作の結果が
     // 「新しい範囲を描くドラッグ」ではなく「ほぼ動かないタップ」だった場合(pointerup側で判定)、
     // その退避した選択をそのまま確定に使う。これにより、フリーズ画像上のどこであっても軽く
-    // タップするだけで直前の選択を確定できるようになる。
+    // タップするだけで直前の選択を確定できるようになる(浮動スキャンボタンは2026年9月に撤去、
+    // この「範囲の内側をタップして確定」が唯一の確定操作になった)。
     selectPendingConfirmSelection = captionSelection;
-    hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
     camEls.selectRect.classList.remove('scanning'); // 前回の走査線エフェクトが残っていれば消す
     // 前回の失敗時のエラーバナー(#camera-error)は、成功/失敗に関わらず明示的に消さない限り
     // 画面に残り続ける設計だった(2026年9月、実機報告を受けて発見)。#camera-errorはbottom付近を
@@ -2312,12 +2298,8 @@ function wireSelectionLayer() {
       return;
     }
     selectPendingConfirmSelection = null;
-    // 指を離した位置(=選択矩形の角)に、その場で確定できる浮動スキャンボタンを出す
-    // (2026年9月追加)。範囲が無ければ(=誤タップで即離した等)出す意味が無いので何もしない。
-    if (captionSelection) {
-      showSelectScanBtnAt(endX, endY, rect);
-      camDebugLog(`浮動スキャンボタン表示 x=${Math.round(endX)} y=${Math.round(endY)}`);
-    }
+    // 範囲を描き終えた時点では確定せず、下部の「この範囲を読み取る」ボタン、または
+    // この範囲の内側を軽くタップする(上記のフォールバック)ことで確定する。
   });
   layer.addEventListener('pointercancel', (e) => {
     camDebugLog(`layer pointercancel id=${e.pointerId} expect=${selectPointerId}`); // 診断用(2026年9月追加)
@@ -2325,94 +2307,7 @@ function wireSelectionLayer() {
     if (e.pointerId !== selectPointerId) return;
     selectPointerActive = false;
     selectPointerId = null;
-    hideSelectScanBtn();
   });
-}
-
-const SELECT_SCAN_BTN_MARGIN = 26; // ボタン半径+余白ぶん、画面端からクランプする距離
-
-/** 浮動スキャンボタンを指定座標(選択レイヤー内のCSSピクセル)へ表示する。画面外に
- *  はみ出さないよう、レイヤーの矩形サイズでクランプする。 */
-function showSelectScanBtnAt(x, y, layerRect) {
-  const btn = camEls.selectScanBtn;
-  if (!btn) return;
-  const cx = Math.min(Math.max(x, SELECT_SCAN_BTN_MARGIN), layerRect.width - SELECT_SCAN_BTN_MARGIN);
-  const cy = Math.min(Math.max(y, SELECT_SCAN_BTN_MARGIN), layerRect.height - SELECT_SCAN_BTN_MARGIN);
-  btn.style.left = `${cx}px`;
-  btn.style.top = `${cy}px`;
-  btn.hidden = false;
-  // 診断用(2026年9月追加): 「ボタンが表示された位置」と「実際にブラウザが描画した位置
-  // (getBoundingClientRect、ビューポート座標)」を両方記録する。前者はlayer相対、後者は
-  // viewport相対で座標系が違うため単純比較はできないが、layerRect.left/topを足せば
-  // viewport座標に揃えられる。次のクリックがhitScanBtn=falseになる場合、この2つを比べて
-  // 実際のボタンの当たり判定がどこにあるかを確認する。
-  const actualRect = btn.getBoundingClientRect();
-  camDebugLog(
-    `浮動スキャンボタン実測: 期待center=(${Math.round(layerRect.left + cx)}, ${Math.round(layerRect.top + cy)}) ` +
-    `実際rect=(${Math.round(actualRect.left)},${Math.round(actualRect.top)})-(${Math.round(actualRect.right)},${Math.round(actualRect.bottom)}) ` +
-    `layerRect=(${Math.round(layerRect.left)},${Math.round(layerRect.top)},w${Math.round(layerRect.width)},h${Math.round(layerRect.height)})`
-  );
-}
-
-function hideSelectScanBtn() {
-  const btn = camEls.selectScanBtn;
-  if (!btn) return;
-  btn.hidden = true;
-  btn.classList.remove('pressing');
-  selectScanPointerId = null;
-}
-
-const SELECT_SCAN_TAP_MOVE_TOLERANCE = 28; // これを超えて動いたらタップではなくドラッグとみなす(px)。
-// 実機で「ボタンが反応しなくなった」報告を受け、14pxでは実際の指のブレ(接地面の変化による
-// 座標のズレ)に対して厳しすぎる可能性を疑い、他の丸ボタン(Eclipseの当たり判定拡大など)と
-// 同程度まで緩和した(2026年9月)。
-let selectScanStartX = 0;
-let selectScanStartY = 0;
-
-/**
- * 浮動スキャンボタンのタップ判定(2026年9月、長押し方式から変更)。
- * 当初は誤タップ防止のため長押し確定にしていたが、実機で「わずかにボタンから外れて指を
- * 離すと、選択レイヤーの背後にあるタップフォーカス(wireTapFocus())が誤発火し、以降ボタンが
- * 反応しなくなる」という報告があり、長押しをやめてタップ一発で確定する方式に作り直した
- * (誤タップ防止自体は、下記のwireTapFocus()側の選択モード判定強化で別途対応する)。
- * pointerdown→pointerup(同一ポインタ、移動量が小さい)を自前でタップとみなす。ブラウザが
- * 合成する`click`イベントには依存しない(pointerdown側でstopPropagation()するため、
- * clickイベントのターゲットがヒットテストの結果によってボタン以外にずれる可能性があり、
- * 頼るとフォーカス誤発火と同じ問題を抱えるため)。
- */
-function wireSelectScanBtn() {
-  const btn = camEls.selectScanBtn;
-  if (!btn) return;
-  btn.addEventListener('pointerdown', (e) => {
-    e.stopPropagation();
-    // 診断用(2026年9月追加): 「1回目から失敗、ログにも更新なし」の原因切り分け。イベント自体が
-    // 発火しているかどうかをdisabled判定の前に無条件で記録する。
-    camDebugLog(`スキャンボタンpointerdown id=${e.pointerId} disabled=${btn.disabled} hidden=${btn.hidden}`);
-    if (btn.disabled) return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
-    selectScanPointerId = e.pointerId;
-    selectScanStartX = e.clientX;
-    selectScanStartY = e.clientY;
-    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* 無効なpointerIdは無視 */ }
-    btn.classList.add('pressing');
-  });
-  const finishPress = (e) => {
-    // 診断用(2026年9月追加): pointerId不一致で無視されるケースも含め常時記録する(以前は
-    // この分岐が完全に無言でreturnしていたため、"ログにも更新なし"という報告の原因になっていた)。
-    camDebugLog(`スキャンボタン${e.type} id=${e.pointerId} expect=${selectScanPointerId}`);
-    if (e.pointerId !== selectScanPointerId) return;
-    selectScanPointerId = null;
-    btn.classList.remove('pressing');
-    if (e.type === 'pointercancel') return;
-    const moved = Math.hypot(e.clientX - selectScanStartX, e.clientY - selectScanStartY);
-    if (moved > SELECT_SCAN_TAP_MOVE_TOLERANCE) {
-      camDebugLog(`スキャンボタン: 移動量${moved.toFixed(1)}pxでタップ扱いされず`);
-      return; // 大きく動いた場合はタップとみなさない
-    }
-    hideSelectScanBtn();
-    handleSelectionRun();
-  };
-  btn.addEventListener('pointerup', finishPress);
-  btn.addEventListener('pointercancel', finishPress);
 }
 
 function updateSelectRectFromPoints(x0, y0, x1, y1) {
@@ -2625,7 +2520,6 @@ async function runSelectionOcrInline(blob) {
       captionSelection = null;
       camEls.selectRect.hidden = true;
       camEls.selectRect.classList.remove('scanning'); // 走査線エフェクトも終了(2026年9月追加)
-      hideSelectScanBtn();
       updateSelectRunLabel();
       updateSelectionOcrUi();
     }
@@ -2908,7 +2802,6 @@ function teardownCamera() {
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
   teardownWaveform();
   disarmAutoShutter();
-  hideSelectScanBtn();
   clearTimeout(camOrientationFadeTimer);
   camOrientationFadeTimer = null;
   [camEls.videoPhoto, camEls.videoCaption, camEls.videoVideo].forEach((v) => { v.style.opacity = ''; });
