@@ -610,6 +610,37 @@
   background: rgba(255, 255, 255, 0.1);
   /* 選択範囲の外側だけを暗くする簡易マスク(要素1つで済ませるためbox-shadowを流用) */
   box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.5);
+  overflow: hidden; /* 走査線が選択矩形の外へはみ出さないようにする */
+}
+
+/* 選択を確定してOCRを開始した瞬間に走らせる「走査線」エフェクト(2026年9月追加)。
+   選択矩形の内側を上から下へ光の帯が1往復する。ユーザー要望「どうせなら走査線みたいな
+   エフェクトを」への対応で、実際の処理状況とは無関係な純粋な演出(handleSelectionRun()が
+   呼ばれた瞬間に.scanningを付け、成功/失敗いずれでも次の選択開始時に消す)。 */
+.cam-select-scan-sweep {
+  position: absolute; left: 0; right: 0; height: 22%;
+  top: -30%;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(90, 209, 224, 0.05) 20%,
+    rgba(90, 209, 224, 0.65) 50%,
+    rgba(90, 209, 224, 0.05) 80%,
+    transparent 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+.cam-select-rect.scanning .cam-select-scan-sweep {
+  opacity: 1;
+  animation: cam-select-scan-sweep-move 1.1s ease-in-out infinite;
+}
+@keyframes cam-select-scan-sweep-move {
+  0% { top: -30%; }
+  100% { top: 108%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-select-rect.scanning .cam-select-scan-sweep { animation: none; opacity: 0.4; top: 40%; }
 }
 
 /* 範囲確定用の浮動スキャンボタン(2026年9月追加、上記index.htmlのコメント参照)。

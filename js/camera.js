@@ -1902,8 +1902,12 @@ let selectStartY = 0;
 // 直前のジェスチャー終了時点で有効だった選択(浮動ボタン表示中)の退避先(2026年9月追加)。
 // 「浮動ボタンへの精密なタップに頼らず、フリーズ画像上のどこでも軽くタップすれば直前の
 // 選択を確定できる」というフォールバックのために使う(下記wireSelectionLayer()参照)。
+// 判定は移動量のしきい値ではなく、「今回のジェスチャー自体が有効な矩形(8px角以上)を
+// 作れたかどうか」(=既存のcaptionSelectionの真偽)で行う。当初は移動量20px以下を
+// 「タップ」とみなす方式だったが、これだと新しく小さい範囲(1行だけ等)をドラッグで
+// 選び直そうとした時に、対角線の移動量がしきい値を下回るケースで誤ってタップ扱いされ、
+// 「特定の方向・大きさでしか新しい範囲を引けない」という実機報告に繋がったため撤回した。
 let selectPendingConfirmSelection = null;
-const SELECT_TAP_CONFIRM_TOLERANCE = 20; // これ以下の移動量なら「タップ」とみなす(px)
 // 「続けて選択」モード(2026年9月追加、下記handleSelectionRun()参照): 書籍のような複数段組みの
 // ページを段ごとに範囲選択→読み取りを繰り返すための、同じ静止フレーム上での連続OCR。
 // 一度でも範囲選択でOCRを実行すると、このバッファへ結果を積みながらカメラを開いたままにし、
@@ -1950,6 +1954,7 @@ function resetCaptionState() {
   camEls.freezeWrap.innerHTML = '';
   camEls.selectLayer.classList.remove('show');
   camEls.selectRect.hidden = true;
+  camEls.selectRect.classList.remove('scanning');
   hideSelectScanBtn();
   camEls.selectActions.classList.remove('show');
   camEls.selectRunBtn.disabled = false;
@@ -2111,6 +2116,7 @@ function switchCaptionPage(index) {
   camEls.freezeWrap.appendChild(captionFreezeCanvas);
   captionSelection = null;
   camEls.selectRect.hidden = true;
+  camEls.selectRect.classList.remove('scanning');
   hideSelectScanBtn();
   updateSelectRunLabel();
   renderCaptionPageStrip();
@@ -2245,6 +2251,7 @@ function wireSelectionLayer() {
     // タップするだけで直前の選択を確定できるようになる。
     selectPendingConfirmSelection = captionSelection;
     hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
+    camEls.selectRect.classList.remove('scanning'); // 前回の走査線エフェクトが残っていれば消す
     // 前回の失敗時のエラーバナー(#camera-error)は、成功/失敗に関わらず明示的に消さない限り
     // 画面に残り続ける設計だった(2026年9月、実機報告を受けて発見)。#camera-errorはbottom付近を
     // left:16〜right:16の帯で覆い、pointer-eventsも既定(auto)のため、そこに重なる範囲を
@@ -2276,19 +2283,32 @@ function wireSelectionLayer() {
     const rect = layer.getBoundingClientRect();
     const endX = e.clientX - rect.left;
     const endY = e.clientY - rect.top;
-    const moved = Math.hypot(endX - selectStartX, endY - selectStartY);
-    if (moved <= SELECT_TAP_CONFIRM_TOLERANCE && selectPendingConfirmSelection) {
-      // 2026年9月追加: 「ほぼ動かないタップ」+「直前に有効な選択があった」の組み合わせを
-      // 「その選択を確定する」操作として扱う(上記pointerdownのコメント参照)。
-      camDebugLog(`タップ確定フォールバック発動 moved=${moved.toFixed(1)}px`);
-      captionSelection = selectPendingConfirmSelection;
+    // captionSelectionはこのジェスチャー自身のpointerdown/pointermoveで既に更新済み
+    // (updateSelectRectFromPoints)。それがnullということは、このジェスチャー自体は
+    // 8px角以上の有効な矩形を作れなかった(=ドラッグではなく実質的な「タップ」だった)。
+    if (!captionSelection && selectPendingConfirmSelection) {
+      const pending = selectPendingConfirmSelection;
+      const insidePending = endX >= pending.x && endX <= pending.x + pending.w
+        && endY >= pending.y && endY <= pending.y + pending.h;
       selectPendingConfirmSelection = null;
-      camEls.selectRect.hidden = false;
-      camEls.selectRect.style.left = `${captionSelection.x}px`;
-      camEls.selectRect.style.top = `${captionSelection.y}px`;
-      camEls.selectRect.style.width = `${captionSelection.w}px`;
-      camEls.selectRect.style.height = `${captionSelection.h}px`;
-      handleSelectionRun();
+      if (insidePending) {
+        // 2026年9月追加: 直前の選択の「内側」をタップ=その選択を確定する操作として扱う
+        // (上記pointerdownのコメント参照)。浮動ボタンの精密な当たり判定に依存しない。
+        camDebugLog('タップ確定フォールバック発動(選択の内側)');
+        captionSelection = pending;
+        camEls.selectRect.hidden = false;
+        camEls.selectRect.style.left = `${pending.x}px`;
+        camEls.selectRect.style.top = `${pending.y}px`;
+        camEls.selectRect.style.width = `${pending.w}px`;
+        camEls.selectRect.style.height = `${pending.h}px`;
+        handleSelectionRun();
+        return;
+      }
+      // 2026年9月追加: 直前の選択の「外側」をタップ=やり直し(選択を取り消して未選択の
+      // 状態に戻すだけ)として扱う。実機報告「範囲外をタップしてもスキャンが始まってしまい
+      // やり直しができない」への対応。captionSelectionは既にnullなので追加操作は不要。
+      camDebugLog('選択の外側タップでキャンセル(やり直し可能)');
+      updateSelectRunLabel();
       return;
     }
     selectPendingConfirmSelection = null;
@@ -2509,6 +2529,9 @@ async function handleSelectionRun() {
   }
   captionRunGuardActive = true;
   camEls.selectRunBtn.disabled = true;
+  // 走査線エフェクト(2026年9月追加、ユーザー要望): 選択を確定した瞬間から結果が届くまでの間、
+  // 選択矩形の内側を光の帯が上下する演出を出す。実際の処理状況とは連動しない純粋な演出。
+  if (captionSelection) camEls.selectRect.classList.add('scanning');
   let blob;
   try {
     // OCR用はダウンスケールを一切かけず、映像そのままの解像度・高画質で送る。
@@ -2521,6 +2544,7 @@ async function handleSelectionRun() {
     console.error(err);
     camDebugLog('画像の切り出しに失敗: ' + err.message); // 診断用(2026年9月追加)
     showCameraError(`画像の切り出しに失敗しました: ${err.message}`);
+    camEls.selectRect.classList.remove('scanning');
     captionRunGuardActive = false;
     camEls.selectRunBtn.disabled = captionOcrBusy;
     return;
@@ -2600,6 +2624,7 @@ async function runSelectionOcrInline(blob) {
       // 次の範囲をすぐ選べるよう、選択矩形だけリセットして同じ画像は表示したままにする。
       captionSelection = null;
       camEls.selectRect.hidden = true;
+      camEls.selectRect.classList.remove('scanning'); // 走査線エフェクトも終了(2026年9月追加)
       hideSelectScanBtn();
       updateSelectRunLabel();
       updateSelectionOcrUi();
