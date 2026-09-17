@@ -2223,7 +2223,11 @@ function clearCaptionThumbs() {
 function wireSelectionLayer() {
   const layer = camEls.selectLayer;
   layer.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.cam-select-scan-btn')) return; // 浮動ボタン自体の操作は新規ドラッグにしない
+    // 診断用(2026年9月追加): 「範囲選択が出にくい」報告の原因切り分け。このpointerdown自体が
+    // 期待通りの頻度で発火しているか、closest()判定で誤ってスキップされていないかを常時記録する。
+    const hitScanBtn = Boolean(e.target.closest('.cam-select-scan-btn'));
+    camDebugLog(`layer pointerdown id=${e.pointerId} target=${e.target.tagName}.${e.target.className} hitScanBtn=${hitScanBtn}`);
+    if (hitScanBtn) return; // 浮動ボタン自体の操作は新規ドラッグにしない
     hideSelectScanBtn(); // 新しく範囲を描き直すので、前回の確定ボタンは消す
     // 前回の失敗時のエラーバナー(#camera-error)は、成功/失敗に関わらず明示的に消さない限り
     // 画面に残り続ける設計だった(2026年9月、実機報告を受けて発見)。#camera-errorはbottom付近を
@@ -2245,6 +2249,11 @@ function wireSelectionLayer() {
     updateSelectRectFromPoints(selectStartX, selectStartY, e.clientX - rect.left, e.clientY - rect.top);
   });
   layer.addEventListener('pointerup', (e) => {
+    // 診断用(2026年9月追加): pointerIdが不一致で無視されるケースも含め常時記録する。
+    camDebugLog(
+      `layer pointerup id=${e.pointerId} expect=${selectPointerId} ` +
+      `captionSelection=${captionSelection ? `${Math.round(captionSelection.w)}x${Math.round(captionSelection.h)}` : 'なし'}`
+    );
     if (e.pointerId !== selectPointerId) return;
     selectPointerActive = false;
     selectPointerId = null;
@@ -2253,9 +2262,11 @@ function wireSelectionLayer() {
     if (captionSelection) {
       const rect = layer.getBoundingClientRect();
       showSelectScanBtnAt(e.clientX - rect.left, e.clientY - rect.top, rect);
+      camDebugLog(`浮動スキャンボタン表示 x=${Math.round(e.clientX - rect.left)} y=${Math.round(e.clientY - rect.top)}`);
     }
   });
   layer.addEventListener('pointercancel', (e) => {
+    camDebugLog(`layer pointercancel id=${e.pointerId} expect=${selectPointerId}`); // 診断用(2026年9月追加)
     if (e.pointerId !== selectPointerId) return;
     selectPointerActive = false;
     selectPointerId = null;
@@ -2308,10 +2319,10 @@ function wireSelectScanBtn() {
   if (!btn) return;
   btn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
-    if (btn.disabled) {
-      camDebugLog('スキャンボタン: pointerdown無視(disabled中)'); // 診断用(2026年9月追加)
-      return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
-    }
+    // 診断用(2026年9月追加): 「1回目から失敗、ログにも更新なし」の原因切り分け。イベント自体が
+    // 発火しているかどうかをdisabled判定の前に無条件で記録する。
+    camDebugLog(`スキャンボタンpointerdown id=${e.pointerId} disabled=${btn.disabled} hidden=${btn.hidden}`);
+    if (btn.disabled) return; // OCR実行中(続けて選択モード中)は前の範囲の確定処理と競合させない
     selectScanPointerId = e.pointerId;
     selectScanStartX = e.clientX;
     selectScanStartY = e.clientY;
@@ -2319,16 +2330,16 @@ function wireSelectScanBtn() {
     btn.classList.add('pressing');
   });
   const finishPress = (e) => {
+    // 診断用(2026年9月追加): pointerId不一致で無視されるケースも含め常時記録する(以前は
+    // この分岐が完全に無言でreturnしていたため、"ログにも更新なし"という報告の原因になっていた)。
+    camDebugLog(`スキャンボタン${e.type} id=${e.pointerId} expect=${selectScanPointerId}`);
     if (e.pointerId !== selectScanPointerId) return;
     selectScanPointerId = null;
     btn.classList.remove('pressing');
-    if (e.type === 'pointercancel') {
-      camDebugLog('スキャンボタン: pointercancelで確定されず'); // 診断用(2026年9月追加)
-      return;
-    }
+    if (e.type === 'pointercancel') return;
     const moved = Math.hypot(e.clientX - selectScanStartX, e.clientY - selectScanStartY);
     if (moved > SELECT_SCAN_TAP_MOVE_TOLERANCE) {
-      camDebugLog(`スキャンボタン: 移動量${moved.toFixed(1)}pxでタップ扱いされず`); // 診断用(2026年9月追加)
+      camDebugLog(`スキャンボタン: 移動量${moved.toFixed(1)}pxでタップ扱いされず`);
       return; // 大きく動いた場合はタップとみなさない
     }
     hideSelectScanBtn();
