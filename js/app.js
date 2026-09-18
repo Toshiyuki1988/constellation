@@ -60,6 +60,12 @@ const state = {
   // (年セッション+今回作った新規セッションのみ)。enterSession()がこれを見て、
   // 範囲外のセッションへ移動しようとした瞬間だけensureMainDataLoaded()を先に待つ。
   quickSessionIds: null,
+  // 今回のクイック外出を識別するID(2026年9月追加、IndexedDBのクイックバンドルを保存する
+  // キーに使う)。startQuickSession()で発行し、マージ完了後はnullに戻す。単一キーだった頃、
+  // マージし損ねた過去の外出のバンドルを次の外出が上書きして消してしまうバグがあったため、
+  // 外出ごとに一意なキーを持たせるようにした(js/upload-queue.jsのクイックバンドルの
+  // コメント参照)。
+  quickBundleId: null,
   // 年セッションだけの軽量インデックス(constellation-years.json)のファイルID・読み込み状況。
   yearsIndexFileId: null,
   yearsIndexAvailable: false,
@@ -863,10 +869,22 @@ window.addEventListener('beforeunload', (e) => {
  * `ensureAlmagestDataLoaded()`)まで遅延させ、ここからは呼ばないようにした。あわせて、
  * 互いに依存しない残り2つの読み込み(メディアフォルダ解決・年インデックス)は
  * `Promise.all()`で並行に行い、逐次待ちによる遅延も減らしている。
+ *
+ * **2026年9月、ロード画面をVOYAGER GOLDEN RECORDモチーフへ刷新**: 「ロード画面が業務的に見える」
+ * というユーザー要望を受け、この関数の先頭で`showOpeningLoadingScreen()`を呼び、フォルダ解決・
+ * 年インデックス読み込みが終わるまでの間、ゴールデンレコード(パルサーマップが走査するアニメ
+ * ーション)を全画面に表示するようにした。処理が成功したら`openStartMenu()`が同じオーバーレイを
+ * クイックメニューへクロスフェードし、失敗したら`closeStartMenu()`でオーバーレイごと引っ込めて
+ * 既存のエラーステータス表示に譲る。通信が速い環境だとアニメーションが一瞬も見えないまま
+ * 切り替わってしまうため、`MIN_LOADING_DISPLAY_MS`で最低限の表示時間だけ保証している(上記の
+ * 「ログインからスタートメニュー表示までが長い」不具合とは無関係な、900ms程度のごく小さい待ち)。
  */
 async function onSignedIn() {
   toggleAuthUI(true);
+  showOpeningLoadingScreen();
   setStatus('Google Driveと同期中…', { busy: true });
+  const loadingStartedAt = Date.now();
+  const MIN_LOADING_DISPLAY_MS = 900;
   try {
     state.folderId = await findOrCreateAppFolder();
     const [mediaFolderId] = await Promise.all([
@@ -876,9 +894,12 @@ async function onSignedIn() {
     state.mediaFolderId = mediaFolderId;
     refreshDriveQuota(); // ヘッダーのDrive使用量表示(メインデータ不要)
     setStatus('サインインしました');
+    const elapsed = Date.now() - loadingStartedAt;
+    if (elapsed < MIN_LOADING_DISPLAY_MS) await sleep(MIN_LOADING_DISPLAY_MS - elapsed);
     openStartMenu();
   } catch (err) {
     console.error(err);
+    closeStartMenu();
     setStatus('同期に失敗しました(コンソールを確認)');
   }
 }
@@ -901,7 +922,7 @@ async function onSignedIn() {
  * 実際にメインファイルへ書き戻されるのは、ユーザーが他のセッションへ移動しようとして
  * ensureMainDataLoaded()が呼ばれた瞬間(=「他セッションに移動した時に初めて全データを
  * 読み込む」というユーザー指定の境界)で、その時にメインデータへ追記の形でマージする
- * (mergeQuickBundleIfAny()参照、削除・上書きは一切行わない)。
+ * (mergeQuickBundlesIfAny()参照、削除・上書きは一切行わない)。
  */
 
 /** 年セッションだけの軽量インデックス(constellation-years.json)を読み込む。無ければ
@@ -913,7 +934,13 @@ async function onSignedIn() {
 async function loadYearsIndex() {
   state.yearsIndexAvailable = false;
   try {
-    const { data } = await loadNamedData(state.folderId, CONFIG.YEARS_INDEX_FILE_NAME);
+    const { fileId, data } = await loadNamedData(state.folderId, CONFIG.YEARS_INDEX_FILE_NAME);
+    // **fileIdを保持しておくこと(2026年9月バグ修正)**: 以前はdataだけ取り出しfileIdを
+    // 捨てていたため、state.yearsIndexFileIdが既存ファイルからは一切設定されず、
+    // saveYearsIndexMirror()が毎回既存ファイルへのPATCHではなく新規POSTを行い、サインインの
+    // たびにconstellation-years.jsonが複製されてDrive上に増え続けていた
+    // (findFileByName()がどれを拾うか不定になり、古いミラーを読んでしまうリスクもあった)。
+    state.yearsIndexFileId = fileId || null;
     // **data===null(ファイル自体が無い)を「年セッション0件」として扱ってはいけない**:
     // このミラーファイルは今回の機能追加で新設したものなので、既にconstellation-data.jsonに
     // 年セッションが実在する既存アカウントでも、ミラーへ一度も保存していない間は同じく
@@ -936,68 +963,231 @@ async function loadYearsIndex() {
   }
 }
 
+// saveYearsIndexMirror()を最後に書き込んだ時点の年セッションの顔ぶれ(id一覧)。
+// handleSave()は編集のたびに(デバウンス後、~1.2秒間隔で)呼ばれるが、年セッションの
+// 顔ぶれは新しい年が増える時くらいしか変わらないため、変化が無ければ余計なDrive書き込みを
+// 省く(2026年9月、コードレビューで指摘: 通信量節約が目的の機能なのに、無関係な編集のたびに
+// 2つ目のDriveリクエストを追加で発生させてしまっていた)。
+let lastSavedYearsSignature = null;
+
+function currentYearsSignature() {
+  return state.sessions.filter((s) => s.type === 'year').map((s) => s.id).sort().join(',');
+}
+
 /** handleSave()(メインデータの保存)成功後に呼ぶ、年セッションだけのミラーの書き戻し。
  *  失敗してもメインデータの保存自体には影響させない(ベストエフォート、次回のloadYearsIndex()で
  *  古い内容が残っていてもyearsIndexAvailableのフォールバックが安全側に効くため実害は小さい)。 */
 async function saveYearsIndexMirror() {
+  const signature = currentYearsSignature();
+  if (signature === lastSavedYearsSignature) return; // 年セッションの顔ぶれに変化なし、書き込み不要
   try {
     const years = state.sessions.filter((s) => s.type === 'year');
     await saveNamedData(state.folderId, state.yearsIndexFileId, { years, updatedAt: Date.now() }, CONFIG.YEARS_INDEX_FILE_NAME)
       .then((id) => { state.yearsIndexFileId = id; });
+    lastSavedYearsSignature = signature; // 成功した時だけ更新する(失敗時は次回また書き込みを試みる)
   } catch (err) {
     console.error('年セッションの軽量インデックス書き込みに失敗', err);
   }
 }
 
 let startMenuEls = null;
+let startMenuCaptionTimer = null;
+
+/** ボイジャーのゴールデンレコードのジャケットに刻まれたパルサーマップ(14個のパルサーとの
+ *  相対方向・距離を線の角度・長さで示す図)を簡略化した放射線データ。ロード画面の円盤に
+ *  これを重ね、走査するように順番に描いては消えるアニメーション(CSSの.start-menu-scan)を
+ *  つける。角度・長さは実物からの厳密な引き写しではなく、雰囲気を借りた近似値。 */
+const START_MENU_PULSARS = [
+  { angle: -100, len: 100 }, { angle: -72, len: 84 }, { angle: -42, len: 112 },
+  { angle: -12, len: 78 }, { angle: 14, len: 104 }, { angle: 44, len: 88 },
+  { angle: 74, len: 118 }, { angle: 100, len: 86 }, { angle: 130, len: 98 },
+  { angle: 158, len: 80 }, { angle: 188, len: 108 }, { angle: 218, len: 92 },
+  { angle: 248, len: 116 }, { angle: 278, len: 84 },
+];
+
+/** ロード画面の一言。「Loading...」のような業務的な文言ではなく、ゴールデンレコード
+ *  そのものの文脈(パルサーマップ・水素原子の超微細構造遷移=時間の基準単位・針を落とす
+ *  =再生開始)から借りた一言を数秒おきに切り替える。 */
+const START_MENU_CAPTIONS = [
+  'パルサーマップを参照中…',
+  '水素原子の振動を基準に…',
+  '針を降ろしています…',
+  '星々の位置を記録中…',
+];
+
+/** ロード画面中央のゴールデンレコード(円盤+パルサーマップ)をSVGで組み立てる。
+ *  金は単色フラット塗り(グラデーションの光沢ハイライトは使わない)。 */
+function buildStartMenuDiscSvg() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 300 300');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+  const rotor = document.createElementNS(ns, 'g');
+  rotor.setAttribute('class', 'start-menu-disc-rotor');
+
+  const face = document.createElementNS(ns, 'circle');
+  face.setAttribute('class', 'start-menu-disc-face');
+  face.setAttribute('cx', '150'); face.setAttribute('cy', '150'); face.setAttribute('r', '118');
+  rotor.appendChild(face);
+
+  [100, 82, 64, 46].forEach((r) => {
+    const groove = document.createElementNS(ns, 'circle');
+    groove.setAttribute('class', 'start-menu-disc-groove');
+    groove.setAttribute('cx', '150'); groove.setAttribute('cy', '150'); groove.setAttribute('r', String(r));
+    rotor.appendChild(groove);
+  });
+
+  const spindle = document.createElementNS(ns, 'circle');
+  spindle.setAttribute('class', 'start-menu-disc-spindle');
+  spindle.setAttribute('cx', '150'); spindle.setAttribute('cy', '150'); spindle.setAttribute('r', '7');
+  rotor.appendChild(spindle);
+
+  const cx = 150, cy = 150;
+  START_MENU_PULSARS.forEach((p, i) => {
+    const rad = (p.angle * Math.PI) / 180;
+    const x2 = (cx + Math.cos(rad) * p.len).toFixed(1);
+    const y2 = (cy + Math.sin(rad) * p.len).toFixed(1);
+    const delay = `${(i * 0.14).toFixed(2)}s`;
+
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('class', 'start-menu-pulsar-line');
+    line.setAttribute('x1', String(cx)); line.setAttribute('y1', String(cy));
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.style.animationDelay = delay;
+    rotor.appendChild(line);
+
+    const tip = document.createElementNS(ns, 'circle');
+    tip.setAttribute('class', 'start-menu-pulsar-tip');
+    tip.setAttribute('cx', x2); tip.setAttribute('cy', y2); tip.setAttribute('r', '2.2');
+    tip.style.animationDelay = delay;
+    rotor.appendChild(tip);
+  });
+
+  svg.appendChild(rotor);
+  return svg;
+}
 
 function buildStartMenu() {
   const overlay = document.createElement('div');
   overlay.id = 'start-menu-overlay';
   overlay.className = 'start-menu-overlay';
-  overlay.innerHTML = `
-    <div class="start-menu-panel">
-      <h2 class="start-menu-title">CONSTELLATION</h2>
-      <p class="start-menu-sub">どの通信量で始めますか</p>
-      <button class="start-menu-btn" id="start-menu-quick-camera">
-        <span class="start-menu-btn-icon">📷</span>
-        <span class="start-menu-btn-text"><strong>クイックカメラ</strong><small>カメラだけをすぐ開く。撮影した写真は【今年】に新規セッションとして格納</small></span>
+
+  const loading = document.createElement('div');
+  loading.className = 'start-menu-loading';
+  loading.innerHTML = `
+    <div class="start-menu-disc-wrap"></div>
+    <div class="start-menu-wordmark">CONSTELLATION</div>
+    <div class="start-menu-caption" id="start-menu-caption"></div>
+  `;
+  loading.querySelector('.start-menu-disc-wrap').appendChild(buildStartMenuDiscSvg());
+
+  const menu = document.createElement('div');
+  menu.className = 'start-menu-menu';
+  menu.innerHTML = `
+    <div class="start-menu-kicker">GOLDEN RECORD EDITION</div>
+    <div class="start-menu-wordmark start-menu-wordmark--small">CONSTELLATION</div>
+    <div class="start-menu-grid">
+      <svg class="start-menu-links" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <polyline points="25,25 75,25 75,75 25,75 25,25"></polyline>
+        <polyline points="25,25 75,75"></polyline>
+        <polyline points="75,25 25,75"></polyline>
+        <circle cx="25" cy="25" r="1.1"></circle>
+        <circle cx="75" cy="25" r="1.1"></circle>
+        <circle cx="75" cy="75" r="1.1"></circle>
+        <circle cx="25" cy="75" r="1.1"></circle>
+      </svg>
+      <button class="start-menu-tile" id="start-menu-quick-camera">
+        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><line x1="34" y1="8" x2="16" y2="30" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="34" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="30" r="2" fill="currentColor"/><path d="M9 33 A15 15 0 0 0 29 40" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.6"/></svg></span>
+        <span class="start-menu-tile-label">STYLUS</span>
+        <span class="start-menu-tile-desc">かるく、いま撮る</span>
       </button>
-      <button class="start-menu-btn" id="start-menu-quick-session">
-        <span class="start-menu-btn-icon">🗂</span>
-        <span class="start-menu-btn-text"><strong>クイックセッション</strong><small>【今年】に新規セッションを作ってすぐ中へ。このセッション分の通信量だけで完結</small></span>
+      <button class="start-menu-tile" id="start-menu-quick-session">
+        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><path d="M11 35 C 17 30, 22 21, 31 9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 3.4" opacity="0.65"/><path d="M31 9 L24 11 M31 9 L28 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><circle cx="31" cy="9" r="2" fill="currentColor"/></svg></span>
+        <span class="start-menu-tile-label">LAUNCH</span>
+        <span class="start-menu-tile-desc">新しい航海をひらく</span>
       </button>
-      <button class="start-menu-btn" id="start-menu-almagest">
-        <span class="start-menu-btn-icon">📚</span>
-        <span class="start-menu-btn-text"><strong>Almagest</strong><small>書庫をそのまま開く</small></span>
+      <button class="start-menu-tile" id="start-menu-almagest">
+        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><path d="M24 15 C 18 11, 10 11, 6 13 L6 34 C 10 32, 18 32, 24 36 C 30 32, 38 32, 42 34 L42 13 C 38 11, 30 11, 24 15 Z" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="24" y1="15" x2="24" y2="36" stroke="currentColor" stroke-width="1" opacity="0.5"/></svg></span>
+        <span class="start-menu-tile-label">ALMAGEST</span>
+        <span class="start-menu-tile-desc">書庫をひらく</span>
       </button>
-      <button class="start-menu-btn start-menu-btn--full" id="start-menu-start">
-        <span class="start-menu-btn-icon">▶</span>
-        <span class="start-menu-btn-text"><strong>スタート</strong><small>いつも通り、全セッションを読み込む</small></span>
+      <button class="start-menu-tile" id="start-menu-start">
+        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="16" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="24" cy="24" r="10" fill="none" stroke="currentColor" stroke-width="1" opacity="0.6"/><circle cx="24" cy="24" r="4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.6"/><circle cx="24" cy="24" r="1.4" fill="currentColor"/></svg></span>
+        <span class="start-menu-tile-label">PLAYBACK</span>
+        <span class="start-menu-tile-desc">すべての記録を開く</span>
       </button>
     </div>
+    <div class="start-menu-footnote">SOUNDS · IMAGES · GREETINGS OF EARTH</div>
   `;
+
+  overlay.appendChild(loading);
+  overlay.appendChild(menu);
   document.body.appendChild(overlay);
-  startMenuEls = { overlay };
-  overlay.querySelector('#start-menu-quick-camera').addEventListener('click', handleQuickCameraStart);
-  overlay.querySelector('#start-menu-quick-session').addEventListener('click', handleQuickSessionStart);
-  overlay.querySelector('#start-menu-almagest').addEventListener('click', () => {
+  startMenuEls = { overlay, loading, menu, caption: loading.querySelector('#start-menu-caption') };
+
+  menu.querySelector('#start-menu-quick-camera').addEventListener('click', handleQuickCameraStart);
+  menu.querySelector('#start-menu-quick-session').addEventListener('click', handleQuickSessionStart);
+  menu.querySelector('#start-menu-almagest').addEventListener('click', () => {
     closeStartMenu();
     if (window.openAlmagest) window.openAlmagest();
   });
-  overlay.querySelector('#start-menu-start').addEventListener('click', () => {
+  menu.querySelector('#start-menu-start').addEventListener('click', () => {
     closeStartMenu();
     withMainData(() => {});
   });
 }
 
-function openStartMenu() {
+/** ロード中の一言(START_MENU_CAPTIONS)を数秒おきにクロスフェードで切り替える。
+ *  クイックメニュー表示中・オーバーレイを閉じた後はstopStartMenuCaptionCycle()で止め、
+ *  見えていない間もタイマーを回し続けないようにする。 */
+function startStartMenuCaptionCycle() {
+  stopStartMenuCaptionCycle();
+  if (!startMenuEls) return;
+  let idx = 0;
+  startMenuEls.caption.textContent = START_MENU_CAPTIONS[0];
+  startMenuEls.caption.style.opacity = 1;
+  startMenuCaptionTimer = setInterval(() => {
+    startMenuEls.caption.style.opacity = 0;
+    setTimeout(() => {
+      idx = (idx + 1) % START_MENU_CAPTIONS.length;
+      startMenuEls.caption.textContent = START_MENU_CAPTIONS[idx];
+      startMenuEls.caption.style.opacity = 1;
+    }, 300);
+  }, 2000);
+}
+
+function stopStartMenuCaptionCycle() {
+  if (startMenuCaptionTimer) { clearInterval(startMenuCaptionTimer); startMenuCaptionTimer = null; }
+}
+
+/** サインイン直後、Google Driveとの同期(フォルダ解決・年インデックス読み込み)が終わるまでの
+ *  間、ゴールデンレコードが走査するロード画面を表示する(onSignedIn()参照)。処理が完了したら
+ *  openStartMenu()が同じオーバーレイをクイックメニューへクロスフェードする。 */
+function showOpeningLoadingScreen() {
   if (!startMenuEls) buildStartMenu();
   startMenuEls.overlay.classList.add('open');
+  startMenuEls.overlay.classList.add('phase-loading');
+  startMenuEls.overlay.classList.remove('phase-menu');
+  startStartMenuCaptionCycle();
+}
+
+/** クイックメニュー(STYLUS/LAUNCH/ALMAGEST/PLAYBACK)を表示する。ロード画面から続けて
+ *  呼ばれた場合は同じオーバーレイ内でクロスフェードするが、キャンセル操作からの呼び出し
+ *  (handleQuickSessionStart()等)やonAlmagestClosed()のように、オーバーレイが一度閉じた
+ *  状態から呼ばれることも多いため、常に「クイックメニューを表示する」動作に固定してある
+ *  (ロード画面へは戻さない)。 */
+function openStartMenu() {
+  if (!startMenuEls) buildStartMenu();
+  stopStartMenuCaptionCycle();
+  startMenuEls.overlay.classList.add('open');
+  startMenuEls.overlay.classList.remove('phase-loading');
+  startMenuEls.overlay.classList.add('phase-menu');
 }
 
 function closeStartMenu() {
   if (!startMenuEls) return;
+  stopStartMenuCaptionCycle();
   startMenuEls.overlay.classList.remove('open');
 }
 
@@ -1071,6 +1261,9 @@ function startQuickSession(name) {
 
   state.quickMode = true;
   state.quickSessionIds = new Set([yearSession.id, session.id]);
+  // このクイック外出専用のバンドルIDを発行する(2026年9月追加、IndexedDB上で他の未マージの
+  // 外出のデータと衝突・上書きしないようにするため)。
+  state.quickBundleId = crypto.randomUUID();
   state.breadcrumb = [yearSession.id, session.id];
   renderYearTabs();
   renderBreadcrumb();
@@ -1079,22 +1272,27 @@ function startQuickSession(name) {
 }
 
 /**
- * loadMainData()から呼ぶ。IndexedDBのクイックバンドル(クイックカメラ/クイックセッションで
- * 作った、まだDriveのメインファイルに無い新規セッション・新規カード)があれば、今しがた
- * Driveから読み込んだ完全なstate.sessions/cards等へ**追記のみ**で合流させる(既にfresh側に
- * 存在するidは上書きしない=常に既存データを優先し、失う/壊すことは無い)。
- * @returns {Promise<boolean>} 何かをマージしたか(呼び出し元はtrueの時だけ追加のDrive保存を行う)
+ * loadMainData()から呼ぶ。IndexedDBに残っている全てのクイックバンドル(クイックカメラ/
+ * クイックセッションで作った、まだDriveのメインファイルに無い新規セッション・新規カード)を、
+ * 今しがたDriveから読み込んだ完全なstate.sessions/cards等へ**追記のみ**で合流させる
+ * (既にfresh側に存在するidは上書きしない=常に既存データを優先し、失う/壊すことは無い)。
+ * **2026年9月バグ修正**: 以前は単一キー('latest')の前提で1件しか読まなかったが、複数の
+ * 未マージバンドルが同時に存在しうる(1回目の外出をマージせずタブを閉じ、後日また別の
+ * 外出をした場合)ことが判明したため、`loadAllQuickBundles()`で全件を読み、1つずつ
+ * 合流させるようにした。
+ * @returns {Promise<string[]>} マージした(=Drive保存が成功したら消してよい)バンドルIDの配列。
+ *   何もマージしなければ空配列。
  */
-async function mergeQuickBundleIfAny() {
-  if (typeof loadQuickBundle !== 'function') return false;
-  let bundle;
+async function mergeQuickBundlesIfAny() {
+  if (typeof loadAllQuickBundles !== 'function') return [];
+  let entries;
   try {
-    bundle = await loadQuickBundle();
+    entries = await loadAllQuickBundles();
   } catch (err) {
     console.error('クイックバンドルの読み込みに失敗', err);
-    return false;
+    return [];
   }
-  if (!bundle) return false;
+  if (!entries || entries.length === 0) return [];
 
   const mergeArray = (targetArr, sourceArr) => {
     if (!Array.isArray(sourceArr) || sourceArr.length === 0) return;
@@ -1106,17 +1304,20 @@ async function mergeQuickBundleIfAny() {
       }
     });
   };
-  mergeArray(state.sessions, bundle.sessions);
-  mergeArray(state.cards, bundle.cards);
-  mergeArray(state.connections, bundle.connections);
-  mergeArray(state.hiddenAutoLinks, bundle.hiddenAutoLinks);
-  // **意図的に触れないフィールド**: bundleはcollectSaveData()と同じ形をしているため
-  // crews/commentHistory/exhibitionCalendarId/feHistory等も持っているが、これらは
-  // クイックモード中に一度も読み込んでいない「空の初期値」でしかない。もしここで
-  // state.crews等をbundle側の値で上書きしていたら、今しがたDriveから読み込んだ本物の
-  // データを空配列で消してしまうところだった。sessions/cards/connections/hiddenAutoLinks
-  // だけが「クイックモードで確かに新規に作られた」フィールドなので、この4つだけを対象にする。
-  return true;
+  entries.forEach(({ data: bundle }) => {
+    if (!bundle) return;
+    mergeArray(state.sessions, bundle.sessions);
+    mergeArray(state.cards, bundle.cards);
+    mergeArray(state.connections, bundle.connections);
+    mergeArray(state.hiddenAutoLinks, bundle.hiddenAutoLinks);
+    // **意図的に触れないフィールド**: bundleはcollectSaveData()と同じ形をしているため
+    // crews/commentHistory/exhibitionCalendarId/feHistory等も持っているが、これらは
+    // クイックモード中に一度も読み込んでいない「空の初期値」でしかない。もしここで
+    // state.crews等をbundle側の値で上書きしていたら、今しがたDriveから読み込んだ本物の
+    // データを空配列で消してしまうところだった。sessions/cards/connections/hiddenAutoLinks
+    // だけが「クイックモードで確かに新規に作られた」フィールドなので、この4つだけを対象にする。
+  });
+  return entries.map((e) => e.id);
 }
 
 /**
@@ -1220,7 +1421,7 @@ let mainDataLoadPromise = null;
  * **scheduleAutoSave()/saveImmediately()側にも、空のstateでDriveを上書きしてしまわない
  * ための二重の安全策(mainDataLoaded/quickModeチェック)を入れてある**ため、万が一ここでの
  * 呼び出し漏れがあっても、保存だけは確実に防がれる(=最悪でも「操作が効かない」で済み、
- * データが消えることはない)。**loadMainData()自体もmergeQuickBundleIfAny()で、クイックモード中に
+ * データが消えることはない)。**loadMainData()自体もmergeQuickBundlesIfAny()で、クイックモード中に
  * 溜まった変更をここで初めてメインデータへ合流させる**(削除・上書きは一切行わない)。
  */
 function ensureMainDataLoaded() {
@@ -1246,6 +1447,13 @@ async function withMainData(fn) {
   try {
     await ensureMainDataLoaded();
   } catch (err) {
+    // **2026年9月バグ修正**: スタートメニューの「スタート」を押した直後の読み込みが
+    // (一時的なネットワーク不調等で)失敗すると、以前はここで無言でreturnするだけで、
+    // ユーザーは何も選べる手段が無い空白画面に取り残されていた(旧・年タブのプレースホルダー
+    // 「📅 タップして読み込む」が、スタートメニュー導入時に削除され、代わりの再試行導線が
+    // 用意されていなかった)。まだ何も読み込めていない(mainDataLoaded/quickModeどちらも
+    // falseの)場合に限り、スタートメニューを開き直して選び直せるようにする。
+    if (!mainDataLoaded && !state.quickMode) openStartMenu();
     return;
   }
   fn();
@@ -1263,7 +1471,7 @@ async function loadMainData() {
   // クイックモード中(state.quickMode)にensureMainDataLoaded()が呼ばれた=「他セッションに
   // 移動しようとした」瞬間。今持っている(新規に作った分だけの)state.cards/sessions等を
   // 失わないよう、まずクイックバンドル(IndexedDB)へ最新の内容を確実に書き出してから、
-  // Driveのメインデータを読みに行く(下でmergeQuickBundleIfAny()が読み戻して合流させる)。
+  // Driveのメインデータを読みに行く(下でmergeQuickBundlesIfAny()が読み戻して合流させる)。
   if (state.quickMode) {
     await handleQuickModeSave();
   }
@@ -1328,14 +1536,16 @@ async function loadMainData() {
       state.feHistoryIndex = 0;
     }
     // クイックカメラ/クイックセッションで作った、まだDriveのメインファイルに無い新規セッション・
-    // 新規カードをここでマージする(2026年9月追加)。追記のみ・削除や上書きは一切行わない
-    // (mergeQuickBundleIfAny()参照)。**ensureYearSessions()より必ず先に行うこと**:
-    // クイックバンドルが(年をまたいだ直後などで)新しい年セッションを含んでいる場合、
-    // 先にこちらをマージしておかないと、直後のensureYearSessions()が「まだ無い」と誤認して
-    // 同じ年のセッションをもう1つ作ってしまう(=重複)。
-    const mergedQuickBundle = await mergeQuickBundleIfAny();
+    // 新規カード(1件とは限らない、マージし損ねた過去の外出ぶんも含む)をここでマージする
+    // (2026年9月追加)。追記のみ・削除や上書きは一切行わない(mergeQuickBundlesIfAny()参照)。
+    // **ensureYearSessions()より必ず先に行うこと**: クイックバンドルが(年をまたいだ直後
+    // などで)新しい年セッションを含んでいる場合、先にこちらをマージしておかないと、直後の
+    // ensureYearSessions()が「まだ無い」と誤認して同じ年のセッションをもう1つ作ってしまう
+    // (=重複)。
+    const mergedQuickBundleIds = await mergeQuickBundlesIfAny();
     state.quickMode = false;
     state.quickSessionIds = null;
+    state.quickBundleId = null;
     ensureYearSessions();
     // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
     const migrationTargetId = getCurrentYearSessionId();
@@ -1394,12 +1604,14 @@ async function loadMainData() {
     await restoreUploadQueueOnLoad();
     maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
     maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
-    if (mergedQuickBundle) {
+    if (mergedQuickBundleIds.length > 0) {
       // マージした内容を即座にDriveへ書き戻す(=クイックモード中に溜まった変更を確実に
-      // 永続化する)。成功した時だけIndexedDB上のバンドルを消す(失敗時は次回このタイミングで
-      // 再度マージを試みればよく、二重にマージしても追記のみのため実害は無い)。
+      // 永続化する)。成功した時だけIndexedDB上の該当バンドルを全て消す(失敗時は次回この
+      // タイミングで再度マージを試みればよく、二重にマージしても追記のみのため実害は無い)。
       const saved = await handleSave();
-      if (saved && typeof clearQuickBundle === 'function') await clearQuickBundle();
+      if (saved && typeof clearQuickBundle === 'function') {
+        await Promise.all(mergedQuickBundleIds.map((id) => clearQuickBundle(id)));
+      }
       setStatus(`読み込み完了(${state.cards.length}件、クイック記録を統合しました)`, { important: true });
     } else {
       setStatus(`読み込み完了(${state.cards.length}件)`);
@@ -6357,7 +6569,7 @@ function collectSaveData() {
   };
 }
 
-/** @returns {Promise<boolean>} Driveへの保存に成功したか。mergeQuickBundleIfAny()が、
+/** @returns {Promise<boolean>} Driveへの保存に成功したか。mergeQuickBundlesIfAny()が、
  *  クイックバンドルをIndexedDBから消してよいか判断するために使う(2026年9月追加)。 */
 async function handleSave() {
   setStatus('自動保存中…');
@@ -6398,9 +6610,9 @@ async function handleLocalBackupSave() {
  *  IndexedDBの専用バンドルへ現在のstate(=今回新規に作った分だけ)を保存するだけに
  *  留める(2026年9月追加、js/upload-queue.jsのsaveQuickBundle()参照)。 */
 async function handleQuickModeSave() {
-  if (typeof saveQuickBundle !== 'function') return;
+  if (typeof saveQuickBundle !== 'function' || !state.quickBundleId) return;
   try {
-    await saveQuickBundle(collectSaveData());
+    await saveQuickBundle(state.quickBundleId, collectSaveData());
     setStatus('端末に保存しました(クイックモード、Drive未送信)');
   } catch (err) {
     console.error('クイックバンドルの保存に失敗', err);
