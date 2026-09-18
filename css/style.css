@@ -367,7 +367,7 @@ html, body {
  * のまま(親のdisplay:flexの通常フローに参加)にしていたため、もう片方のposition:absolute
  * 要素(topなど個別指定なし)がブラウザの「静的位置」推定に頼る形になり、2つの局面の内容が
  * 中央付近で重なって表示されていた)。 */
-.start-menu-loading, .start-menu-menu {
+.start-menu-loading, .start-menu-menu, .start-menu-signin {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -380,8 +380,40 @@ html, body {
   pointer-events: none;
   transition: opacity 0.5s ease;
 }
-.start-menu-overlay.phase-loading .start-menu-loading { opacity: 1; pointer-events: auto; }
-.start-menu-overlay.phase-menu .start-menu-menu { opacity: 1; pointer-events: auto; }
+/* **重要(2026年9月、重大バグの修正)**: 必ず`.open`も条件に含めること。以前は
+ * `.start-menu-overlay.phase-menu .start-menu-menu {...}`のように`.open`を条件に
+ * 入れていなかったため、closeStartMenu()が(`open`は外すが`phase-menu`は外さない仕様のため)
+ * 呼ばれた後も、この局面固有のセレクタは`.phase-menu`が残っている限りマッチし続け、
+ * `.start-menu-menu`(すなわち画面全面を覆う4つのタイル)がopacity:1・pointer-events:autoの
+ * まま取り残されていた。オーバーレイ自身(`.start-menu-overlay`)はopacity:0で見た目には
+ * 消えるが、**opacityは子要素の当たり判定(pointer-events)には影響しない**ため、
+ * 「見えないのにクリックだけは効く、z-index:300の全画面レイヤー」がクイックメニューを
+ * 閉じた後もずっと居座り続ける不具合になっていた。この不可視レイヤーが、カメラの
+ * ターゲティングカーソル/Eclipseガイドや、Almagestの本タップなど、閉じたはずの
+ * オーバーレイの下にある全ての操作を代わりに奪ってしまっていた(タップ位置がたまたま
+ * STYLUS/LAUNCH等のタイル領域と重なると、その場所のクイックメニュー項目が誤って
+ * 起動する)。`.open`をセレクタに含めることで、closeStartMenu()が`open`を外した瞬間に
+ * この局面別ルールが一切マッチしなくなり、上の基本ルール(pointer-events:none)へ
+ * 確実に戻るようにした。 */
+.start-menu-overlay.open.phase-loading .start-menu-loading { opacity: 1; pointer-events: auto; }
+.start-menu-overlay.open.phase-menu .start-menu-menu { opacity: 1; pointer-events: auto; }
+.start-menu-overlay.open.phase-signin .start-menu-signin { opacity: 1; pointer-events: auto; }
+
+.start-menu-signin-btn {
+  margin-top: 20px;
+  padding: 11px 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(201, 162, 39, 0.55);
+  background: rgba(201, 162, 39, 0.14);
+  color: #f1e4bd;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: .08em;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .1s ease;
+}
+.start-menu-signin-btn:hover { background: rgba(201, 162, 39, 0.26); border-color: rgba(201, 162, 39, 0.85); }
+.start-menu-signin-btn:active { transform: scale(.96); }
 
 /* ---- ロード中: ゴールデンレコード(フラット金+パルサーマップの走査線) ---- */
 .start-menu-disc-wrap {

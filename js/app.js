@@ -159,6 +159,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
+  // **2026年9月追加**: サインインが完了する(または「Googleでサインイン」ボタンが必要になる)
+  // までの間、業務的な白いツールバー/空のキャンバスが一瞬でも見えないよう、ゴールデンレコードの
+  // ロード画面をここで表示する。実際には`index.html`側に`#start-menu-overlay`を
+  // `class="start-menu-overlay open phase-loading"`済みの状態で静的に埋め込んであるため、
+  // この呼び出しより前の最初のペイントから既に見えている(buildStartMenu()参照、JSの実行を
+  // 待たない)。ここでの呼び出しは、キャプションの巡回開始とクイックメニュー/サインイン促し
+  // 局面のDOM組み立て・イベント配線を行うためのもの。
+  showOpeningLoadingScreen();
+
   if (isConfigured()) {
     els.signInBtn.disabled = false;
     els.signInBtn.hidden = true;
@@ -170,6 +179,9 @@ document.addEventListener('DOMContentLoaded', () => {
       armAutoSignInOnFirstGesture();
     });
   } else {
+    // 初回起動(APIキー未設定)は、ゴールデンレコードのオーバーレイ(z-index:300)が
+    // 設定モーダル(z-index:220)より上に来てしまい隠してしまうため、先に閉じてから開く。
+    closeStartMenu();
     openSettings();
   }
 
@@ -422,11 +434,16 @@ function whenGisReady(callback) {
   }
 }
 
-/** 起動時の自動サイレントサインインが失敗した場合(未ログイン・未同意など)。手動サインインボタンを出す。 */
+/** 起動時の自動サイレントサインインが失敗した場合(未ログイン・未同意など)。
+ *  2026年9月: 業務的な白いツールバーの#sign-in-btnを見せる代わりに、ゴールデンレコードの
+ *  オーバーレイをそのまま「Googleでサインイン」ボタンの局面(showSignInPrompt())へ
+ *  切り替えるようにした。#sign-in-btn自体は万一オーバーレイ側に不具合があった時の
+ *  最終手段として残してある(hidden解除だけしておく)。 */
 function onSignInFailed() {
   debugLog('onSignInFailed() 呼び出し');
   els.signInBtn.hidden = false;
   setStatus('「Googleでサインイン」を押してください');
+  showSignInPrompt();
 }
 
 /**
@@ -1069,18 +1086,47 @@ function buildStartMenuDiscSvg() {
 }
 
 function buildStartMenu() {
-  const overlay = document.createElement('div');
-  overlay.id = 'start-menu-overlay';
-  overlay.className = 'start-menu-overlay';
+  // **2026年9月追加**: ログイン前(初回タップで自動サインインを試みるまでの間)にも
+  // 「一瞬、業務的な白いツールバー/キャンバスが見えてしまう」という実機報告を受け、
+  // このオーバーレイの「ロード中」局面(円盤+ワードマーク+一言)だけは、JSの実行を
+  // 一切待たずに最初の1フレーム目から描画されるよう、`index.html`へ静的にあらかじめ
+  // 埋め込んである(`#start-menu-overlay`に`class="start-menu-overlay open phase-loading"`
+  // 済みの状態で配置済み)。ここではその既存の要素があれば作り直さずそのまま使い回し、
+  // クイックメニュー/サインイン促し(いずれも初回ペイントには関与しない、JS実行後で
+  // 十分な局面)だけをこの関数で組み立てて追加する。万一(将来index.html側の変更漏れ等で)
+  // 静的な要素が見つからなかった場合は、フォールバックとしてこれまで通りJSだけで
+  // 一から生成する。
+  let overlay = document.getElementById('start-menu-overlay');
+  let loading;
+  if (overlay) {
+    loading = overlay.querySelector('.start-menu-loading');
+  } else {
+    overlay = document.createElement('div');
+    overlay.id = 'start-menu-overlay';
+    overlay.className = 'start-menu-overlay';
+    document.body.appendChild(overlay);
+  }
+  if (!loading) {
+    loading = document.createElement('div');
+    loading.className = 'start-menu-loading';
+    loading.innerHTML = `
+      <div class="start-menu-disc-wrap"></div>
+      <div class="start-menu-wordmark">CONSTELLATION</div>
+      <div class="start-menu-caption" id="start-menu-caption"></div>
+    `;
+    loading.querySelector('.start-menu-disc-wrap').appendChild(buildStartMenuDiscSvg());
+    overlay.appendChild(loading);
+  }
 
-  const loading = document.createElement('div');
-  loading.className = 'start-menu-loading';
-  loading.innerHTML = `
+  const signin = document.createElement('div');
+  signin.className = 'start-menu-signin';
+  signin.innerHTML = `
     <div class="start-menu-disc-wrap"></div>
     <div class="start-menu-wordmark">CONSTELLATION</div>
-    <div class="start-menu-caption" id="start-menu-caption"></div>
+    <div class="start-menu-caption">サインインして書庫をひらく</div>
+    <button class="start-menu-signin-btn" id="start-menu-signin-btn">Googleでサインイン</button>
   `;
-  loading.querySelector('.start-menu-disc-wrap').appendChild(buildStartMenuDiscSvg());
+  signin.querySelector('.start-menu-disc-wrap').appendChild(buildStartMenuDiscSvg());
 
   const menu = document.createElement('div');
   menu.className = 'start-menu-menu';
@@ -1121,10 +1167,11 @@ function buildStartMenu() {
     <div class="start-menu-footnote">SOUNDS · IMAGES · GREETINGS OF EARTH</div>
   `;
 
-  overlay.appendChild(loading);
+  overlay.appendChild(signin);
   overlay.appendChild(menu);
-  document.body.appendChild(overlay);
-  startMenuEls = { overlay, loading, menu, caption: loading.querySelector('#start-menu-caption') };
+  startMenuEls = { overlay, loading, signin, menu, caption: loading.querySelector('#start-menu-caption') };
+
+  signin.querySelector('#start-menu-signin-btn').addEventListener('click', () => signIn());
 
   menu.querySelector('#start-menu-quick-camera').addEventListener('click', handleQuickCameraStart);
   menu.querySelector('#start-menu-quick-session').addEventListener('click', handleQuickSessionStart);
@@ -1136,6 +1183,17 @@ function buildStartMenu() {
     closeStartMenu();
     withMainData(() => {});
   });
+}
+
+/** ロード中/クイックメニュー/サインイン促しの3局面を排他的に切り替える共通ヘルパー。
+ *  各局面のCSS(`.start-menu-overlay.open.phase-xxx .start-menu-xxx`)は`.open`も
+ *  条件に含めているため、closeStartMenu()で`.open`が外れた瞬間にどの局面も表示・
+ *  クリック判定の対象にならなくなる(重大バグ修正、上記CSSのコメント参照)。 */
+function setStartMenuPhase(phase) {
+  const overlay = startMenuEls.overlay;
+  overlay.classList.toggle('phase-loading', phase === 'loading');
+  overlay.classList.toggle('phase-menu', phase === 'menu');
+  overlay.classList.toggle('phase-signin', phase === 'signin');
 }
 
 /** ロード中の一言(START_MENU_CAPTIONS)を数秒おきにクロスフェードで切り替える。
@@ -1161,15 +1219,26 @@ function stopStartMenuCaptionCycle() {
   if (startMenuCaptionTimer) { clearInterval(startMenuCaptionTimer); startMenuCaptionTimer = null; }
 }
 
-/** サインイン直後、Google Driveとの同期(フォルダ解決・年インデックス読み込み)が終わるまでの
- *  間、ゴールデンレコードが走査するロード画面を表示する(onSignedIn()参照)。処理が完了したら
- *  openStartMenu()が同じオーバーレイをクイックメニューへクロスフェードする。 */
+/** ページ読み込み直後(ログイン前、初回タップで自動サインインを試みるまでの間)〜
+ *  サインイン直後のGoogle Driveとの同期(フォルダ解決・年インデックス読み込み)が終わる
+ *  までの間、ゴールデンレコードが走査するロード画面を表示する(js/app.jsのDOMContentLoaded
+ *  ハンドラ・onSignedIn()の双方から呼ばれる)。処理が完了したらopenStartMenu()が同じ
+ *  オーバーレイをクイックメニューへクロスフェードする。 */
 function showOpeningLoadingScreen() {
   if (!startMenuEls) buildStartMenu();
   startMenuEls.overlay.classList.add('open');
-  startMenuEls.overlay.classList.add('phase-loading');
-  startMenuEls.overlay.classList.remove('phase-menu');
+  setStartMenuPhase('loading');
   startStartMenuCaptionCycle();
+}
+
+/** 自動サイレントサインインが失敗した場合(未ログイン・未同意など)、ロード画面と同じ
+ *  オーバーレイ内で「Googleでサインイン」ボタンだけの局面へ切り替える(onSignInFailed()
+ *  参照)。これも業務的な白いツールバー(既存の#sign-in-btn)を見せないための対応。 */
+function showSignInPrompt() {
+  if (!startMenuEls) buildStartMenu();
+  stopStartMenuCaptionCycle();
+  startMenuEls.overlay.classList.add('open');
+  setStartMenuPhase('signin');
 }
 
 /** クイックメニュー(STYLUS/LAUNCH/ALMAGEST/PLAYBACK)を表示する。ロード画面から続けて
@@ -1181,8 +1250,7 @@ function openStartMenu() {
   if (!startMenuEls) buildStartMenu();
   stopStartMenuCaptionCycle();
   startMenuEls.overlay.classList.add('open');
-  startMenuEls.overlay.classList.remove('phase-loading');
-  startMenuEls.overlay.classList.add('phase-menu');
+  setStartMenuPhase('menu');
 }
 
 function closeStartMenu() {
