@@ -1181,7 +1181,12 @@ function buildStartMenu() {
   });
   menu.querySelector('#start-menu-start').addEventListener('click', () => {
     closeStartMenu();
-    withMainData(() => {});
+    // **2026年9月修正**: 以前は`withMainData(() => {})`を呼んでいたが、`withMainData()`は
+    // `state.quickMode`中は素通り(渡した空関数をそのまま実行するだけ)する仕様のため、
+    // 「☰ クイックメニュー」経由でクイックモード中にPLAYBACKを選び直した場合、
+    // 何も起きない(全データが読み込まれない)dead buttonになっていた。年タブの
+    // 「🌐 他の記録を読み込む」と同じく、常に直接ensureMainDataLoaded()を呼ぶ。
+    ensureMainDataLoaded().catch(() => {});
   });
 }
 
@@ -1745,13 +1750,24 @@ function renderYearTabs() {
   // なので、年タブには他の年・他の展覧会が一切出てこない。「消えたわけではない、読めば
   // 出てくる」ことが伝わるよう、全データを読み込む入口を明示的に添える。
   if (state.quickMode) {
-    const btn = document.createElement('button');
-    btn.className = 'year-tab year-tab--load-all';
-    btn.textContent = '🌐 他の記録を読み込む';
+    const backBtn = document.createElement('button');
+    backBtn.className = 'year-tab year-tab--load-all';
+    backBtn.textContent = '☰ クイックメニュー';
+    // 2026年9月追加: LAUNCH(クイックセッション)/STYLUS(クイックカメラ)でいったんセッションへ
+    // 入った後、「他の入口(Almagest等)を選び直したい」と思っても戻る手段が無いという
+    // 実機報告への対応。openStartMenu()はセッション作成後もいつでも呼べる(クイックモード自体
+    // やIndexedDB上のバンドルには一切触れない、ただゴールデンレコードのオーバーレイを
+    // 再度開くだけ)ため、単純にこのボタンから呼ぶだけで足りる。
+    backBtn.addEventListener('click', () => openStartMenu());
+    els.yearTabs.appendChild(backBtn);
+
+    const loadAllBtn = document.createElement('button');
+    loadAllBtn.className = 'year-tab year-tab--load-all';
+    loadAllBtn.textContent = '🌐 他の記録を読み込む';
     // withMainData()はクイックモード中は素通りする仕様(トップの各ボタン用)のため、ここは
     // 直接ensureMainDataLoaded()を呼ぶ(=意図的に全データ読み込みの境界を越える操作)。
-    btn.addEventListener('click', () => ensureMainDataLoaded().catch(() => {}));
-    els.yearTabs.appendChild(btn);
+    loadAllBtn.addEventListener('click', () => ensureMainDataLoaded().catch(() => {}));
+    els.yearTabs.appendChild(loadAllBtn);
   }
 }
 
