@@ -189,11 +189,12 @@
     });
   }
 
-  // Almagest(コード"159")だけは、専用の軽量ファイルだけで完結し、セッション/カード全体
-  // (state.cards/sessions)を必要としない。それ以外の全モジュールはキャンバス上のカードを
-  // 扱うため、js/app.jsのensureMainDataLoaded()でメインデータの読み込みを待ってから起動する
-  // (2026年9月追加、「サインイン→すぐAlmagestで読書」の通信量最小化に伴う対応)。
-  const NO_MAIN_DATA_NEEDED_CODE = '159';
+  // Almagest(コード"159")・Ephemeris(コード"357")は、専用の軽量ファイルだけで完結し、
+  // セッション/カード全体(state.cards/sessions)を必要としない。それ以外の全モジュールは
+  // キャンバス上のカードを扱うため、js/app.jsのensureMainDataLoaded()でメインデータの
+  // 読み込みを待ってから起動する(2026年9月追加、「サインイン→すぐAlmagestで読書」の
+  // 通信量最小化に伴う対応。Ephemerisはスケジュール管理のみでカードを扱わないため同様に追加)。
+  const NO_MAIN_DATA_NEEDED_CODES = new Set(['159', '357']);
 
   function onDigit(d) {
     soundAudioCtx();
@@ -206,7 +207,7 @@
     const callback = moduleCodes.get(code);
     if (callback) {
       closeModuleKeypad();
-      if (code === NO_MAIN_DATA_NEEDED_CODE || typeof ensureMainDataLoaded !== 'function') {
+      if (NO_MAIN_DATA_NEEDED_CODES.has(code) || typeof ensureMainDataLoaded !== 'function') {
         callback();
       } else {
         ensureMainDataLoaded().then(callback).catch(() => {}); // 失敗時のステータス表示はjs/app.js側で既に出す

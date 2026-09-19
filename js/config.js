@@ -50,6 +50,12 @@ const CONFIG = {
   // 持つ。メインデータの保存(handleSave())のたびに追従して書き込む(js/app.js参照)。
   YEARS_INDEX_FILE_NAME: 'constellation-years.json',
 
+  // Ephemerisモジュール(js/modules/ephemeris.js、コード357)のスケジュールデータ専用ファイル名
+  // (2026年9月追加)。Almagest・年インデックスと同じく、メインのDATA_FILE_NAMEとは独立した
+  // 軽量ファイルとして常にDriveへ即時保存する。サインイン前(ログイン前フラッシュ)にも
+  // 施行日を判定できるよう、このファイルの内容は端末のlocalStorageへも都度ミラーする。
+  EPHEMERIS_FILE_NAME: 'constellation-ephemeris.json',
+
   // メディア(画像・動画・音声)を置くフォルダ名(APP_FOLDER_NAME直下)。
   // この下に「年セッション名/セッション名/.../ファイル」という入れ子構造でアップロードする。
   MEDIA_FOLDER_NAME: 'media',

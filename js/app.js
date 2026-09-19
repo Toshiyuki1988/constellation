@@ -69,6 +69,8 @@ const state = {
   // 年セッションだけの軽量インデックス(constellation-years.json)のファイルID・読み込み状況。
   yearsIndexFileId: null,
   yearsIndexAvailable: false,
+  // Ephemerisモジュール(js/modules/ephemeris.js)のスケジュールデータ専用Driveファイルのid。
+  ephemerisFileId: null,
 };
 
 const FIRST_YEAR = 2025;
@@ -159,30 +161,58 @@ document.addEventListener('DOMContentLoaded', () => {
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
-  // **2026年9月追加**: サインインが完了する(または「Googleでサインイン」ボタンが必要になる)
-  // までの間、業務的な白いツールバー/空のキャンバスが一瞬でも見えないよう、ゴールデンレコードの
-  // ロード画面をここで表示する。実際には`index.html`側に`#start-menu-overlay`を
-  // `class="start-menu-overlay open phase-loading"`済みの状態で静的に埋め込んであるため、
-  // この呼び出しより前の最初のペイントから既に見えている(buildStartMenu()参照、JSの実行を
-  // 待たない)。ここでの呼び出しは、キャプションの巡回開始とクイックメニュー/サインイン促し
-  // 局面のDOM組み立て・イベント配線を行うためのもの。
-  showOpeningLoadingScreen();
-
-  if (isConfigured()) {
+  // **2026年9月追加、Ephemerisモジュール(js/modules/ephemeris.js、コード357)との連携**:
+  // Ephemerisでスケジュール登録した施行日当日は、ゴールデンレコードのロード画面の代わりに
+  // 画面全体を「花つる+タイムテーブル」にする(ユーザー指定)。この判定はDrive/認証のどちらも
+  // 待たずに端末のlocalStorageミラー(js/modules/ephemeris.jsが変更のたび書き込む)だけで
+  // 同期的に行えるため、ここで最初に行う。**誤タップ防止のため、この日は通常の
+  // armAutoSignInOnFirstGesture()(画面のどこをタップしても自動サイレントサインインを試みる)を
+  // アームしない**。花つる/タイムテーブルは操作に反応しない読み取り専用の演出で、サインインは
+  // Ephemeris側が用意する専用ボタン(花つる画面の上部バー)からのみ行う。
+  const ephemerisTodaySchedules = (isConfigured() && typeof getTodayEphemerisSchedules === 'function')
+    ? getTodayEphemerisSchedules()
+    : [];
+  if (ephemerisTodaySchedules.length > 0 && typeof showEphemerisFlash === 'function') {
+    debugLog(`Ephemeris該当日(${ephemerisTodaySchedules.length}件) -> 花つるフラッシュを表示`);
+    // 静的に開いているゴールデンレコード(index.html側に埋め込み済み、JSの実行を待たず
+    // 最初のペイントから見えている)を閉じる。startMenuEls未構築の段階でも、要素自体は
+    // 既にDOMにあるため直接掴んで閉じられる。
+    const staticOverlay = document.getElementById('start-menu-overlay');
+    if (staticOverlay) staticOverlay.classList.remove('open');
+    showEphemerisFlash(ephemerisTodaySchedules);
     els.signInBtn.disabled = false;
     els.signInBtn.hidden = true;
     whenGisReady(() => {
-      debugLog('whenGisReady -> initAuth() 呼び出し');
+      debugLog('whenGisReady -> initAuth() 呼び出し(Ephemerisフラッシュ表示中)');
       initAuth(onSignedIn, onSignInFailed);
-      // ページ読み込み直後(ユーザー操作なし)にrequestAccessTokenを呼ぶとポップアップブロックの
-      // 対象になりやすいため、最初のタップ/クリックのタイミングに合わせてサイレント試行する。
-      armAutoSignInOnFirstGesture();
+      // armAutoSignInOnFirstGesture()は呼ばない(誤タップ防止)。
     });
   } else {
-    // 初回起動(APIキー未設定)は、ゴールデンレコードのオーバーレイ(z-index:300)が
-    // 設定モーダル(z-index:220)より上に来てしまい隠してしまうため、先に閉じてから開く。
-    closeStartMenu();
-    openSettings();
+    // **2026年9月追加**: サインインが完了する(または「Googleでサインイン」ボタンが必要になる)
+    // までの間、業務的な白いツールバー/空のキャンバスが一瞬でも見えないよう、ゴールデンレコードの
+    // ロード画面をここで表示する。実際には`index.html`側に`#start-menu-overlay`を
+    // `class="start-menu-overlay open phase-loading"`済みの状態で静的に埋め込んであるため、
+    // この呼び出しより前の最初のペイントから既に見えている(buildStartMenu()参照、JSの実行を
+    // 待たない)。ここでの呼び出しは、キャプションの巡回開始とクイックメニュー/サインイン促し
+    // 局面のDOM組み立て・イベント配線を行うためのもの。
+    showOpeningLoadingScreen();
+
+    if (isConfigured()) {
+      els.signInBtn.disabled = false;
+      els.signInBtn.hidden = true;
+      whenGisReady(() => {
+        debugLog('whenGisReady -> initAuth() 呼び出し');
+        initAuth(onSignedIn, onSignInFailed);
+        // ページ読み込み直後(ユーザー操作なし)にrequestAccessTokenを呼ぶとポップアップブロックの
+        // 対象になりやすいため、最初のタップ/クリックのタイミングに合わせてサイレント試行する。
+        armAutoSignInOnFirstGesture();
+      });
+    } else {
+      // 初回起動(APIキー未設定)は、ゴールデンレコードのオーバーレイ(z-index:300)が
+      // 設定モーダル(z-index:220)より上に来てしまい隠してしまうため、先に閉じてから開く。
+      closeStartMenu();
+      openSettings();
+    }
   }
 
   els.signInBtn.addEventListener('click', () => {
@@ -898,6 +928,9 @@ window.addEventListener('beforeunload', (e) => {
  */
 async function onSignedIn() {
   toggleAuthUI(true);
+  // Ephemerisの花つるフラッシュ(表示中だった場合)を閉じ、通常のゴールデンレコード読み込み
+  // 画面へ引き継ぐ(js/modules/ephemeris.js参照)。表示していなければ何もしない。
+  if (typeof hideEphemerisFlash === 'function') hideEphemerisFlash();
   showOpeningLoadingScreen();
   setStatus('Google Driveと同期中…', { busy: true });
   const loadingStartedAt = Date.now();
