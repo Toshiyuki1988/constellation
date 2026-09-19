@@ -14,8 +14,11 @@
 // (js/module-launcher.jsのNO_MAIN_DATA_NEEDED_CODES参照)。
 //
 // 【設計(2026年9月、ユーザー指定)】
-//   - スケジュール(施行日+ラベル+タイムテーブル+花つるの形状)はこのモジュールの小窓から
-//     登録・編集・削除する。手動で削除するまで(過去の日付になっても)一覧に残り続ける。
+//   - スケジュール(施行日+ラベル+タイムテーブル+花つるの形状+スクリーンショット画像)は
+//     このモジュールの小窓から登録・編集・削除する。手動で削除するまで(過去の日付になっても)
+//     一覧に残り続ける。スクリーンショット(マップ・時刻表など)はタップ選択/ドラッグ&ドロップ/
+//     貼り付けの3通りで添付でき、OCRなどの加工を挟まず画像そのまま(`generateThumbnail()`で
+//     長辺1000px・quality0.8に縮小したdataURL)を保持する。フラッシュ画面にもそのまま表示される。
 //   - 施行日当日、サインイン前の「ログイン前フラッシュ」(js/app.jsのDOMContentLoaded、
 //     通常はゴールデンレコードのロード画面が出る場面)に、ゴールデンレコードの代わりに
 //     画面全体を覆う花つる+タイムテーブルが現れる。誤タップ防止のため、この日は
@@ -48,9 +51,16 @@
   let stylesInjected = false;
   let editingId = null; // null = 新規登録フォーム
   let selectedShape = 'mist';
+  // フォームで添付中のスクリーンショット(マップ・時刻表など、dataURL文字列の配列)。
+  // 新規登録・編集は同じ1つのフォームを使い回すため、状態も1つで足りる(resetForm()/startEdit()参照)。
+  let formImages = [];
 
   let ephemerisDataLoaded = false;
   let ephemerisDataLoadPromise = null;
+
+  function escapeAttrLocal(str) {
+    return escapeHtml(str || '').replace(/"/g, '&quot;');
+  }
 
   /* ---------------- データアクセス ---------------- */
 
@@ -263,6 +273,17 @@
       label.className = 'eph-flash-tt-label';
       label.textContent = sch.label || '(無題)';
       block.appendChild(label);
+
+      // マップ・時刻表などのスクリーンショット(sch.images)。文脈上、時刻の文字情報より先に
+      // 目に入る位置(タイムテーブルの上)に置く。
+      const images = sch.images || [];
+      if (images.length > 0) {
+        const gallery = document.createElement('div');
+        gallery.className = 'eph-flash-images';
+        gallery.innerHTML = images.map((src) => `<img class="eph-flash-img" src="${escapeAttrLocal(src)}" alt="">`).join('');
+        block.appendChild(gallery);
+      }
+
       const list = document.createElement('div');
       list.className = 'eph-flash-tt-list';
       (sch.timetable || []).forEach((row) => {
@@ -316,6 +337,29 @@
         const m = /^(\d{1,2}:\d{2})\s*(.*)$/.exec(line);
         return m ? { time: m[1], text: m[2] } : { time: null, text: line };
       });
+  }
+
+  /** ドロップ/選択/貼り付けされた画像ファイル(複数可)を、OCRなどの加工を挟まず**そのまま**
+   *  formImagesへ追加する(マップ・時刻表のスクリーンショットは文字が読めることが重要なため、
+   *  Almagestの本文貼り付け画像と同じくgenerateThumbnail()で長辺を保ちつつ縮小するだけに留める)。 */
+  async function applyImageFiles(files) {
+    for (const file of files) {
+      if (!file.type || !file.type.startsWith('image/')) continue;
+      const dataUrl = await generateThumbnail(file, 1000, 0.8);
+      if (dataUrl) formImages.push(dataUrl);
+    }
+    renderFormImagesGallery();
+  }
+
+  function renderFormImagesGallery() {
+    if (!epEls) return;
+    epEls.imageGallery.hidden = formImages.length === 0;
+    epEls.imageGallery.innerHTML = formImages.map((src, i) => (
+      `<div class="eph-image-item">`
+      + `<img src="${escapeAttrLocal(src)}" alt="">`
+      + `<button type="button" class="eph-image-remove" data-remove-index="${i}" title="削除">✕</button>`
+      + '</div>'
+    )).join('');
   }
 
   function injectStyles() {
@@ -374,6 +418,28 @@
       }
       .eph-date-input { color-scheme: dark; }
       .eph-timetable-input { resize: vertical; min-height: 64px; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; }
+      .eph-image-drop {
+        display: flex; align-items: center; justify-content: center; text-align: center;
+        min-height: 56px; padding: 8px; border-radius: 8px; border: 1px dashed rgba(255, 255, 255, 0.22);
+        color: rgba(255, 255, 255, 0.4); font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px;
+        line-height: 1.5; cursor: pointer;
+      }
+      .eph-image-drop:hover { border-color: rgba(127, 174, 122, 0.55); color: rgba(255, 255, 255, 0.65); }
+      .eph-image-drop.eph-image-dragover {
+        border-color: rgba(127, 174, 122, 0.9); background: rgba(127, 174, 122, 0.1);
+        color: #fff;
+      }
+      .eph-image-gallery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+      .eph-image-item {
+        position: relative; width: 72px; height: 72px; border-radius: 6px; overflow: hidden;
+        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.16);
+      }
+      .eph-image-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .eph-image-remove {
+        position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%;
+        border: none; background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
+      }
+      .eph-image-remove:hover { background: rgba(0, 0, 0, 0.85); }
       .eph-shape-row { display: flex; gap: 6px; }
       .eph-shape-btn {
         flex: 1; padding: 8px 4px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.16);
@@ -432,6 +498,13 @@
       .eph-flash-tt-label {
         margin: 0 0 8px; font-family: 'Fraunces', serif; font-size: 15px; color: #eef2e6; letter-spacing: 0.02em;
       }
+      /* マップ・時刻表などのスクリーンショット(sch.images)。文字が読めることを優先し、
+         小さいサムネイルではなく画面幅に近い大きさで並べる。 */
+      .eph-flash-images { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+      .eph-flash-img {
+        display: block; width: 100%; max-width: 340px; border-radius: 10px;
+        border: 1px solid rgba(127, 174, 122, 0.28); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+      }
       .eph-flash-tt-list { display: flex; flex-direction: column; gap: 6px; }
       .eph-flash-tt-item {
         display: flex; gap: 10px; align-items: baseline;
@@ -471,6 +544,8 @@
     epEls.dateInput.value = '';
     epEls.labelInput.value = '';
     epEls.timetableInput.value = '';
+    formImages = [];
+    renderFormImagesGallery();
     setShapeSelection('mist');
     epEls.saveBtn.textContent = '登録する';
     epEls.cancelBtn.hidden = true;
@@ -483,6 +558,8 @@
     epEls.dateInput.value = s.date || '';
     epEls.labelInput.value = s.label || '';
     epEls.timetableInput.value = timetableToText(s.timetable);
+    formImages = (s.images || []).slice();
+    renderFormImagesGallery();
     setShapeSelection(s.vineShape || 'mist');
     epEls.saveBtn.textContent = '更新する';
     epEls.cancelBtn.hidden = false;
@@ -522,13 +599,14 @@
     if (!date) { setStatus('施行日を選択してください', { important: true }); return; }
     const label = epEls.labelInput.value.trim();
     const timetable = parseTimetableText(epEls.timetableInput.value);
+    const images = formImages.slice();
     const schedules = getSchedules();
     if (editingId) {
       const s = schedules.find((x) => x.id === editingId);
-      if (s) { s.date = date; s.label = label; s.timetable = timetable; s.vineShape = selectedShape; }
+      if (s) { s.date = date; s.label = label; s.timetable = timetable; s.vineShape = selectedShape; s.images = images; }
     } else {
       schedules.push({
-        id: crypto.randomUUID(), date, label, timetable, vineShape: selectedShape,
+        id: crypto.randomUUID(), date, label, timetable, vineShape: selectedShape, images,
         createdAt: new Date().toISOString(),
       });
     }
@@ -564,6 +642,10 @@
         <input type="text" class="eph-label-input" placeholder="例: 六甲ミーツ・アート">
         <p class="eph-form-label">タイムテーブル(1行ずつ「HH:MM 内容」、時刻無しの行もOK)</p>
         <textarea class="eph-timetable-input" rows="4" placeholder="10:00 開館&#10;13:30 A室 個展&#10;移動: 電車で30分"></textarea>
+        <p class="eph-form-label">スクリーンショット(マップ・時刻表など)</p>
+        <div class="eph-image-drop">📷 タップ、または画像をドラッグ&ドロップ/貼り付け</div>
+        <input type="file" accept="image/*" multiple hidden class="eph-image-file">
+        <div class="eph-image-gallery" hidden></div>
         <p class="eph-form-label">花つるの形状</p>
         <div class="eph-shape-row">
           <button class="eph-shape-btn" data-shape="mist">🌫 霧に向かうつる</button>
@@ -589,20 +671,77 @@
       dateInput: win.querySelector('.eph-date-input'),
       labelInput: win.querySelector('.eph-label-input'),
       timetableInput: win.querySelector('.eph-timetable-input'),
+      imageDrop: win.querySelector('.eph-image-drop'),
+      imageFile: win.querySelector('.eph-image-file'),
+      imageGallery: win.querySelector('.eph-image-gallery'),
       shapeBtns: Array.from(win.querySelectorAll('.eph-shape-btn')),
       saveBtn: win.querySelector('.eph-save-btn'),
       cancelBtn: win.querySelector('.eph-cancel-btn'),
     };
 
-    // 小窓内の操作が、下のキャンバスのパン/ジェスチャーに奪われないようにする。
+    // 小窓内の操作が、下のキャンバスのパン/ジェスチャーに奪われないようにする。ギャラリーの
+    // ✕ボタンは再描画のたびに要素が差し替わるため、個別バインドではなくwin全体で拾う。
     win.querySelectorAll('button, input, textarea').forEach((el) => {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
+    });
+    win.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.eph-image-drop, .eph-image-remove')) e.stopPropagation();
     });
 
     epEls.closeBtn.addEventListener('click', closeEphemeris);
     epEls.shapeBtns.forEach((b) => b.addEventListener('click', () => setShapeSelection(b.dataset.shape)));
     epEls.saveBtn.addEventListener('click', handleSaveClick);
     epEls.cancelBtn.addEventListener('click', resetForm);
+
+    // スクリーンショットの添付: タップで選択(スマホ向け、CLAUDE.mdの「重要な操作導線は
+    // ジェスチャー任せにせず確実なボタンも用意する」教訓に沿う)、PCはドラッグ&ドロップ/貼り付けにも対応。
+    epEls.imageDrop.addEventListener('click', () => epEls.imageFile.click());
+    epEls.imageFile.addEventListener('change', () => {
+      const files = Array.from(epEls.imageFile.files || []);
+      epEls.imageFile.value = '';
+      if (files.length) applyImageFiles(files);
+    });
+    let dragDepth = 0;
+    epEls.imageDrop.addEventListener('dragover', (e) => {
+      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    epEls.imageDrop.addEventListener('dragenter', (e) => {
+      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      dragDepth++;
+      epEls.imageDrop.classList.add('eph-image-dragover');
+    });
+    epEls.imageDrop.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) epEls.imageDrop.classList.remove('eph-image-dragover');
+    });
+    epEls.imageDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      epEls.imageDrop.classList.remove('eph-image-dragover');
+      const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/'));
+      if (files.length) applyImageFiles(files);
+    });
+    // クリップボードからの画像ペースト(小窓が開いている間だけ)。画像アイテムが無ければ
+    // 通常のテキスト貼り付けに譲る(e.preventDefault()しない)。
+    win.addEventListener('paste', (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      const imageItems = Array.from(items).filter((item) => item.type.startsWith('image/'));
+      if (imageItems.length === 0) return;
+      e.preventDefault();
+      const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
+      if (files.length) applyImageFiles(files);
+    });
+    // ギャラリーの✕ボタン(再描画のたびに要素が差し替わるため、コンテナへのイベント委譲にする)。
+    epEls.imageGallery.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-remove-index]');
+      if (!btn) return;
+      formImages.splice(Number(btn.dataset.removeIndex), 1);
+      renderFormImagesGallery();
+    });
 
     // スワイプで左右に閉じる(モジュール共通デザイン言語)。上部バーから始まった場合だけ判定する。
     let swipeStartX = null;
