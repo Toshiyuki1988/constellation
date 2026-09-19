@@ -54,6 +54,9 @@
   // フォームで添付中のスクリーンショット(マップ・時刻表など、dataURL文字列の配列)。
   // 新規登録・編集は同じ1つのフォームを使い回すため、状態も1つで足りる(resetForm()/startEdit()参照)。
   let formImages = [];
+  // タイムテーブルの入力行(2026年9月、フリーテキストからブロック単位の入力へ変更)。
+  // 各要素は{time, text}で、そのままschedule.timetableへ保存する(データモデル自体は不変)。
+  let formTimetable = [];
 
   let ephemerisDataLoaded = false;
   let ephemerisDataLoadPromise = null;
@@ -320,23 +323,28 @@
     return (a.date || '').localeCompare(b.date || '');
   }
 
-  function timetableToText(timetable) {
-    return (timetable || [])
-      .map((row) => (row.time ? `${row.time} ${row.text || ''}`.trim() : (row.text || '')))
-      .join('\n');
+  /** タイムテーブルの1行を「時刻(空欄可)+内容」のブロックとして描き直す(2026年9月、
+   *  フリーテキスト入力からブロック単位の入力へ変更)。formTimetableの各要素を直接書き換える
+   *  ため、input/changeイベントはコンテナへの委譲(buildDom()参照)で拾う。 */
+  function renderTimetableRows() {
+    if (!epEls) return;
+    epEls.timetableRows.innerHTML = formTimetable.map((row, i) => `
+      <div class="eph-tt-row" data-index="${i}">
+        <input type="time" class="eph-tt-row-time" value="${escapeAttrLocal(row.time || '')}">
+        <input type="text" class="eph-tt-row-text" placeholder="内容(例: 開館・受付)" value="${escapeAttrLocal(row.text || '')}">
+        <button type="button" class="eph-tt-row-remove" title="この行を削除">✕</button>
+      </div>
+    `).join('');
   }
 
-  /** 1行ずつ「HH:MM 内容」の簡易テキストを解析する。時刻の書式に合わない行は、時刻無しの
-   *  自由記述行としてそのまま残す(「移動: 電車で30分」のような行も許容するため)。 */
-  function parseTimetableText(text) {
-    return (text || '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const m = /^(\d{1,2}:\d{2})\s*(.*)$/.exec(line);
-        return m ? { time: m[1], text: m[2] } : { time: null, text: line };
-      });
+  function addTimetableRow(focus) {
+    formTimetable.push({ time: '', text: '' });
+    renderTimetableRows();
+    if (focus) {
+      const rows = epEls.timetableRows.querySelectorAll('.eph-tt-row-text');
+      const last = rows[rows.length - 1];
+      if (last) last.focus();
+    }
   }
 
   /** ドロップ/選択/貼り付けされた画像ファイル(複数可)を、OCRなどの加工を挟まず**そのまま**
@@ -417,7 +425,30 @@
         font-family: 'Zen Kaku Gothic New', sans-serif;
       }
       .eph-date-input { color-scheme: dark; }
-      .eph-timetable-input { resize: vertical; min-height: 64px; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; }
+      /* タイムテーブルの入力行(2026年9月、フリーテキストからブロック単位の入力へ変更)。 */
+      .eph-tt-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+      .eph-tt-row { display: flex; align-items: center; gap: 6px; }
+      .eph-tt-row-time {
+        width: 92px; flex: none; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px;
+        padding: 6px 6px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06); color: #fff;
+        font-family: 'IBM Plex Mono', monospace; color-scheme: dark;
+      }
+      .eph-tt-row-text {
+        flex: 1; min-width: 0; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px;
+        padding: 6px 8px; font-size: 11px; background: rgba(255, 255, 255, 0.06); color: #fff;
+        font-family: 'Zen Kaku Gothic New', sans-serif;
+      }
+      .eph-tt-row-remove {
+        width: 22px; height: 22px; border-radius: 50%; flex: none; border: 1px solid rgba(255, 255, 255, 0.18);
+        background: transparent; color: rgba(255, 255, 255, 0.55); font-size: 10px; cursor: pointer; padding: 0;
+      }
+      .eph-tt-row-remove:hover { border-color: #b3402b; color: #ff8a70; }
+      .eph-tt-add-btn {
+        width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px dashed rgba(255, 255, 255, 0.22);
+        background: none; color: rgba(255, 255, 255, 0.7); font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10.5px; cursor: pointer; margin-bottom: 4px;
+      }
+      .eph-tt-add-btn:hover { border-color: rgba(127, 174, 122, 0.55); color: #fff; }
       .eph-image-drop {
         display: flex; align-items: center; justify-content: center; text-align: center;
         min-height: 56px; padding: 8px; border-radius: 8px; border: 1px dashed rgba(255, 255, 255, 0.22);
@@ -543,7 +574,8 @@
     editingId = null;
     epEls.dateInput.value = '';
     epEls.labelInput.value = '';
-    epEls.timetableInput.value = '';
+    formTimetable = [{ time: '', text: '' }]; // 最初から1行出しておく(「+行を追加」を押す手間を省く)
+    renderTimetableRows();
     formImages = [];
     renderFormImagesGallery();
     setShapeSelection('mist');
@@ -557,7 +589,10 @@
     editingId = id;
     epEls.dateInput.value = s.date || '';
     epEls.labelInput.value = s.label || '';
-    epEls.timetableInput.value = timetableToText(s.timetable);
+    formTimetable = (s.timetable && s.timetable.length)
+      ? s.timetable.map((row) => ({ time: row.time || '', text: row.text || '' }))
+      : [{ time: '', text: '' }];
+    renderTimetableRows();
     formImages = (s.images || []).slice();
     renderFormImagesGallery();
     setShapeSelection(s.vineShape || 'mist');
@@ -598,7 +633,10 @@
     const date = epEls.dateInput.value;
     if (!date) { setStatus('施行日を選択してください', { important: true }); return; }
     const label = epEls.labelInput.value.trim();
-    const timetable = parseTimetableText(epEls.timetableInput.value);
+    // 時刻・内容のどちらも空の行(未入力のまま残った追加行など)は保存しない。
+    const timetable = formTimetable
+      .map((row) => ({ time: (row.time || '').trim() || null, text: (row.text || '').trim() }))
+      .filter((row) => row.time || row.text);
     const images = formImages.slice();
     const schedules = getSchedules();
     if (editingId) {
@@ -640,8 +678,9 @@
         <input type="date" class="eph-date-input">
         <p class="eph-form-label">ラベル(任意)</p>
         <input type="text" class="eph-label-input" placeholder="例: 六甲ミーツ・アート">
-        <p class="eph-form-label">タイムテーブル(1行ずつ「HH:MM 内容」、時刻無しの行もOK)</p>
-        <textarea class="eph-timetable-input" rows="4" placeholder="10:00 開館&#10;13:30 A室 個展&#10;移動: 電車で30分"></textarea>
+        <p class="eph-form-label">タイムテーブル(時刻は空欄でもOK)</p>
+        <div class="eph-tt-rows"></div>
+        <button type="button" class="eph-tt-add-btn">+ 行を追加</button>
         <p class="eph-form-label">スクリーンショット(マップ・時刻表など)</p>
         <div class="eph-image-drop">📷 タップ、または画像をドラッグ&ドロップ/貼り付け</div>
         <input type="file" accept="image/*" multiple hidden class="eph-image-file">
@@ -670,7 +709,8 @@
       list: win.querySelector('.eph-list'),
       dateInput: win.querySelector('.eph-date-input'),
       labelInput: win.querySelector('.eph-label-input'),
-      timetableInput: win.querySelector('.eph-timetable-input'),
+      timetableRows: win.querySelector('.eph-tt-rows'),
+      timetableAddBtn: win.querySelector('.eph-tt-add-btn'),
       imageDrop: win.querySelector('.eph-image-drop'),
       imageFile: win.querySelector('.eph-image-file'),
       imageGallery: win.querySelector('.eph-image-gallery'),
@@ -685,13 +725,32 @@
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     });
     win.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.eph-image-drop, .eph-image-remove')) e.stopPropagation();
+      if (e.target.closest('.eph-image-drop, .eph-image-remove, .eph-tt-row-time, .eph-tt-row-text, .eph-tt-row-remove')) {
+        e.stopPropagation();
+      }
     });
 
     epEls.closeBtn.addEventListener('click', closeEphemeris);
     epEls.shapeBtns.forEach((b) => b.addEventListener('click', () => setShapeSelection(b.dataset.shape)));
     epEls.saveBtn.addEventListener('click', handleSaveClick);
     epEls.cancelBtn.addEventListener('click', resetForm);
+
+    // タイムテーブルの行(再描画のたびに要素が差し替わるため、コンテナへのイベント委譲にする)。
+    epEls.timetableAddBtn.addEventListener('click', () => addTimetableRow(true));
+    epEls.timetableRows.addEventListener('input', (e) => {
+      const row = e.target.closest('.eph-tt-row');
+      if (!row) return;
+      const i = Number(row.dataset.index);
+      if (e.target.classList.contains('eph-tt-row-time')) formTimetable[i].time = e.target.value;
+      if (e.target.classList.contains('eph-tt-row-text')) formTimetable[i].text = e.target.value;
+    });
+    epEls.timetableRows.addEventListener('click', (e) => {
+      const btn = e.target.closest('.eph-tt-row-remove');
+      if (!btn) return;
+      const row = btn.closest('.eph-tt-row');
+      formTimetable.splice(Number(row.dataset.index), 1);
+      renderTimetableRows();
+    });
 
     // スクリーンショットの添付: タップで選択(スマホ向け、CLAUDE.mdの「重要な操作導線は
     // ジェスチャー任せにせず確実なボタンも用意する」教訓に沿う)、PCはドラッグ&ドロップ/貼り付けにも対応。
