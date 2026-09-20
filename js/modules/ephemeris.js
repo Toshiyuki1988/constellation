@@ -1,10 +1,11 @@
 // CONSTELLATION — Module: Ephemeris
 //
 // 「施行日」(展覧会の予定日)をカレンダーから登録しておくと、当日サインイン前の画面いっぱいに
-// 花つる(装飾)とタイムテーブルが現れる、鑑賞予定の予告モジュール。CLAUDE.mdの「モジュール」
-// 規約に従い、このファイル全体をIIFEで包んでトップレベルの名前をグローバルへ漏らさない。
-// state / setStatus / escapeHtml / formatDateYMD / signIn / soundAudioCtx / registerModuleCode /
-// findFileByName・loadNamedData・saveNamedData(js/drive.js) などの既存グローバルは直接参照する。
+// 植物で装飾された丸時計とタイムテーブルが現れる、鑑賞予定の予告モジュール。CLAUDE.mdの
+// 「モジュール」規約に従い、このファイル全体をIIFEで包んでトップレベルの名前をグローバルへ
+// 漏らさない。state / setStatus / escapeHtml / formatDateYMD / signIn / soundAudioCtx /
+// registerModuleCode / findFileByName・loadNamedData・saveNamedData(js/drive.js) などの
+// 既存グローバルは直接参照する。
 //
 // 起動: js/module-launcher.js経由、コード"357"(電話キーパッドの右下。123=WormGate・
 // 456=Crews・789=Mapping Storysで洛書の3行、147=Flight Engineer・258=Astrometry Scope・
@@ -14,22 +15,23 @@
 // (js/module-launcher.jsのNO_MAIN_DATA_NEEDED_CODES参照)。
 //
 // 【設計(2026年9月、ユーザー指定)】
-//   - スケジュール(施行日+ラベル+タイムテーブル+花つるの形状+スクリーンショット画像)は
-//     このモジュールの小窓から登録・編集・削除する。手動で削除するまで(過去の日付になっても)
-//     一覧に残り続ける。スクリーンショット(マップ・時刻表など)はタップ選択/ドラッグ&ドロップ/
-//     貼り付けの3通りで添付でき、OCRなどの加工を挟まず画像そのまま(`generateThumbnail()`で
-//     長辺1000px・quality0.8に縮小したdataURL)を保持する。フラッシュ画面にもそのまま表示される。
+//   - スケジュール(施行日+ラベル+タイムテーブル+スクリーンショット画像)はこのモジュールの
+//     小窓から登録・編集・削除する。手動で削除するまで(過去の日付になっても)一覧に残り続ける。
+//     スクリーンショット(マップ・時刻表など)はタイムテーブルのブロック単位で持ち、
+//     タップ選択/ドラッグ&ドロップ/貼り付けの3通りで添付でき、OCRなどの加工を挟まず画像
+//     そのまま(`generateThumbnail()`で長辺1000px・quality0.8に縮小したdataURL)を保持する。
+//     フラッシュ画面にもそのまま表示される(画像はブロックごとに開閉できる、後述)。
 //   - 施行日当日、サインイン前の「ログイン前フラッシュ」(js/app.jsのDOMContentLoaded、
 //     通常はゴールデンレコードのロード画面が出る場面)に、ゴールデンレコードの代わりに
-//     画面全体を覆う花つる+タイムテーブルが現れる。誤タップ防止のため、この日は
+//     画面全体を覆う丸時計+タイムテーブルが現れる。誤タップ防止のため、この日は
 //     画面のどこをタップしても自動サインインを試みる既存の仕組み
-//     (js/app.jsのarmAutoSignInOnFirstGesture())をアームせず、花つる画面の専用の
-//     「サインイン」ボタン(上部バー、花つる本体とは離れた場所)からのみサインインする。
-//   - 花つるの形状は2種類、常にこのモジュール画面から変更できる:
-//       - 霧に向かうつる(mist): 六甲ミーツ・アートのような、会場を歩き回って探索する日向け。
-//         画面の奥(右上)の霧へ向かって伸びていく、横方向に開けたつる。
-//       - 壁つる(wall): 国立国際美術館のような、一人の作家を掘り下げる日向け。
-//         壁を上から下へ辿っていくような、縦方向に集中したつる。
+//     (js/app.jsのarmAutoSignInOnFirstGesture())をアームせず、フラッシュ画面の専用の
+//     「サインイン」ボタン(上部バー、丸時計本体とは離れた場所)からのみサインインする。
+//   - **丸時計はスケジュールの内容を一切反映しない、純粋に装飾の現在時刻表示**(ユーザー指定:
+//     「これには予定を反映しなくても大丈夫です」)。植物のつる・花で縁を囲んだ意匠で、
+//     実際の現在時刻(端末のローカル時刻)を指す時針・分針・秒針を持つ(`buildClockFace()`)。
+//     当初あった「花つる」(mist/wall2形状、スケジュールごとに選べる成長アニメーション)は
+//     2026年9月にユーザー判断で撤去し、この丸時計に置き換えた(下記「2026年9月の追加改修」参照)。
 //
 // 【ログイン前フラッシュがDrive/認証を待たずに判定できる理由】
 // サインイン前(js/app.jsのDOMContentLoaded、認証もDrive通信もまだ行っていない段階)に
@@ -38,7 +40,7 @@
 // 端末のlocalStorage(EPHEMERIS_CACHE_KEY)へも同期的にミラーする。js/app.js側は
 // このlocalStorageだけを同期的に読んで判定する(getTodayEphemerisSchedules())。
 // **既知の制約**: このミラーは端末(ブラウザ)ローカルのため、スケジュールを登録した端末とは
-// 別の端末で花つるフラッシュを見るには、その端末でも一度サインインしてこのモジュールを
+// 別の端末でフラッシュを見るには、その端末でも一度サインインしてこのモジュールを
 // 開く(=Driveから読み込んでミラーが作られる)必要がある。個人利用・単一主端末を前提にした
 // 割り切りとして許容する(既存のアップロード待機列IndexedDB等、同種の割り切りが他にもある)。
 //
@@ -49,9 +51,18 @@
 //   - スクリーンショット(マップ・時刻表など)はスケジュール単位ではなく、タイムテーブルの
 //     ブロック単位(`row.images`)で複数枚持てるように変更した。旧形式(スケジュール単位の
 //     `schedule.images`)は初回読み込み時にmigrateLegacyScheduleImages()で1回だけ移行する。
-//   - ログイン前フラッシュはスマホ幅(680px以下)で「つる」/「タイムテーブル」をタブで
-//     切り替える表示に変更した(それより広い画面では従来通り両方を並べて表示する)。
-//   - UIの配色をMapping Storysの緑と被らないよう、より明るい緑(#6cf28a系)に変更した。
+//   - 【同日中に撤回・作り直し】当初、ログイン前フラッシュはスマホ幅(680px以下)で「つる」/
+//     「タイムテーブル」をタブで切り替える表示にしていたが、「『つる』は結局使わないかも、
+//     モジュールから削除して」というユーザー判断により、花つる(VINE_SHAPES・buildVineSvg・
+//     mist/wall選択UI)自体を丸ごと撤去した。代わりに「植物で装飾された丸時計」を常設で
+//     表示する(`buildClockFace()`。スケジュールの内容とは無関係な純粋装飾、現在時刻を指す)。
+//     つる/タイムテーブルの二者択一が無くなったことで、モバイル幅専用のタブ切り替えUI自体も
+//     不要になった(丸時計は小さく、タイムテーブルと並べて`flex-wrap`で自然に縦積みになる)。
+//   - タイムテーブルのブロックに添付したスクリーンショットは、フラッシュ画面上でブロックごとに
+//     開閉トグル(📷ボタン)できるようにした(既定は閉じた状態、タップで開閉)。
+//   - UIの配色は、最初にMapping Storysの緑と被らないよう明るめの緑(rgb(108,242,138))に
+//     変更したが、「色がミッドグリーンのままなのでライトグリーンに修正して」との指摘を受け、
+//     彩度を落とし明度をさらに上げた真の「ライトグリーン」(rgb(150,240,178)系)へ再調整した。
 
 (function () {
   'use strict';
@@ -61,7 +72,6 @@
   let epEls = null;
   let stylesInjected = false;
   let editingId = null; // null = 新規登録フォーム
-  let selectedShape = 'mist';
   // タイムテーブルの入力行。各要素は{time, text, images}で、そのままschedule.timetableへ保存する。
   // スクリーンショット(マップ・時刻表など)は2026年9月にスケジュール単位からブロック単位へ変更した
   // (「そのブロックごとにマップ、時刻表などのスクショを複数登録できるようにして」というユーザー要望)。
@@ -153,88 +163,124 @@
     }
   }
 
-  /* ---------------- 花つる(2形状) ---------------- */
+  /* ---------------- 植物で装飾された丸時計(装飾専用、スケジュールの内容は反映しない) ---------------- */
 
-  const VINE_SHAPES = {
-    mist: {
-      label: '霧に向かうつる',
-      // 画面の下から右上の霧(mist:true)へ向かって伸びる、横方向に開けたカーブ。
-      path: 'M 40 560 C 78 522 48 472 96 440 C 144 408 116 358 170 332 C 224 306 214 254 282 228 C 332 209 344 174 382 148',
-      blossoms: [
-        { x: 80, y: 500, r: 6 }, { x: 112, y: 430, r: 5 }, { x: 162, y: 370, r: 6.5 },
-        { x: 216, y: 298, r: 5 }, { x: 278, y: 244, r: 6 }, { x: 340, y: 188, r: 5 },
-      ],
-      mist: true,
-    },
-    wall: {
-      label: '壁つる',
-      // 画面上から下へ、壁を辿るように蛇行しながら降りていく縦方向のカーブ。
-      path: 'M 200 26 C 150 78 250 128 194 184 C 138 240 248 290 190 346 C 132 402 242 452 196 506 C 168 538 208 558 198 582',
-      blossoms: [
-        { x: 170, y: 74 }, { x: 228, y: 150 }, { x: 156, y: 216 },
-        { x: 236, y: 300 }, { x: 148, y: 372 }, { x: 228, y: 452 },
-      ],
-      mist: false,
-    },
-  };
+  // 時計の縁を囲む8方向の小さなつる+花(見た目のみ、角度で回転コピーする)。
+  const CLOCK_WREATH_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+  const CLOCK_TENDRIL_PATH = 'M 150 44 C 140 30 142 14 156 10';
+  const CLOCK_TENDRIL_TIP = { x: 156, y: 10, r: 4.5 };
 
-  function buildVineSvg(shape) {
-    const spec = VINE_SHAPES[shape] || VINE_SHAPES.mist;
+  /** 植物で装飾された丸時計(SVG)を1つ組み立てる。実際の現在時刻(端末のローカル時刻)を
+   *  指す時針・分針・秒針を持つが、スケジュールの内容は一切参照しない、純粋な装飾。
+   *  @returns {{svg: SVGSVGElement, update: () => void}} update()は針の角度を現在時刻へ合わせ直す */
+  function buildClockFace() {
     const ns = 'http://www.w3.org/2000/svg';
+    const cx = 150, cy = 150, r = 100;
     const svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('viewBox', '0 0 400 610');
+    svg.setAttribute('viewBox', '0 0 300 300');
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-    svg.setAttribute('class', `eph-vine-svg eph-vine-svg--${shape}`);
+    svg.setAttribute('class', 'eph-clock-svg');
 
-    if (spec.mist) {
-      const defs = document.createElementNS(ns, 'defs');
-      defs.innerHTML = '<radialGradient id="eph-mist-grad" cx="82%" cy="28%" r="52%">'
-        + '<stop offset="0%" stop-color="#cdd9d2" stop-opacity="0.55"/>'
-        + '<stop offset="100%" stop-color="#cdd9d2" stop-opacity="0"/>'
-        + '</radialGradient>';
-      svg.appendChild(defs);
-      const mistRect = document.createElementNS(ns, 'rect');
-      mistRect.setAttribute('x', '0'); mistRect.setAttribute('y', '0');
-      mistRect.setAttribute('width', '400'); mistRect.setAttribute('height', '610');
-      mistRect.setAttribute('fill', 'url(#eph-mist-grad)');
-      svg.appendChild(mistRect);
-    }
-
-    const path = document.createElementNS(ns, 'path');
-    path.setAttribute('class', 'eph-vine-path');
-    path.setAttribute('d', spec.path);
-    svg.appendChild(path);
-
-    spec.blossoms.forEach((b, i) => {
-      const c = document.createElementNS(ns, 'circle');
-      c.setAttribute('class', 'eph-vine-blossom');
-      c.setAttribute('cx', String(b.x));
-      c.setAttribute('cy', String(b.y));
-      c.setAttribute('r', String(b.r || 6));
-      c.style.transitionDelay = `${1.1 + i * 0.22}s`;
-      svg.appendChild(c);
+    const decorPaths = [];
+    const decorBlossoms = [];
+    CLOCK_WREATH_ANGLES.forEach((angle) => {
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('transform', `rotate(${angle} ${cx} ${cy})`);
+      const p = document.createElementNS(ns, 'path');
+      p.setAttribute('class', 'eph-clock-tendril');
+      p.setAttribute('d', CLOCK_TENDRIL_PATH);
+      g.appendChild(p);
+      const b = document.createElementNS(ns, 'circle');
+      b.setAttribute('class', 'eph-clock-blossom');
+      b.setAttribute('cx', String(CLOCK_TENDRIL_TIP.x));
+      b.setAttribute('cy', String(CLOCK_TENDRIL_TIP.y));
+      b.setAttribute('r', String(CLOCK_TENDRIL_TIP.r));
+      g.appendChild(b);
+      svg.appendChild(g);
+      decorPaths.push(p);
+      decorBlossoms.push(b);
     });
 
+    const face = document.createElementNS(ns, 'circle');
+    face.setAttribute('cx', String(cx)); face.setAttribute('cy', String(cy)); face.setAttribute('r', String(r));
+    face.setAttribute('class', 'eph-clock-face');
+    svg.appendChild(face);
+
+    const ticks = document.createElementNS(ns, 'g');
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+      const major = i % 3 === 0;
+      const outerR = r - 6;
+      const innerR = r - (major ? 18 : 11);
+      const line = document.createElementNS(ns, 'line');
+      line.setAttribute('x1', String(cx + Math.cos(a) * outerR));
+      line.setAttribute('y1', String(cy + Math.sin(a) * outerR));
+      line.setAttribute('x2', String(cx + Math.cos(a) * innerR));
+      line.setAttribute('y2', String(cy + Math.sin(a) * innerR));
+      line.setAttribute('class', major ? 'eph-clock-tick eph-clock-tick--major' : 'eph-clock-tick');
+      ticks.appendChild(line);
+    }
+    svg.appendChild(ticks);
+
+    function makeHand(cls) {
+      const line = document.createElementNS(ns, 'line');
+      line.setAttribute('class', `eph-clock-hand ${cls}`);
+      line.setAttribute('x1', String(cx)); line.setAttribute('y1', String(cy));
+      svg.appendChild(line);
+      return line;
+    }
+    const hourHand = makeHand('eph-clock-hand--hour');
+    const minuteHand = makeHand('eph-clock-hand--minute');
+    const secondHand = makeHand('eph-clock-hand--second');
+
+    const centerDot = document.createElementNS(ns, 'circle');
+    centerDot.setAttribute('cx', String(cx)); centerDot.setAttribute('cy', String(cy)); centerDot.setAttribute('r', '5');
+    centerDot.setAttribute('class', 'eph-clock-center');
+    svg.appendChild(centerDot);
+
+    function setHand(el, degrees, length) {
+      const rad = (degrees - 90) * Math.PI / 180;
+      el.setAttribute('x2', String(cx + Math.cos(rad) * length));
+      el.setAttribute('y2', String(cy + Math.sin(rad) * length));
+    }
+    function update() {
+      const now = new Date();
+      const h = (now.getHours() % 12) + now.getMinutes() / 60;
+      const m = now.getMinutes() + now.getSeconds() / 60;
+      const s = now.getSeconds();
+      setHand(hourHand, (h / 12) * 360, r * 0.5);
+      setHand(minuteHand, (m / 60) * 360, r * 0.74);
+      setHand(secondHand, (s / 60) * 360, r * 0.82);
+    }
+    update();
+
     // 一過性の一回きりの成長演出(常時アニメーションのパルスは使わない、CLAUDE.mdの
-    // モジュール意匠の方針に沿う)。stroke-dasharray/dashoffsetで手前から奥へ伸ばし、
-    // 終わったら静止した「咲いた」状態のまま残す。
+    // モジュール意匠の方針に沿う)。時針・分針・秒針は現在時刻を指し続けるため常時更新するが、
+    // これは「パルス」ではなく本物の時計として当然必要な更新(update()を外側から定期的に呼ぶ)。
     requestAnimationFrame(() => {
-      const len = path.getTotalLength();
-      path.style.strokeDasharray = String(len);
-      path.style.strokeDashoffset = String(len);
-      requestAnimationFrame(() => {
-        path.classList.add('grow');
-        path.style.strokeDashoffset = '0';
-        svg.querySelectorAll('.eph-vine-blossom').forEach((el) => el.classList.add('bloom'));
+      decorPaths.forEach((p) => {
+        const len = p.getTotalLength();
+        p.style.strokeDasharray = String(len);
+        p.style.strokeDashoffset = String(len);
+        requestAnimationFrame(() => {
+          p.classList.add('grow');
+          p.style.strokeDashoffset = '0';
+        });
+      });
+      decorBlossoms.forEach((b, i) => {
+        b.style.transitionDelay = `${0.4 + i * 0.08}s`;
+        requestAnimationFrame(() => b.classList.add('bloom'));
       });
     });
 
-    return svg;
+    return { svg, update };
   }
 
   /* ---------------- ログイン前フラッシュ(js/app.jsから呼ばれる) ---------------- */
 
   let flashEls = null;
+  // 丸時計の針を現在時刻へ合わせ続けるタイマー(フラッシュ表示中だけ動かす、非表示中は止める)。
+  let clockIntervalId = null;
 
   /** injectStyles()は本来openEphemeris()(小窓を開いた時)だけ呼べば足りるが、ログイン前
    *  フラッシュ(showEphemerisFlash())はサインイン前、つまりユーザーが一度もこのセッション中に
@@ -252,51 +298,53 @@
         <span class="eph-flash-kicker">EPHEMERIS</span>
         <button class="eph-flash-signin-btn" type="button">サインイン</button>
       </div>
-      <div class="eph-flash-mobile-tabs">
-        <button type="button" class="eph-flash-tab sel" data-tab="vine">つる</button>
-        <button type="button" class="eph-flash-tab" data-tab="timetable">タイムテーブル</button>
-      </div>
-      <div class="eph-flash-stage" data-active-tab="vine">
-        <div class="eph-flash-vine-wrap"></div>
+      <div class="eph-flash-stage">
+        <div class="eph-flash-clock-wrap"></div>
         <div class="eph-flash-timetable"></div>
       </div>
     `;
     document.body.appendChild(overlay);
+    // 丸時計はスケジュールの内容と無関係な純粋装飾のため、表示のたび作り直さず一度だけ組み立てる。
+    const clock = buildClockFace();
+    overlay.querySelector('.eph-flash-clock-wrap').appendChild(clock.svg);
     flashEls = {
       overlay,
       signinBtn: overlay.querySelector('.eph-flash-signin-btn'),
-      stage: overlay.querySelector('.eph-flash-stage'),
-      tabs: Array.from(overlay.querySelectorAll('.eph-flash-tab')),
-      vineWrap: overlay.querySelector('.eph-flash-vine-wrap'),
       timetable: overlay.querySelector('.eph-flash-timetable'),
+      clockUpdate: clock.update,
     };
     // 誤タップ防止の核心: サインインはこのボタン以外のどこをタップしても発生しない
-    // (花つる・タイムテーブル自体は装飾/読み取り専用で、クリックに一切反応しない)。
+    // (丸時計・タイムテーブル自体は装飾/読み取り専用で、サインインには一切反応しない)。
     flashEls.signinBtn.addEventListener('click', () => {
       flashEls.signinBtn.disabled = true;
       flashEls.signinBtn.textContent = 'サインイン中…';
       if (typeof soundAudioCtx === 'function') soundAudioCtx();
       if (typeof signIn === 'function') signIn();
     });
-    // スマホ幅専用の「つる」/「タイムテーブル」切り替えタブ(広い画面ではCSS側で常に非表示)。
-    flashEls.tabs.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        flashEls.stage.dataset.activeTab = btn.dataset.tab;
-        flashEls.tabs.forEach((b) => b.classList.toggle('sel', b === btn));
-      });
+    // ブロックごとのスクリーンショット開閉トグル(再描画のたび要素が差し替わるため委譲にする)。
+    flashEls.timetable.addEventListener('click', (e) => {
+      const btn = e.target.closest('.eph-flash-tt-img-toggle');
+      if (!btn) return;
+      btn.closest('.eph-flash-tt-item').classList.toggle('eph-flash-tt-item--open');
     });
   }
 
-  function renderFlashVine(schedules) {
-    flashEls.vineWrap.innerHTML = '';
-    // 同じ日に複数のスケジュールが登録されている稀なケースでは、先頭(一覧のソート順)の
-    // 花つる形状だけを表示する(タイムテーブルは全件並べて表示する、下記参照)。
-    const shape = (schedules[0] && schedules[0].vineShape) || 'mist';
-    flashEls.vineWrap.appendChild(buildVineSvg(shape));
+  /** "HH:MM"を当日0時からの分数へ変換する。不正な形式はnullを返す。 */
+  function timeStringToMinutes(time) {
+    if (!time) return null;
+    const parts = String(time).split(':');
+    if (parts.length !== 2) return null;
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
   }
 
   function renderFlashTimetable(schedules) {
     flashEls.timetable.innerHTML = '';
+    // 「現在の時刻に最も近いブロック」のハイライトは、スケジュール(=展覧会)ごとに独立して
+    // 判定する(複数のスケジュールが同日に並んでいても、互いの時刻を混ぜて比較しない)。
+    flashEls.nowHighlightGroups = [];
     schedules.forEach((sch) => {
       const block = document.createElement('div');
       block.className = 'eph-flash-tt-block';
@@ -308,22 +356,49 @@
       const list = document.createElement('div');
       list.className = 'eph-flash-tt-list';
       const rows = sch.timetable || [];
+      const group = [];
       rows.forEach((row, i) => {
         const item = document.createElement('div');
         item.className = 'eph-flash-tt-item';
         const timeHtml = row.time ? `<span class="eph-flash-tt-time">${escapeHtml(row.time)}</span>` : '';
         const images = resolveRowImages(sch, row, i === 0);
+        // 添付画像は既定で閉じておき、📷ボタンで開閉できるようにする(スクリーンショットが
+        // 多いとタイムテーブルが縦に長くなりすぎるための対応)。
+        const toggleHtml = images.length
+          ? `<button type="button" class="eph-flash-tt-img-toggle">📷 ${images.length}</button>`
+          : '';
         const imagesHtml = images.length
           ? `<div class="eph-flash-tt-item-images">${images.map((src) => `<img class="eph-flash-img" src="${escapeAttrLocal(src)}" alt="">`).join('')}</div>`
           : '';
-        item.innerHTML = `<div class="eph-flash-tt-item-main">${timeHtml}<span class="eph-flash-tt-text">${escapeHtml(row.text || '')}</span></div>${imagesHtml}`;
+        item.innerHTML = `<div class="eph-flash-tt-item-main">${timeHtml}<span class="eph-flash-tt-text">${escapeHtml(row.text || '')}</span>${toggleHtml}</div>${imagesHtml}`;
         list.appendChild(item);
+        const minutes = timeStringToMinutes(row.time);
+        if (minutes !== null) group.push({ el: item, minutes });
       });
       if (rows.length === 0) {
         list.innerHTML = '<p class="eph-flash-tt-empty">タイムテーブル未登録</p>';
       }
       block.appendChild(list);
       flashEls.timetable.appendChild(block);
+      if (group.length > 0) flashEls.nowHighlightGroups.push(group);
+    });
+  }
+
+  /** 各スケジュールのタイムテーブルのうち、現在時刻(端末のローカル時刻)に最も近い時刻の
+   *  ブロックだけを黄色系でハイライトする。DOMを再構築せずクラスの付け替えだけで行うため、
+   *  ブロック画像の開閉状態(上記トグル)を保ったまま、1秒おきに呼んでも安全。 */
+  function refreshNowHighlight() {
+    if (!flashEls || !flashEls.nowHighlightGroups) return;
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    flashEls.nowHighlightGroups.forEach((group) => {
+      let bestIdx = -1;
+      let bestDiff = Infinity;
+      group.forEach((t, i) => {
+        const diff = Math.abs(t.minutes - nowMin);
+        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+      });
+      group.forEach((t, i) => t.el.classList.toggle('eph-flash-tt-item--now', i === bestIdx));
     });
   }
 
@@ -331,17 +406,22 @@
     if (!flashEls) buildFlashDom();
     flashEls.signinBtn.disabled = false;
     flashEls.signinBtn.textContent = 'サインイン';
-    // 表示のたび「つる」タブへ戻す(前回タイムテーブル側を見ていた状態のまま次の表示に
-    // 持ち越さない、常に花つるの成長演出から始まる元々の体験を優先する)。
-    flashEls.stage.dataset.activeTab = 'vine';
-    flashEls.tabs.forEach((b) => b.classList.toggle('sel', b.dataset.tab === 'vine'));
-    renderFlashVine(schedules);
     renderFlashTimetable(schedules);
+    refreshNowHighlight();
     flashEls.overlay.classList.add('open');
+    // 丸時計の針を現在時刻へ即座に合わせてから、表示中だけ1秒おきに更新する
+    // (「現在に最も近いブロック」のハイライトも、日をまたがず表示し続けた場合に備え同じ頻度で追従させる)。
+    if (clockIntervalId) clearInterval(clockIntervalId);
+    flashEls.clockUpdate();
+    clockIntervalId = setInterval(() => {
+      flashEls.clockUpdate();
+      refreshNowHighlight();
+    }, 1000);
   }
 
   function hideEphemerisFlash() {
     if (flashEls) flashEls.overlay.classList.remove('open');
+    if (clockIntervalId) { clearInterval(clockIntervalId); clockIntervalId = null; }
   }
 
   /* ---------------- モジュール小窓(スケジュール管理) ---------------- */
@@ -464,7 +544,7 @@
       .eph-window {
         position: fixed; top: 18px; right: 18px; z-index: 115;
         width: min(86vw, 290px); max-height: calc(100vh - 36px); overflow-y: auto;
-        background: rgba(9, 13, 10, 0.95); border: 1px solid rgba(108, 242, 138, 0.35);
+        background: rgba(9, 13, 10, 0.95); border: 1px solid rgba(150, 240, 178, 0.4);
         border-radius: 14px; padding: 13px 13px 15px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
         display: none; opacity: 0; transform: scale(0.92) translateY(-6px);
         transition: opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
@@ -473,14 +553,14 @@
       .eph-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; cursor: grab; }
       .eph-top-label {
         font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em;
-        color: #b3f7c4; text-transform: uppercase;
+        color: #d7fbe3; text-transform: uppercase;
       }
       .eph-close {
         width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-        background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(108, 242, 138, 0.35);
+        background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(150, 240, 178, 0.4);
         color: rgba(255, 255, 255, 0.85); font-size: 11px; cursor: pointer; padding: 0;
       }
-      .eph-close:hover { background: rgba(108, 242, 138, 0.25); }
+      .eph-close:hover { background: rgba(150, 240, 178, 0.28); }
       .eph-empty { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.4); margin: 4px 0 12px; }
       .eph-row {
         display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -489,7 +569,6 @@
       }
       .eph-row-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
       .eph-row-date { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #eef2e6; flex: none; }
-      .eph-row-shape { flex: none; }
       .eph-row-label {
         font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px; color: rgba(255, 255, 255, 0.75);
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -499,7 +578,7 @@
         width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.18);
         background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 10px; cursor: pointer; padding: 0;
       }
-      .eph-row-edit:hover { border-color: rgba(108, 242, 138, 0.6); color: #fff; }
+      .eph-row-edit:hover { border-color: rgba(150, 240, 178, 0.65); color: #fff; }
       .eph-row-delete:hover { border-color: #b3402b; color: #ff8a70; }
       .eph-form { margin-top: 6px; border-top: 1px dashed rgba(255, 255, 255, 0.14); padding-top: 10px; }
       .eph-form-label {
@@ -521,18 +600,18 @@
         font-family: 'IBM Plex Mono', monospace; line-height: 1.5; margin-bottom: 6px;
       }
       .eph-tt-parse-btn {
-        width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px solid rgba(108, 242, 138, 0.4);
-        background: rgba(108, 242, 138, 0.12); color: #b3f7c4; font-family: 'Zen Kaku Gothic New', sans-serif;
+        width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px solid rgba(150, 240, 178, 0.45);
+        background: rgba(150, 240, 178, 0.14); color: #d7fbe3; font-family: 'Zen Kaku Gothic New', sans-serif;
         font-size: 10.5px; font-weight: 700; cursor: pointer; margin-bottom: 12px;
       }
-      .eph-tt-parse-btn:hover { background: rgba(108, 242, 138, 0.24); color: #fff; }
+      .eph-tt-parse-btn:hover { background: rgba(150, 240, 178, 0.26); color: #fff; }
       /* タイムテーブルの入力行(1ブロック=時刻+内容+画像複数枚)。 */
       .eph-tt-rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
       .eph-tt-row {
         padding: 7px; border-radius: 8px; background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
       }
-      .eph-tt-row.eph-tt-row-dragover { border-color: rgba(108, 242, 138, 0.85); background: rgba(108, 242, 138, 0.1); }
+      .eph-tt-row.eph-tt-row-dragover { border-color: rgba(150, 240, 178, 0.9); background: rgba(150, 240, 178, 0.12); }
       .eph-tt-row-main { display: flex; align-items: center; gap: 6px; }
       .eph-tt-row-time {
         width: 92px; flex: none; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px;
@@ -555,7 +634,7 @@
         background: none; color: rgba(255, 255, 255, 0.55); font-family: 'Zen Kaku Gothic New', sans-serif;
         font-size: 10px; cursor: pointer;
       }
-      .eph-tt-row-img-add:hover { border-color: rgba(108, 242, 138, 0.6); color: #fff; }
+      .eph-tt-row-img-add:hover { border-color: rgba(150, 240, 178, 0.65); color: #fff; }
       .eph-tt-row-img-item {
         position: relative; width: 46px; height: 46px; border-radius: 6px; overflow: hidden;
         background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.16);
@@ -571,21 +650,14 @@
         background: none; color: rgba(255, 255, 255, 0.7); font-family: 'Zen Kaku Gothic New', sans-serif;
         font-size: 10.5px; cursor: pointer; margin-bottom: 4px;
       }
-      .eph-tt-add-btn:hover { border-color: rgba(108, 242, 138, 0.55); color: #fff; }
-      .eph-shape-row { display: flex; gap: 6px; }
-      .eph-shape-btn {
-        flex: 1; padding: 8px 4px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.16);
-        background: none; color: rgba(255, 255, 255, 0.65); font-family: 'Zen Kaku Gothic New', sans-serif;
-        font-size: 10.5px; cursor: pointer; text-align: center;
-      }
-      .eph-shape-btn.sel { background: rgba(226, 167, 182, 0.22); border-color: rgba(226, 167, 182, 0.65); color: #fff; font-weight: 700; }
+      .eph-tt-add-btn:hover { border-color: rgba(150, 240, 178, 0.6); color: #fff; }
       .eph-form-actions { display: flex; gap: 8px; margin-top: 10px; }
       .eph-save-btn {
         flex: 1; padding: 9px 8px; border-radius: 8px; border: none;
-        background: #6cf28a; color: #06210f; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700;
+        background: #96f0b2; color: #0d2a18; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700;
         font-size: 11px; cursor: pointer;
       }
-      .eph-save-btn:hover { background: #8ff7a8; }
+      .eph-save-btn:hover { background: #b8f7cb; }
       .eph-cancel-btn {
         padding: 9px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2);
         background: none; color: rgba(255, 255, 255, 0.7); font-family: 'Zen Kaku Gothic New', sans-serif;
@@ -605,36 +677,49 @@
       .eph-flash-topbar {
         flex: none; display: flex; align-items: center; justify-content: space-between;
         padding: calc(14px + env(safe-area-inset-top, 0px)) 18px 12px;
-        border-bottom: 1px solid rgba(108, 242, 138, 0.22);
+        border-bottom: 1px solid rgba(150, 240, 178, 0.26);
       }
       .eph-flash-kicker {
         font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.28em; text-indent: 0.28em;
-        color: rgba(108, 242, 138, 0.8); text-transform: uppercase;
+        color: rgba(150, 240, 178, 0.85); text-transform: uppercase;
       }
       .eph-flash-signin-btn {
-        padding: 9px 20px; border-radius: 999px; border: 1px solid rgba(108, 242, 138, 0.5);
-        background: rgba(108, 242, 138, 0.14); color: #eef2e6; font-family: 'IBM Plex Mono', monospace;
+        padding: 9px 20px; border-radius: 999px; border: 1px solid rgba(150, 240, 178, 0.55);
+        background: rgba(150, 240, 178, 0.16); color: #eef2e6; font-family: 'IBM Plex Mono', monospace;
         font-size: 11.5px; letter-spacing: 0.05em; cursor: pointer;
         transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
       }
-      .eph-flash-signin-btn:hover { background: rgba(108, 242, 138, 0.26); border-color: rgba(108, 242, 138, 0.85); }
+      .eph-flash-signin-btn:hover { background: rgba(150, 240, 178, 0.3); border-color: rgba(150, 240, 178, 0.9); }
       .eph-flash-signin-btn:active { transform: scale(0.96); }
       .eph-flash-signin-btn:disabled { opacity: 0.6; cursor: default; }
-      /* スマホ画面での「つる」/「タイムテーブル」切り替えタブ(2026年9月追加)。
-         広い画面では常に両方並べて表示するため、このタブ自体を非表示にする(下記メディアクエリ参照)。 */
-      .eph-flash-mobile-tabs { display: none; justify-content: center; gap: 10px; padding: 10px 18px 0; }
-      .eph-flash-tab {
-        padding: 6px 16px; border-radius: 999px; border: 1px solid rgba(108, 242, 138, 0.3);
-        background: rgba(108, 242, 138, 0.06); color: rgba(238, 242, 230, 0.55);
-        font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.04em; cursor: pointer;
-      }
-      .eph-flash-tab.sel { background: rgba(108, 242, 138, 0.26); color: #eef2e6; border-color: rgba(108, 242, 138, 0.75); }
       .eph-flash-stage {
         flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
         gap: 22px; padding: 20px; overflow: auto;
       }
-      .eph-flash-vine-wrap { width: min(66vw, 320px); flex: none; }
-      .eph-vine-svg { width: 100%; height: auto; display: block; }
+      /* 植物で装飾された丸時計(スケジュールの内容は反映しない、純粋な装飾)。 */
+      .eph-flash-clock-wrap { width: min(46vw, 200px); flex: none; }
+      .eph-clock-svg { width: 100%; height: auto; display: block; }
+      .eph-clock-face { fill: none; stroke: rgba(150, 240, 178, 0.75); stroke-width: 2.4; }
+      .eph-clock-tick { stroke: rgba(150, 240, 178, 0.5); stroke-width: 1.6; }
+      .eph-clock-tick--major { stroke: rgba(150, 240, 178, 0.85); stroke-width: 2.4; }
+      .eph-clock-hand { stroke-linecap: round; }
+      .eph-clock-hand--hour { stroke: #eef2e6; stroke-width: 4.2; }
+      .eph-clock-hand--minute { stroke: #eef2e6; stroke-width: 2.6; }
+      .eph-clock-hand--second { stroke: #e2a7b6; stroke-width: 1.4; }
+      .eph-clock-center { fill: #eef2e6; }
+      .eph-clock-tendril {
+        fill: none; stroke: rgba(150, 240, 178, 0.85); stroke-width: 2.4; stroke-linecap: round;
+        filter: drop-shadow(0 0 4px rgba(150, 240, 178, 0.4));
+      }
+      .eph-clock-tendril.grow { transition: stroke-dashoffset 1.3s cubic-bezier(0.3, 0.7, 0.2, 1); }
+      .eph-clock-blossom { fill: #e2a7b6; opacity: 0; transform-origin: center; transform: scale(0.3); }
+      .eph-clock-blossom.bloom {
+        transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.3, 1.4, 0.4, 1);
+        opacity: 1; transform: scale(1);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .eph-clock-tendril.grow, .eph-clock-blossom { transition: none !important; }
+      }
       .eph-flash-timetable { width: min(88vw, 320px); display: flex; flex-direction: column; gap: 18px; }
       .eph-flash-tt-label {
         margin: 0 0 8px; font-family: 'Fraunces', serif; font-size: 15px; color: #eef2e6; letter-spacing: 0.02em;
@@ -642,55 +727,38 @@
       .eph-flash-tt-list { display: flex; flex-direction: column; gap: 8px; }
       .eph-flash-tt-item {
         display: flex; flex-direction: column; gap: 8px;
-        padding: 7px 10px; border-radius: 8px; background: rgba(108, 242, 138, 0.08); border: 1px solid rgba(108, 242, 138, 0.18);
+        padding: 7px 10px; border-radius: 8px; background: rgba(150, 240, 178, 0.09); border: 1px solid rgba(150, 240, 178, 0.22);
+        transition: background 0.3s ease, border-color 0.3s ease;
       }
+      /* 「現在の時刻に最も近いブロック」のハイライト(2026年9月追加、黄色系)。 */
+      .eph-flash-tt-item--now {
+        background: rgba(255, 214, 84, 0.16); border-color: rgba(255, 214, 84, 0.7);
+        box-shadow: 0 0 14px rgba(255, 214, 84, 0.18);
+      }
+      .eph-flash-tt-item--now .eph-flash-tt-time { color: #ffe066; }
       .eph-flash-tt-item-main {
         display: flex; gap: 10px; align-items: baseline;
         font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: rgba(238, 242, 230, 0.85);
       }
-      .eph-flash-tt-time { color: #b3f7c4; flex: none; }
+      .eph-flash-tt-time { color: #d7fbe3; flex: none; }
       .eph-flash-tt-text { flex: 1; font-family: 'Zen Kaku Gothic New', sans-serif; }
       .eph-flash-tt-empty { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.35); }
-      /* ブロックごとのマップ・時刻表などのスクリーンショット。文字が読めることを優先し、
-         小さいサムネイルではなく画面幅に近い大きさで並べる。 */
-      .eph-flash-tt-item-images { display: flex; flex-direction: column; gap: 10px; }
+      /* ブロックごとのマップ・時刻表などのスクリーンショット。既定は閉じておき、📷ボタンで開閉する
+         (2026年9月変更: 常時表示だとスクリーンショットが多い時にタイムテーブルが長くなりすぎるため)。 */
+      .eph-flash-tt-img-toggle {
+        margin-left: auto; flex: none; padding: 3px 10px; border-radius: 999px;
+        border: 1px solid rgba(150, 240, 178, 0.45); background: rgba(150, 240, 178, 0.12);
+        color: #d7fbe3; font-family: 'IBM Plex Mono', monospace; font-size: 10px; cursor: pointer;
+      }
+      .eph-flash-tt-img-toggle:hover { background: rgba(150, 240, 178, 0.24); }
+      .eph-flash-tt-item-images { display: none; flex-direction: column; gap: 10px; }
+      .eph-flash-tt-item--open .eph-flash-tt-item-images { display: flex; }
       .eph-flash-img {
         display: block; width: 100%; max-width: 340px; border-radius: 10px;
-        border: 1px solid rgba(108, 242, 138, 0.28); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
-      }
-
-      /* ---- 花つる本体(一過性の成長演出、常時パルスなし) ---- */
-      .eph-vine-path {
-        fill: none; stroke: #6cf28a; stroke-width: 3.2; stroke-linecap: round;
-        filter: drop-shadow(0 0 6px rgba(108, 242, 138, 0.4));
-      }
-      .eph-vine-path.grow { transition: stroke-dashoffset 2.4s cubic-bezier(0.3, 0.7, 0.2, 1); }
-      .eph-vine-blossom { fill: #e2a7b6; opacity: 0; transform-origin: center; transform: scale(0.3); }
-      .eph-vine-blossom.bloom {
-        transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.3, 1.4, 0.4, 1);
-        opacity: 1; transform: scale(1);
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .eph-vine-path.grow, .eph-vine-blossom { transition: none !important; }
-      }
-
-      /* スマホ幅: 「つる」「タイムテーブル」を同時表示せず、タブで切り替える
-         (ユーザー要望: 狭い画面では両方並べると窮屈になるため)。 */
-      @media (max-width: 680px) {
-        .eph-flash-mobile-tabs { display: flex; }
-        .eph-flash-stage { flex-direction: column; }
-        .eph-flash-vine-wrap, .eph-flash-timetable { display: none; width: 100%; }
-        .eph-flash-stage[data-active-tab="vine"] .eph-flash-vine-wrap { display: block; }
-        .eph-flash-stage[data-active-tab="timetable"] .eph-flash-timetable { display: flex; }
+        border: 1px solid rgba(150, 240, 178, 0.32); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
       }
     `;
     document.head.appendChild(style);
-  }
-
-  function setShapeSelection(shape) {
-    selectedShape = shape;
-    if (!epEls) return;
-    epEls.shapeBtns.forEach((b) => b.classList.toggle('sel', b.dataset.shape === shape));
   }
 
   function resetForm() {
@@ -701,7 +769,6 @@
     formTimetable = [{ time: '', text: '', images: [] }]; // 最初から1行出しておく(「+行を追加」を押す手間を省く)
     formTimetableFocusedIndex = 0;
     renderTimetableRows();
-    setShapeSelection('mist');
     epEls.saveBtn.textContent = '登録する';
     epEls.cancelBtn.hidden = true;
   }
@@ -719,7 +786,6 @@
       : [{ time: '', text: '', images: [] }];
     formTimetableFocusedIndex = 0;
     renderTimetableRows();
-    setShapeSelection(s.vineShape || 'mist');
     epEls.saveBtn.textContent = '更新する';
     epEls.cancelBtn.hidden = false;
   }
@@ -734,12 +800,9 @@
     schedules.forEach((s) => {
       const row = document.createElement('div');
       row.className = 'eph-row';
-      const shapeIcon = s.vineShape === 'wall' ? '🧱' : '🌫';
-      const shapeTitle = s.vineShape === 'wall' ? '壁つる' : '霧に向かうつる';
       row.innerHTML = `
         <div class="eph-row-main">
           <span class="eph-row-date">${escapeHtml(s.date || '')}</span>
-          <span class="eph-row-shape" title="${shapeTitle}">${shapeIcon}</span>
           <span class="eph-row-label">${escapeHtml(s.label || '(無題)')}</span>
         </div>
         <div class="eph-row-btns">
@@ -764,10 +827,10 @@
     const schedules = getSchedules();
     if (editingId) {
       const s = schedules.find((x) => x.id === editingId);
-      if (s) { s.date = date; s.label = label; s.timetable = timetable; s.vineShape = selectedShape; delete s.images; }
+      if (s) { s.date = date; s.label = label; s.timetable = timetable; delete s.images; delete s.vineShape; }
     } else {
       schedules.push({
-        id: crypto.randomUUID(), date, label, timetable, vineShape: selectedShape,
+        id: crypto.randomUUID(), date, label, timetable,
         createdAt: new Date().toISOString(),
       });
     }
@@ -807,18 +870,13 @@
         <p class="eph-form-label">タイムテーブル(ブロックごとに時刻・内容・画像を持てます)</p>
         <div class="eph-tt-rows"></div>
         <button type="button" class="eph-tt-add-btn">+ 行を追加</button>
-        <p class="eph-form-label">花つるの形状</p>
-        <div class="eph-shape-row">
-          <button class="eph-shape-btn" data-shape="mist">🌫 霧に向かうつる</button>
-          <button class="eph-shape-btn" data-shape="wall">🧱 壁つる</button>
-        </div>
         <div class="eph-form-actions">
           <button class="eph-cancel-btn" hidden>キャンセル</button>
           <button class="eph-save-btn">登録する</button>
         </div>
       </div>
       <p class="eph-hint">
-        施行日当日、サインイン前の画面いっぱいに花つるとタイムテーブルが現れます(誤タップ防止のため、
+        施行日当日、サインイン前の画面いっぱいに丸時計とタイムテーブルが現れます(誤タップ防止のため、
         その日はサインインボタンを別途タップする必要があります)。スケジュールは手動で削除するまで
         (過去の日付になっても)一覧に残ります。
       </p>
@@ -835,7 +893,6 @@
       timetableAddBtn: win.querySelector('.eph-tt-add-btn'),
       timetablePasteInput: win.querySelector('.eph-tt-paste-input'),
       timetableParseBtn: win.querySelector('.eph-tt-parse-btn'),
-      shapeBtns: Array.from(win.querySelectorAll('.eph-shape-btn')),
       saveBtn: win.querySelector('.eph-save-btn'),
       cancelBtn: win.querySelector('.eph-cancel-btn'),
     };
@@ -852,7 +909,6 @@
     });
 
     epEls.closeBtn.addEventListener('click', closeEphemeris);
-    epEls.shapeBtns.forEach((b) => b.addEventListener('click', () => setShapeSelection(b.dataset.shape)));
     epEls.saveBtn.addEventListener('click', handleSaveClick);
     epEls.cancelBtn.addEventListener('click', resetForm);
 
