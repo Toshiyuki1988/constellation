@@ -41,6 +41,17 @@
 // 別の端末で花つるフラッシュを見るには、その端末でも一度サインインしてこのモジュールを
 // 開く(=Driveから読み込んでミラーが作られる)必要がある。個人利用・単一主端末を前提にした
 // 割り切りとして許容する(既存のアップロード待機列IndexedDB等、同種の割り切りが他にもある)。
+//
+// 【2026年9月の追加改修】
+//   - 外部AI(旅程作成チャット等)が出力した「HH:MM 内容」形式のフリーテキストをそのまま
+//     貼り付けて解析し、ブロック単位の入力行へ変換できるようにした(parseTimetableFreetext())。
+//     手動のブロック編集自体は残しており、解析結果は既存の行へ追記される。
+//   - スクリーンショット(マップ・時刻表など)はスケジュール単位ではなく、タイムテーブルの
+//     ブロック単位(`row.images`)で複数枚持てるように変更した。旧形式(スケジュール単位の
+//     `schedule.images`)は初回読み込み時にmigrateLegacyScheduleImages()で1回だけ移行する。
+//   - ログイン前フラッシュはスマホ幅(680px以下)で「つる」/「タイムテーブル」をタブで
+//     切り替える表示に変更した(それより広い画面では従来通り両方を並べて表示する)。
+//   - UIの配色をMapping Storysの緑と被らないよう、より明るい緑(#6cf28a系)に変更した。
 
 (function () {
   'use strict';
@@ -51,12 +62,13 @@
   let stylesInjected = false;
   let editingId = null; // null = 新規登録フォーム
   let selectedShape = 'mist';
-  // フォームで添付中のスクリーンショット(マップ・時刻表など、dataURL文字列の配列)。
-  // 新規登録・編集は同じ1つのフォームを使い回すため、状態も1つで足りる(resetForm()/startEdit()参照)。
-  let formImages = [];
-  // タイムテーブルの入力行(2026年9月、フリーテキストからブロック単位の入力へ変更)。
-  // 各要素は{time, text}で、そのままschedule.timetableへ保存する(データモデル自体は不変)。
+  // タイムテーブルの入力行。各要素は{time, text, images}で、そのままschedule.timetableへ保存する。
+  // スクリーンショット(マップ・時刻表など)は2026年9月にスケジュール単位からブロック単位へ変更した
+  // (「そのブロックごとにマップ、時刻表などのスクショを複数登録できるようにして」というユーザー要望)。
   let formTimetable = [];
+  // フォーカス中(最後に触れた)行。クリップボード貼り付け(win全体のpasteイベント)がどの行の
+  // 画像として追加されるかを決めるために使う(貼り付け自体には対象を選ぶUIが無いため)。
+  let formTimetableFocusedIndex = 0;
 
   let ephemerisDataLoaded = false;
   let ephemerisDataLoadPromise = null;
@@ -104,6 +116,9 @@
       const { fileId, data } = await loadNamedData(state.folderId, CONFIG.EPHEMERIS_FILE_NAME);
       state.ephemerisFileId = fileId || null;
       state.ephemerisSchedules = (data && Array.isArray(data.schedules)) ? data.schedules : [];
+      // 旧形式(スケジュール単位の`images`)を読み込んだ場合、ブロック単位の`row.images`へ
+      // 一度だけ移行する(下記migrateLegacyScheduleImages()参照)。次回保存時にDrive側にも反映される。
+      state.ephemerisSchedules.forEach(migrateLegacyScheduleImages);
       // 他端末で登録・編集された分もこのタイミングで端末側キャッシュへ反映しておく
       // (このモジュールを開いた端末でだけ、以降のログイン前フラッシュが追従する)。
       mirrorToLocalCache();
@@ -237,7 +252,11 @@
         <span class="eph-flash-kicker">EPHEMERIS</span>
         <button class="eph-flash-signin-btn" type="button">サインイン</button>
       </div>
-      <div class="eph-flash-stage">
+      <div class="eph-flash-mobile-tabs">
+        <button type="button" class="eph-flash-tab sel" data-tab="vine">つる</button>
+        <button type="button" class="eph-flash-tab" data-tab="timetable">タイムテーブル</button>
+      </div>
+      <div class="eph-flash-stage" data-active-tab="vine">
         <div class="eph-flash-vine-wrap"></div>
         <div class="eph-flash-timetable"></div>
       </div>
@@ -246,6 +265,8 @@
     flashEls = {
       overlay,
       signinBtn: overlay.querySelector('.eph-flash-signin-btn'),
+      stage: overlay.querySelector('.eph-flash-stage'),
+      tabs: Array.from(overlay.querySelectorAll('.eph-flash-tab')),
       vineWrap: overlay.querySelector('.eph-flash-vine-wrap'),
       timetable: overlay.querySelector('.eph-flash-timetable'),
     };
@@ -256,6 +277,13 @@
       flashEls.signinBtn.textContent = 'サインイン中…';
       if (typeof soundAudioCtx === 'function') soundAudioCtx();
       if (typeof signIn === 'function') signIn();
+    });
+    // スマホ幅専用の「つる」/「タイムテーブル」切り替えタブ(広い画面ではCSS側で常に非表示)。
+    flashEls.tabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        flashEls.stage.dataset.activeTab = btn.dataset.tab;
+        flashEls.tabs.forEach((b) => b.classList.toggle('sel', b === btn));
+      });
     });
   }
 
@@ -277,26 +305,21 @@
       label.textContent = sch.label || '(無題)';
       block.appendChild(label);
 
-      // マップ・時刻表などのスクリーンショット(sch.images)。文脈上、時刻の文字情報より先に
-      // 目に入る位置(タイムテーブルの上)に置く。
-      const images = sch.images || [];
-      if (images.length > 0) {
-        const gallery = document.createElement('div');
-        gallery.className = 'eph-flash-images';
-        gallery.innerHTML = images.map((src) => `<img class="eph-flash-img" src="${escapeAttrLocal(src)}" alt="">`).join('');
-        block.appendChild(gallery);
-      }
-
       const list = document.createElement('div');
       list.className = 'eph-flash-tt-list';
-      (sch.timetable || []).forEach((row) => {
+      const rows = sch.timetable || [];
+      rows.forEach((row, i) => {
         const item = document.createElement('div');
         item.className = 'eph-flash-tt-item';
         const timeHtml = row.time ? `<span class="eph-flash-tt-time">${escapeHtml(row.time)}</span>` : '';
-        item.innerHTML = `${timeHtml}<span class="eph-flash-tt-text">${escapeHtml(row.text || '')}</span>`;
+        const images = resolveRowImages(sch, row, i === 0);
+        const imagesHtml = images.length
+          ? `<div class="eph-flash-tt-item-images">${images.map((src) => `<img class="eph-flash-img" src="${escapeAttrLocal(src)}" alt="">`).join('')}</div>`
+          : '';
+        item.innerHTML = `<div class="eph-flash-tt-item-main">${timeHtml}<span class="eph-flash-tt-text">${escapeHtml(row.text || '')}</span></div>${imagesHtml}`;
         list.appendChild(item);
       });
-      if ((sch.timetable || []).length === 0) {
+      if (rows.length === 0) {
         list.innerHTML = '<p class="eph-flash-tt-empty">タイムテーブル未登録</p>';
       }
       block.appendChild(list);
@@ -308,6 +331,10 @@
     if (!flashEls) buildFlashDom();
     flashEls.signinBtn.disabled = false;
     flashEls.signinBtn.textContent = 'サインイン';
+    // 表示のたび「つる」タブへ戻す(前回タイムテーブル側を見ていた状態のまま次の表示に
+    // 持ち越さない、常に花つるの成長演出から始まる元々の体験を優先する)。
+    flashEls.stage.dataset.activeTab = 'vine';
+    flashEls.tabs.forEach((b) => b.classList.toggle('sel', b.dataset.tab === 'vine'));
     renderFlashVine(schedules);
     renderFlashTimetable(schedules);
     flashEls.overlay.classList.add('open');
@@ -323,6 +350,51 @@
     return (a.date || '').localeCompare(b.date || '');
   }
 
+  /** 旧形式(`schedule.images`、スケジュール単位のスクリーンショット配列)を、ブロック単位の
+   *  `row.images`へ一度だけ移行する。移行先が無い(タイムテーブルが空)場合は、画像だけを
+   *  保持する無題のブロックを1つ作る。既に新形式のスケジュールには何もしない。 */
+  function migrateLegacyScheduleImages(s) {
+    if (!Array.isArray(s.timetable)) s.timetable = [];
+    s.timetable.forEach((row) => { if (!Array.isArray(row.images)) row.images = []; });
+    if (Array.isArray(s.images) && s.images.length) {
+      if (s.timetable.length === 0) {
+        s.timetable.push({ time: '', text: '', images: s.images.slice() });
+      } else {
+        s.timetable[0].images = (s.timetable[0].images || []).concat(s.images);
+      }
+    }
+    delete s.images;
+  }
+
+  /** ログイン前フラッシュ(localStorageミラー経由)は、この更新より前に保存された旧形式の
+   *  キャッシュを読む可能性があるため、表示側でも同じフォールバックを非破壊的に行う。 */
+  function resolveRowImages(sch, row, isFirstRow) {
+    const own = Array.isArray(row.images) ? row.images : [];
+    if (own.length) return own;
+    if (isFirstRow && Array.isArray(sch.images) && sch.images.length) return sch.images;
+    return [];
+  }
+
+  /** 「HH:MM 内容」形式のフリーテキスト(外部AIが作った旅程・タイムテーブルのコピペを想定)を
+   *  行ごとに解析し、ブロック(`{time, text}`)の配列へ変換する。時刻が見つからない行は
+   *  時刻欄を空欄のまま内容として取り込む(丸ごと捨てない)。空行はスキップする。 */
+  function parseTimetableFreetext(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    const rows = [];
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      const m = line.match(/^[-・*●○]?\s*(\d{1,2}:\d{2})(?:\s*[~\-〜–—]\s*\d{1,2}:\d{2})?\s*[:：]?\s*(.*)$/);
+      if (m) {
+        const [h, mm] = m[1].split(':');
+        rows.push({ time: `${h.padStart(2, '0')}:${mm}`, text: m[2].trim(), images: [] });
+      } else {
+        rows.push({ time: '', text: line, images: [] });
+      }
+    }
+    return rows;
+  }
+
   /** タイムテーブルの1行を「時刻(空欄可)+内容」のブロックとして描き直す(2026年9月、
    *  フリーテキスト入力からブロック単位の入力へ変更)。formTimetableの各要素を直接書き換える
    *  ため、input/changeイベントはコンテナへの委譲(buildDom()参照)で拾う。 */
@@ -330,15 +402,26 @@
     if (!epEls) return;
     epEls.timetableRows.innerHTML = formTimetable.map((row, i) => `
       <div class="eph-tt-row" data-index="${i}">
-        <input type="time" class="eph-tt-row-time" value="${escapeAttrLocal(row.time || '')}">
-        <input type="text" class="eph-tt-row-text" placeholder="内容(例: 開館・受付)" value="${escapeAttrLocal(row.text || '')}">
-        <button type="button" class="eph-tt-row-remove" title="この行を削除">✕</button>
+        <div class="eph-tt-row-main">
+          <input type="time" class="eph-tt-row-time" value="${escapeAttrLocal(row.time || '')}">
+          <input type="text" class="eph-tt-row-text" placeholder="内容(例: 開館・受付)" value="${escapeAttrLocal(row.text || '')}">
+          <button type="button" class="eph-tt-row-remove" title="この行を削除">✕</button>
+        </div>
+        <div class="eph-tt-row-images">
+          <button type="button" class="eph-tt-row-img-add">📷 画像を追加</button>
+          ${(row.images || []).map((src, j) => (
+            `<div class="eph-tt-row-img-item">`
+            + `<img src="${escapeAttrLocal(src)}" alt="">`
+            + `<button type="button" class="eph-tt-row-img-remove" data-remove-image="${j}" title="削除">✕</button>`
+            + '</div>'
+          )).join('')}
+        </div>
       </div>
     `).join('');
   }
 
   function addTimetableRow(focus) {
-    formTimetable.push({ time: '', text: '' });
+    formTimetable.push({ time: '', text: '', images: [] });
     renderTimetableRows();
     if (focus) {
       const rows = epEls.timetableRows.querySelectorAll('.eph-tt-row-text');
@@ -347,27 +430,31 @@
     }
   }
 
-  /** ドロップ/選択/貼り付けされた画像ファイル(複数可)を、OCRなどの加工を挟まず**そのまま**
-   *  formImagesへ追加する(マップ・時刻表のスクリーンショットは文字が読めることが重要なため、
-   *  Almagestの本文貼り付け画像と同じくgenerateThumbnail()で長辺を保ちつつ縮小するだけに留める)。 */
-  async function applyImageFiles(files) {
+  /** ドロップ/選択/貼り付けされた画像ファイル(複数可)を、OCRなどの加工を挟まず**そのまま**、
+   *  指定したブロック(行)へ追加する(マップ・時刻表のスクリーンショットは文字が読めることが
+   *  重要なため、Almagestの本文貼り付け画像と同じくgenerateThumbnail()で長辺を保ちつつ縮小するだけに留める)。 */
+  async function applyRowImageFiles(rowIndex, files) {
+    const row = formTimetable[rowIndex];
+    if (!row) return;
+    if (!Array.isArray(row.images)) row.images = [];
     for (const file of files) {
       if (!file.type || !file.type.startsWith('image/')) continue;
       const dataUrl = await generateThumbnail(file, 1000, 0.8);
-      if (dataUrl) formImages.push(dataUrl);
+      if (dataUrl) row.images.push(dataUrl);
     }
-    renderFormImagesGallery();
+    renderTimetableRows();
   }
 
-  function renderFormImagesGallery() {
-    if (!epEls) return;
-    epEls.imageGallery.hidden = formImages.length === 0;
-    epEls.imageGallery.innerHTML = formImages.map((src, i) => (
-      `<div class="eph-image-item">`
-      + `<img src="${escapeAttrLocal(src)}" alt="">`
-      + `<button type="button" class="eph-image-remove" data-remove-index="${i}" title="削除">✕</button>`
-      + '</div>'
-    )).join('');
+  function triggerRowImagePicker(rowIndex) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.addEventListener('change', () => {
+      const files = Array.from(input.files || []);
+      if (files.length) applyRowImageFiles(rowIndex, files);
+    });
+    input.click();
   }
 
   function injectStyles() {
@@ -377,7 +464,7 @@
       .eph-window {
         position: fixed; top: 18px; right: 18px; z-index: 115;
         width: min(86vw, 290px); max-height: calc(100vh - 36px); overflow-y: auto;
-        background: rgba(9, 13, 10, 0.95); border: 1px solid rgba(127, 174, 122, 0.35);
+        background: rgba(9, 13, 10, 0.95); border: 1px solid rgba(108, 242, 138, 0.35);
         border-radius: 14px; padding: 13px 13px 15px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
         display: none; opacity: 0; transform: scale(0.92) translateY(-6px);
         transition: opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
@@ -386,14 +473,14 @@
       .eph-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; cursor: grab; }
       .eph-top-label {
         font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.1em;
-        color: #a9d1a4; text-transform: uppercase;
+        color: #b3f7c4; text-transform: uppercase;
       }
       .eph-close {
         width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-        background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(127, 174, 122, 0.35);
+        background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(108, 242, 138, 0.35);
         color: rgba(255, 255, 255, 0.85); font-size: 11px; cursor: pointer; padding: 0;
       }
-      .eph-close:hover { background: rgba(127, 174, 122, 0.25); }
+      .eph-close:hover { background: rgba(108, 242, 138, 0.25); }
       .eph-empty { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.4); margin: 4px 0 12px; }
       .eph-row {
         display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -412,22 +499,41 @@
         width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.18);
         background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 10px; cursor: pointer; padding: 0;
       }
-      .eph-row-edit:hover { border-color: rgba(127, 174, 122, 0.6); color: #fff; }
+      .eph-row-edit:hover { border-color: rgba(108, 242, 138, 0.6); color: #fff; }
       .eph-row-delete:hover { border-color: #b3402b; color: #ff8a70; }
       .eph-form { margin-top: 6px; border-top: 1px dashed rgba(255, 255, 255, 0.14); padding-top: 10px; }
       .eph-form-label {
         margin: 8px 0 4px; font-family: 'IBM Plex Mono', monospace; font-size: 8.5px;
         letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255, 255, 255, 0.45);
       }
-      .eph-date-input, .eph-label-input, .eph-timetable-input {
+      .eph-date-input, .eph-label-input {
         width: 100%; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px;
         padding: 6px 8px; font-size: 11px; background: rgba(255, 255, 255, 0.06); color: #fff;
         font-family: 'Zen Kaku Gothic New', sans-serif;
       }
       .eph-date-input { color-scheme: dark; }
-      /* タイムテーブルの入力行(2026年9月、フリーテキストからブロック単位の入力へ変更)。 */
-      .eph-tt-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
-      .eph-tt-row { display: flex; align-items: center; gap: 6px; }
+      /* 外部AIの旅程・タイムテーブルをそのまま貼り付けて解析する欄(2026年9月追加)。
+         解析結果はブロック単位の入力行(下記)へ追記される。 */
+      .eph-tt-paste-input {
+        width: 100%; box-sizing: border-box; resize: vertical; min-height: 52px;
+        border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px; padding: 6px 8px;
+        font-size: 10.5px; background: rgba(255, 255, 255, 0.06); color: #fff;
+        font-family: 'IBM Plex Mono', monospace; line-height: 1.5; margin-bottom: 6px;
+      }
+      .eph-tt-parse-btn {
+        width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px solid rgba(108, 242, 138, 0.4);
+        background: rgba(108, 242, 138, 0.12); color: #b3f7c4; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10.5px; font-weight: 700; cursor: pointer; margin-bottom: 12px;
+      }
+      .eph-tt-parse-btn:hover { background: rgba(108, 242, 138, 0.24); color: #fff; }
+      /* タイムテーブルの入力行(1ブロック=時刻+内容+画像複数枚)。 */
+      .eph-tt-rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
+      .eph-tt-row {
+        padding: 7px; border-radius: 8px; background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .eph-tt-row.eph-tt-row-dragover { border-color: rgba(108, 242, 138, 0.85); background: rgba(108, 242, 138, 0.1); }
+      .eph-tt-row-main { display: flex; align-items: center; gap: 6px; }
       .eph-tt-row-time {
         width: 92px; flex: none; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px;
         padding: 6px 6px; font-size: 10.5px; background: rgba(255, 255, 255, 0.06); color: #fff;
@@ -443,34 +549,29 @@
         background: transparent; color: rgba(255, 255, 255, 0.55); font-size: 10px; cursor: pointer; padding: 0;
       }
       .eph-tt-row-remove:hover { border-color: #b3402b; color: #ff8a70; }
+      .eph-tt-row-images { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
+      .eph-tt-row-img-add {
+        padding: 6px 8px; border-radius: 7px; border: 1px dashed rgba(255, 255, 255, 0.24);
+        background: none; color: rgba(255, 255, 255, 0.55); font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10px; cursor: pointer;
+      }
+      .eph-tt-row-img-add:hover { border-color: rgba(108, 242, 138, 0.6); color: #fff; }
+      .eph-tt-row-img-item {
+        position: relative; width: 46px; height: 46px; border-radius: 6px; overflow: hidden;
+        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.16);
+      }
+      .eph-tt-row-img-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .eph-tt-row-img-remove {
+        position: absolute; top: 1px; right: 1px; width: 15px; height: 15px; border-radius: 50%;
+        border: none; background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 9px; line-height: 1; cursor: pointer; padding: 0;
+      }
+      .eph-tt-row-img-remove:hover { background: rgba(0, 0, 0, 0.85); }
       .eph-tt-add-btn {
         width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px dashed rgba(255, 255, 255, 0.22);
         background: none; color: rgba(255, 255, 255, 0.7); font-family: 'Zen Kaku Gothic New', sans-serif;
         font-size: 10.5px; cursor: pointer; margin-bottom: 4px;
       }
-      .eph-tt-add-btn:hover { border-color: rgba(127, 174, 122, 0.55); color: #fff; }
-      .eph-image-drop {
-        display: flex; align-items: center; justify-content: center; text-align: center;
-        min-height: 56px; padding: 8px; border-radius: 8px; border: 1px dashed rgba(255, 255, 255, 0.22);
-        color: rgba(255, 255, 255, 0.4); font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 10.5px;
-        line-height: 1.5; cursor: pointer;
-      }
-      .eph-image-drop:hover { border-color: rgba(127, 174, 122, 0.55); color: rgba(255, 255, 255, 0.65); }
-      .eph-image-drop.eph-image-dragover {
-        border-color: rgba(127, 174, 122, 0.9); background: rgba(127, 174, 122, 0.1);
-        color: #fff;
-      }
-      .eph-image-gallery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-      .eph-image-item {
-        position: relative; width: 72px; height: 72px; border-radius: 6px; overflow: hidden;
-        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.16);
-      }
-      .eph-image-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .eph-image-remove {
-        position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%;
-        border: none; background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
-      }
-      .eph-image-remove:hover { background: rgba(0, 0, 0, 0.85); }
+      .eph-tt-add-btn:hover { border-color: rgba(108, 242, 138, 0.55); color: #fff; }
       .eph-shape-row { display: flex; gap: 6px; }
       .eph-shape-btn {
         flex: 1; padding: 8px 4px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.16);
@@ -481,10 +582,10 @@
       .eph-form-actions { display: flex; gap: 8px; margin-top: 10px; }
       .eph-save-btn {
         flex: 1; padding: 9px 8px; border-radius: 8px; border: none;
-        background: #7fae7a; color: #0a140c; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700;
+        background: #6cf28a; color: #06210f; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700;
         font-size: 11px; cursor: pointer;
       }
-      .eph-save-btn:hover { background: #94c28e; }
+      .eph-save-btn:hover { background: #8ff7a8; }
       .eph-cancel-btn {
         padding: 9px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2);
         background: none; color: rgba(255, 255, 255, 0.7); font-family: 'Zen Kaku Gothic New', sans-serif;
@@ -504,21 +605,30 @@
       .eph-flash-topbar {
         flex: none; display: flex; align-items: center; justify-content: space-between;
         padding: calc(14px + env(safe-area-inset-top, 0px)) 18px 12px;
-        border-bottom: 1px solid rgba(127, 174, 122, 0.22);
+        border-bottom: 1px solid rgba(108, 242, 138, 0.22);
       }
       .eph-flash-kicker {
         font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.28em; text-indent: 0.28em;
-        color: rgba(127, 174, 122, 0.75); text-transform: uppercase;
+        color: rgba(108, 242, 138, 0.8); text-transform: uppercase;
       }
       .eph-flash-signin-btn {
-        padding: 9px 20px; border-radius: 999px; border: 1px solid rgba(127, 174, 122, 0.5);
-        background: rgba(127, 174, 122, 0.14); color: #eef2e6; font-family: 'IBM Plex Mono', monospace;
+        padding: 9px 20px; border-radius: 999px; border: 1px solid rgba(108, 242, 138, 0.5);
+        background: rgba(108, 242, 138, 0.14); color: #eef2e6; font-family: 'IBM Plex Mono', monospace;
         font-size: 11.5px; letter-spacing: 0.05em; cursor: pointer;
         transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
       }
-      .eph-flash-signin-btn:hover { background: rgba(127, 174, 122, 0.26); border-color: rgba(127, 174, 122, 0.85); }
+      .eph-flash-signin-btn:hover { background: rgba(108, 242, 138, 0.26); border-color: rgba(108, 242, 138, 0.85); }
       .eph-flash-signin-btn:active { transform: scale(0.96); }
       .eph-flash-signin-btn:disabled { opacity: 0.6; cursor: default; }
+      /* スマホ画面での「つる」/「タイムテーブル」切り替えタブ(2026年9月追加)。
+         広い画面では常に両方並べて表示するため、このタブ自体を非表示にする(下記メディアクエリ参照)。 */
+      .eph-flash-mobile-tabs { display: none; justify-content: center; gap: 10px; padding: 10px 18px 0; }
+      .eph-flash-tab {
+        padding: 6px 16px; border-radius: 999px; border: 1px solid rgba(108, 242, 138, 0.3);
+        background: rgba(108, 242, 138, 0.06); color: rgba(238, 242, 230, 0.55);
+        font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.04em; cursor: pointer;
+      }
+      .eph-flash-tab.sel { background: rgba(108, 242, 138, 0.26); color: #eef2e6; border-color: rgba(108, 242, 138, 0.75); }
       .eph-flash-stage {
         flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
         gap: 22px; padding: 20px; overflow: auto;
@@ -529,27 +639,30 @@
       .eph-flash-tt-label {
         margin: 0 0 8px; font-family: 'Fraunces', serif; font-size: 15px; color: #eef2e6; letter-spacing: 0.02em;
       }
-      /* マップ・時刻表などのスクリーンショット(sch.images)。文字が読めることを優先し、
-         小さいサムネイルではなく画面幅に近い大きさで並べる。 */
-      .eph-flash-images { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
-      .eph-flash-img {
-        display: block; width: 100%; max-width: 340px; border-radius: 10px;
-        border: 1px solid rgba(127, 174, 122, 0.28); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
-      }
-      .eph-flash-tt-list { display: flex; flex-direction: column; gap: 6px; }
+      .eph-flash-tt-list { display: flex; flex-direction: column; gap: 8px; }
       .eph-flash-tt-item {
+        display: flex; flex-direction: column; gap: 8px;
+        padding: 7px 10px; border-radius: 8px; background: rgba(108, 242, 138, 0.08); border: 1px solid rgba(108, 242, 138, 0.18);
+      }
+      .eph-flash-tt-item-main {
         display: flex; gap: 10px; align-items: baseline;
         font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: rgba(238, 242, 230, 0.85);
-        padding: 7px 10px; border-radius: 8px; background: rgba(127, 174, 122, 0.08); border: 1px solid rgba(127, 174, 122, 0.18);
       }
-      .eph-flash-tt-time { color: #a9d1a4; flex: none; }
+      .eph-flash-tt-time { color: #b3f7c4; flex: none; }
       .eph-flash-tt-text { flex: 1; font-family: 'Zen Kaku Gothic New', sans-serif; }
       .eph-flash-tt-empty { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.35); }
+      /* ブロックごとのマップ・時刻表などのスクリーンショット。文字が読めることを優先し、
+         小さいサムネイルではなく画面幅に近い大きさで並べる。 */
+      .eph-flash-tt-item-images { display: flex; flex-direction: column; gap: 10px; }
+      .eph-flash-img {
+        display: block; width: 100%; max-width: 340px; border-radius: 10px;
+        border: 1px solid rgba(108, 242, 138, 0.28); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+      }
 
       /* ---- 花つる本体(一過性の成長演出、常時パルスなし) ---- */
       .eph-vine-path {
-        fill: none; stroke: #7fae7a; stroke-width: 3.2; stroke-linecap: round;
-        filter: drop-shadow(0 0 6px rgba(127, 174, 122, 0.35));
+        fill: none; stroke: #6cf28a; stroke-width: 3.2; stroke-linecap: round;
+        filter: drop-shadow(0 0 6px rgba(108, 242, 138, 0.4));
       }
       .eph-vine-path.grow { transition: stroke-dashoffset 2.4s cubic-bezier(0.3, 0.7, 0.2, 1); }
       .eph-vine-blossom { fill: #e2a7b6; opacity: 0; transform-origin: center; transform: scale(0.3); }
@@ -559,6 +672,16 @@
       }
       @media (prefers-reduced-motion: reduce) {
         .eph-vine-path.grow, .eph-vine-blossom { transition: none !important; }
+      }
+
+      /* スマホ幅: 「つる」「タイムテーブル」を同時表示せず、タブで切り替える
+         (ユーザー要望: 狭い画面では両方並べると窮屈になるため)。 */
+      @media (max-width: 680px) {
+        .eph-flash-mobile-tabs { display: flex; }
+        .eph-flash-stage { flex-direction: column; }
+        .eph-flash-vine-wrap, .eph-flash-timetable { display: none; width: 100%; }
+        .eph-flash-stage[data-active-tab="vine"] .eph-flash-vine-wrap { display: block; }
+        .eph-flash-stage[data-active-tab="timetable"] .eph-flash-timetable { display: flex; }
       }
     `;
     document.head.appendChild(style);
@@ -574,10 +697,10 @@
     editingId = null;
     epEls.dateInput.value = '';
     epEls.labelInput.value = '';
-    formTimetable = [{ time: '', text: '' }]; // 最初から1行出しておく(「+行を追加」を押す手間を省く)
+    epEls.timetablePasteInput.value = '';
+    formTimetable = [{ time: '', text: '', images: [] }]; // 最初から1行出しておく(「+行を追加」を押す手間を省く)
+    formTimetableFocusedIndex = 0;
     renderTimetableRows();
-    formImages = [];
-    renderFormImagesGallery();
     setShapeSelection('mist');
     epEls.saveBtn.textContent = '登録する';
     epEls.cancelBtn.hidden = true;
@@ -586,15 +709,16 @@
   function startEdit(id) {
     const s = getSchedules().find((x) => x.id === id);
     if (!s) return;
+    migrateLegacyScheduleImages(s);
     editingId = id;
     epEls.dateInput.value = s.date || '';
     epEls.labelInput.value = s.label || '';
+    epEls.timetablePasteInput.value = '';
     formTimetable = (s.timetable && s.timetable.length)
-      ? s.timetable.map((row) => ({ time: row.time || '', text: row.text || '' }))
-      : [{ time: '', text: '' }];
+      ? s.timetable.map((row) => ({ time: row.time || '', text: row.text || '', images: (row.images || []).slice() }))
+      : [{ time: '', text: '', images: [] }];
+    formTimetableFocusedIndex = 0;
     renderTimetableRows();
-    formImages = (s.images || []).slice();
-    renderFormImagesGallery();
     setShapeSelection(s.vineShape || 'mist');
     epEls.saveBtn.textContent = '更新する';
     epEls.cancelBtn.hidden = false;
@@ -633,18 +757,17 @@
     const date = epEls.dateInput.value;
     if (!date) { setStatus('施行日を選択してください', { important: true }); return; }
     const label = epEls.labelInput.value.trim();
-    // 時刻・内容のどちらも空の行(未入力のまま残った追加行など)は保存しない。
+    // 時刻・内容・画像のいずれも無い行(未入力のまま残った追加行など)は保存しない。
     const timetable = formTimetable
-      .map((row) => ({ time: (row.time || '').trim() || null, text: (row.text || '').trim() }))
-      .filter((row) => row.time || row.text);
-    const images = formImages.slice();
+      .map((row) => ({ time: (row.time || '').trim() || null, text: (row.text || '').trim(), images: (row.images || []).slice() }))
+      .filter((row) => row.time || row.text || row.images.length);
     const schedules = getSchedules();
     if (editingId) {
       const s = schedules.find((x) => x.id === editingId);
-      if (s) { s.date = date; s.label = label; s.timetable = timetable; s.vineShape = selectedShape; s.images = images; }
+      if (s) { s.date = date; s.label = label; s.timetable = timetable; s.vineShape = selectedShape; delete s.images; }
     } else {
       schedules.push({
-        id: crypto.randomUUID(), date, label, timetable, vineShape: selectedShape, images,
+        id: crypto.randomUUID(), date, label, timetable, vineShape: selectedShape,
         createdAt: new Date().toISOString(),
       });
     }
@@ -678,13 +801,12 @@
         <input type="date" class="eph-date-input">
         <p class="eph-form-label">ラベル(任意)</p>
         <input type="text" class="eph-label-input" placeholder="例: 六甲ミーツ・アート">
-        <p class="eph-form-label">タイムテーブル(時刻は空欄でもOK)</p>
+        <p class="eph-form-label">外部AIの旅程を貼り付けて解析(任意)</p>
+        <textarea class="eph-tt-paste-input" placeholder="09:00 開館&#10;10:30 ギャラリートーク&#10;12:00 昼休憩"></textarea>
+        <button type="button" class="eph-tt-parse-btn">解析してブロックに追加</button>
+        <p class="eph-form-label">タイムテーブル(ブロックごとに時刻・内容・画像を持てます)</p>
         <div class="eph-tt-rows"></div>
         <button type="button" class="eph-tt-add-btn">+ 行を追加</button>
-        <p class="eph-form-label">スクリーンショット(マップ・時刻表など)</p>
-        <div class="eph-image-drop">📷 タップ、または画像をドラッグ&ドロップ/貼り付け</div>
-        <input type="file" accept="image/*" multiple hidden class="eph-image-file">
-        <div class="eph-image-gallery" hidden></div>
         <p class="eph-form-label">花つるの形状</p>
         <div class="eph-shape-row">
           <button class="eph-shape-btn" data-shape="mist">🌫 霧に向かうつる</button>
@@ -711,9 +833,8 @@
       labelInput: win.querySelector('.eph-label-input'),
       timetableRows: win.querySelector('.eph-tt-rows'),
       timetableAddBtn: win.querySelector('.eph-tt-add-btn'),
-      imageDrop: win.querySelector('.eph-image-drop'),
-      imageFile: win.querySelector('.eph-image-file'),
-      imageGallery: win.querySelector('.eph-image-gallery'),
+      timetablePasteInput: win.querySelector('.eph-tt-paste-input'),
+      timetableParseBtn: win.querySelector('.eph-tt-parse-btn'),
       shapeBtns: Array.from(win.querySelectorAll('.eph-shape-btn')),
       saveBtn: win.querySelector('.eph-save-btn'),
       cancelBtn: win.querySelector('.eph-cancel-btn'),
@@ -725,7 +846,7 @@
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     });
     win.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.eph-image-drop, .eph-image-remove, .eph-tt-row-time, .eph-tt-row-text, .eph-tt-row-remove')) {
+      if (e.target.closest('.eph-tt-row-time, .eph-tt-row-text, .eph-tt-row-remove, .eph-tt-row-img-add, .eph-tt-row-img-remove')) {
         e.stopPropagation();
       }
     });
@@ -734,6 +855,21 @@
     epEls.shapeBtns.forEach((b) => b.addEventListener('click', () => setShapeSelection(b.dataset.shape)));
     epEls.saveBtn.addEventListener('click', handleSaveClick);
     epEls.cancelBtn.addEventListener('click', resetForm);
+
+    // 外部AIが作った旅程・タイムテーブルのフリーテキストを解析してブロックへ追記する。
+    epEls.timetableParseBtn.addEventListener('click', () => {
+      const parsed = parseTimetableFreetext(epEls.timetablePasteInput.value);
+      if (parsed.length === 0) return;
+      // resetForm()直後の「最初から1行出しておく」空行は、解析結果で置き換える(残すと
+      // 空のブロックが1つ紛れ込んでしまうため)。
+      if (formTimetable.length === 1 && !formTimetable[0].time && !formTimetable[0].text && formTimetable[0].images.length === 0) {
+        formTimetable = parsed;
+      } else {
+        formTimetable.push(...parsed);
+      }
+      renderTimetableRows();
+      epEls.timetablePasteInput.value = '';
+    });
 
     // タイムテーブルの行(再描画のたびに要素が差し替わるため、コンテナへのイベント委譲にする)。
     epEls.timetableAddBtn.addEventListener('click', () => addTimetableRow(true));
@@ -744,47 +880,65 @@
       if (e.target.classList.contains('eph-tt-row-time')) formTimetable[i].time = e.target.value;
       if (e.target.classList.contains('eph-tt-row-text')) formTimetable[i].text = e.target.value;
     });
+    // どの行に触れているか(貼り付けの対象)を追跡する。
+    epEls.timetableRows.addEventListener('focusin', (e) => {
+      const row = e.target.closest('.eph-tt-row');
+      if (row) formTimetableFocusedIndex = Number(row.dataset.index);
+    });
     epEls.timetableRows.addEventListener('click', (e) => {
-      const btn = e.target.closest('.eph-tt-row-remove');
-      if (!btn) return;
-      const row = btn.closest('.eph-tt-row');
-      formTimetable.splice(Number(row.dataset.index), 1);
-      renderTimetableRows();
+      const removeRowBtn = e.target.closest('.eph-tt-row-remove');
+      if (removeRowBtn) {
+        const row = removeRowBtn.closest('.eph-tt-row');
+        formTimetable.splice(Number(row.dataset.index), 1);
+        renderTimetableRows();
+        return;
+      }
+      const addImgBtn = e.target.closest('.eph-tt-row-img-add');
+      if (addImgBtn) {
+        const row = addImgBtn.closest('.eph-tt-row');
+        formTimetableFocusedIndex = Number(row.dataset.index);
+        triggerRowImagePicker(formTimetableFocusedIndex);
+        return;
+      }
+      const removeImgBtn = e.target.closest('.eph-tt-row-img-remove');
+      if (removeImgBtn) {
+        const row = removeImgBtn.closest('.eph-tt-row');
+        const rowIdx = Number(row.dataset.index);
+        formTimetable[rowIdx].images.splice(Number(removeImgBtn.dataset.removeImage), 1);
+        renderTimetableRows();
+      }
     });
-
-    // スクリーンショットの添付: タップで選択(スマホ向け、CLAUDE.mdの「重要な操作導線は
-    // ジェスチャー任せにせず確実なボタンも用意する」教訓に沿う)、PCはドラッグ&ドロップ/貼り付けにも対応。
-    epEls.imageDrop.addEventListener('click', () => epEls.imageFile.click());
-    epEls.imageFile.addEventListener('change', () => {
-      const files = Array.from(epEls.imageFile.files || []);
-      epEls.imageFile.value = '';
-      if (files.length) applyImageFiles(files);
-    });
-    let dragDepth = 0;
-    epEls.imageDrop.addEventListener('dragover', (e) => {
-      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    // ブロック単位のドラッグ&ドロップ(PC向け、行の枠内にドロップした画像をその行へ追加する)。
+    let dragoverRow = null;
+    epEls.timetableRows.addEventListener('dragover', (e) => {
+      const row = e.target.closest('.eph-tt-row');
+      if (!row || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     });
-    epEls.imageDrop.addEventListener('dragenter', (e) => {
-      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    epEls.timetableRows.addEventListener('dragenter', (e) => {
+      const row = e.target.closest('.eph-tt-row');
+      if (!row || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
       e.preventDefault();
-      dragDepth++;
-      epEls.imageDrop.classList.add('eph-image-dragover');
+      if (dragoverRow && dragoverRow !== row) dragoverRow.classList.remove('eph-tt-row-dragover');
+      dragoverRow = row;
+      row.classList.add('eph-tt-row-dragover');
     });
-    epEls.imageDrop.addEventListener('dragleave', () => {
-      dragDepth = Math.max(0, dragDepth - 1);
-      if (dragDepth === 0) epEls.imageDrop.classList.remove('eph-image-dragover');
+    epEls.timetableRows.addEventListener('dragleave', (e) => {
+      const row = e.target.closest('.eph-tt-row');
+      if (row && !row.contains(e.relatedTarget)) row.classList.remove('eph-tt-row-dragover');
     });
-    epEls.imageDrop.addEventListener('drop', (e) => {
+    epEls.timetableRows.addEventListener('drop', (e) => {
+      const row = e.target.closest('.eph-tt-row');
+      if (!row) return;
       e.preventDefault();
-      dragDepth = 0;
-      epEls.imageDrop.classList.remove('eph-image-dragover');
+      row.classList.remove('eph-tt-row-dragover');
+      dragoverRow = null;
       const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/'));
-      if (files.length) applyImageFiles(files);
+      if (files.length) applyRowImageFiles(Number(row.dataset.index), files);
     });
-    // クリップボードからの画像ペースト(小窓が開いている間だけ)。画像アイテムが無ければ
-    // 通常のテキスト貼り付けに譲る(e.preventDefault()しない)。
+    // クリップボードからの画像ペースト(小窓が開いている間だけ)。最後にフォーカスしていた
+    // ブロックへ追加する。画像アイテムが無ければ通常のテキスト貼り付けに譲る(e.preventDefault()しない)。
     win.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
@@ -792,14 +946,7 @@
       if (imageItems.length === 0) return;
       e.preventDefault();
       const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
-      if (files.length) applyImageFiles(files);
-    });
-    // ギャラリーの✕ボタン(再描画のたびに要素が差し替わるため、コンテナへのイベント委譲にする)。
-    epEls.imageGallery.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-remove-index]');
-      if (!btn) return;
-      formImages.splice(Number(btn.dataset.removeIndex), 1);
-      renderFormImagesGallery();
+      if (files.length) applyRowImageFiles(formTimetableFocusedIndex, files);
     });
 
     // スワイプで左右に閉じる(モジュール共通デザイン言語)。上部バーから始まった場合だけ判定する。
