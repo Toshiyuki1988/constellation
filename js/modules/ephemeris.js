@@ -306,7 +306,8 @@
     document.body.appendChild(overlay);
     // 丸時計はスケジュールの内容と無関係な純粋装飾のため、表示のたび作り直さず一度だけ組み立てる。
     const clock = buildClockFace();
-    overlay.querySelector('.eph-flash-clock-wrap').appendChild(clock.svg);
+    const clockWrap = overlay.querySelector('.eph-flash-clock-wrap');
+    clockWrap.appendChild(clock.svg);
     flashEls = {
       overlay,
       signinBtn: overlay.querySelector('.eph-flash-signin-btn'),
@@ -321,6 +322,9 @@
       if (typeof soundAudioCtx === 'function') soundAudioCtx();
       if (typeof signIn === 'function') signIn();
     });
+    // 丸時計タップ→現在時刻に最も近いブロックへジャンプ(2026年9月追加、誤タップ防止の
+    // サインイン導線とは無関係な単なる画面内スクロールのため、このタップだけ例外的に反応する)。
+    clockWrap.addEventListener('click', jumpToNowHighlight);
     // ブロックごとのスクリーンショット開閉トグル(再描画のたび要素が差し替わるため委譲にする)。
     flashEls.timetable.addEventListener('click', (e) => {
       const btn = e.target.closest('.eph-flash-tt-img-toggle');
@@ -386,11 +390,16 @@
 
   /** 各スケジュールのタイムテーブルのうち、現在時刻(端末のローカル時刻)に最も近い時刻の
    *  ブロックだけを黄色系でハイライトする。DOMを再構築せずクラスの付け替えだけで行うため、
-   *  ブロック画像の開閉状態(上記トグル)を保ったまま、1秒おきに呼んでも安全。 */
+   *  ブロック画像の開閉状態(上記トグル)を保ったまま、1秒おきに呼んでも安全。
+   *  複数のスケジュールが同日に並んでいる場合、丸時計タップでのジャンプ先(下記
+   *  jumpToNowHighlight()参照)は、その中でもっとも現在時刻に近い1件(`flashEls.primaryNowTarget`)
+   *  に絞る。 */
   function refreshNowHighlight() {
     if (!flashEls || !flashEls.nowHighlightGroups) return;
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
+    let primaryEl = null;
+    let primaryDiff = Infinity;
     flashEls.nowHighlightGroups.forEach((group) => {
       let bestIdx = -1;
       let bestDiff = Infinity;
@@ -399,7 +408,23 @@
         if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
       });
       group.forEach((t, i) => t.el.classList.toggle('eph-flash-tt-item--now', i === bestIdx));
+      if (bestIdx !== -1 && bestDiff < primaryDiff) {
+        primaryDiff = bestDiff;
+        primaryEl = group[bestIdx].el;
+      }
     });
+    flashEls.primaryNowTarget = primaryEl;
+  }
+
+  /** 丸時計をタップした時に呼ばれる。現在時刻に最も近いブロック(黄色のハイライト)まで
+   *  スムーズにスクロールし、見つけやすいよう一瞬だけ強調する(常時のパルスではなく、
+   *  タップした瞬間だけの一過性の演出)。ハイライト対象が無ければ何もしない。 */
+  function jumpToNowHighlight() {
+    const target = flashEls && flashEls.primaryNowTarget;
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('eph-flash-tt-item--jump');
+    setTimeout(() => target.classList.remove('eph-flash-tt-item--jump'), 900);
   }
 
   function showEphemerisFlash(schedules) {
@@ -696,8 +721,9 @@
         flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
         gap: 22px; padding: 20px; overflow: auto;
       }
-      /* 植物で装飾された丸時計(スケジュールの内容は反映しない、純粋な装飾)。 */
-      .eph-flash-clock-wrap { width: min(46vw, 200px); flex: none; }
+      /* 植物で装飾された丸時計(スケジュールの内容は反映しない、純粋な装飾)。タップすると
+         現在時刻に最も近いブロックへジャンプする(下記eph-flash-tt-item--now/--jump参照)。 */
+      .eph-flash-clock-wrap { width: min(46vw, 200px); flex: none; cursor: pointer; }
       .eph-clock-svg { width: 100%; height: auto; display: block; }
       .eph-clock-face { fill: none; stroke: rgba(150, 240, 178, 0.75); stroke-width: 2.4; }
       .eph-clock-tick { stroke: rgba(150, 240, 178, 0.5); stroke-width: 1.6; }
@@ -736,6 +762,8 @@
         box-shadow: 0 0 14px rgba(255, 214, 84, 0.18);
       }
       .eph-flash-tt-item--now .eph-flash-tt-time { color: #ffe066; }
+      /* 丸時計タップでジャンプした瞬間だけの一過性の強調(常時のパルスではない、900msで自動解除)。 */
+      .eph-flash-tt-item--jump { box-shadow: 0 0 0 3px rgba(255, 214, 84, 0.55), 0 0 20px rgba(255, 214, 84, 0.35); }
       .eph-flash-tt-item-main {
         display: flex; gap: 10px; align-items: baseline;
         font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: rgba(238, 242, 230, 0.85);
