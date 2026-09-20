@@ -1527,11 +1527,10 @@
     closeReadingView();
     if (alEls) alEls.overlay.classList.remove('open');
     document.body.style.overflow = '';
-    // スタートメニュー経由でAlmagestだけ開いてメインデータを読み込んでいない場合、
-    // 閉じた瞬間にキャンバスが空白のまま取り残されるという実機報告(2026年9月)があった。
-    // js/app.jsのonAlmagestClosed()が「まだ何も選んでいなければスタートメニューへ戻す」
-    // 判断を行う(state.quickMode/mainDataLoadedを見るのはapp.js側の責務のため、ここでは
-    // 存在すれば呼ぶだけの薄いフックに留める)。
+    // 全体マップだけを開いてどのセッションにも入っていない状態でAlmagestを開いて閉じた場合、
+    // キャンバスが空白のまま取り残されないよう、js/app.jsのonAlmagestClosed()が全体マップの
+    // 表示を確認する(2026年9月、旧スタートメニュー時代からの実機報告に基づく保険。判断自体は
+    // app.js側の責務のため、ここでは存在すれば呼ぶだけの薄いフックに留める)。
     if (window.onAlmagestClosed) window.onAlmagestClosed();
   }
 

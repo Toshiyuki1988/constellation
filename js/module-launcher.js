@@ -190,11 +190,12 @@
   }
 
   // Almagest(コード"159")・Ephemeris(コード"357")は、専用の軽量ファイルだけで完結し、
-  // セッション/カード全体(state.cards/sessions)を必要としない。それ以外の全モジュールは
-  // キャンバス上のカードを扱うため、js/app.jsのensureMainDataLoaded()でメインデータの
-  // 読み込みを待ってから起動する(2026年9月追加、「サインイン→すぐAlmagestで読書」の
-  // 通信量最小化に伴う対応。Ephemerisはスケジュール管理のみでカードを扱わないため同様に追加)。
-  const NO_MAIN_DATA_NEEDED_CODES = new Set(['159', '357']);
+  // 今どのセッションに入っているか(state.cards)を必要としない。それ以外の全モジュールは
+  // キャンバス上のカードを扱うため、セッションに入っていない状態(全体マップを見ている間)で
+  // 起動しても操作対象が無く意味を持たない。**2026年9月、セッション単位ロードへの移行に伴い
+  // 判定を「メインデータを読み込み済みか」から「今セッションに入っているか」へ置き換えた**
+  // (js/app.jsのensureMainDataLoaded()/mainDataLoaded自体を廃止したため)。
+  const NO_SESSION_NEEDED_CODES = new Set(['159', '357']);
 
   function onDigit(d) {
     soundAudioCtx();
@@ -207,10 +208,11 @@
     const callback = moduleCodes.get(code);
     if (callback) {
       closeModuleKeypad();
-      if (NO_MAIN_DATA_NEEDED_CODES.has(code) || typeof ensureMainDataLoaded !== 'function') {
+      const hasActiveSession = typeof activeSessionId === 'function' && Boolean(activeSessionId());
+      if (NO_SESSION_NEEDED_CODES.has(code) || hasActiveSession) {
         callback();
-      } else {
-        ensureMainDataLoaded().then(callback).catch(() => {}); // 失敗時のステータス表示はjs/app.js側で既に出す
+      } else if (typeof setStatus === 'function') {
+        setStatus('先にセッションへ入ってから開いてください');
       }
     } else {
       kpEls.panel.classList.add('shake');

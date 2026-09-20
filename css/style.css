@@ -281,8 +281,17 @@ html, body {
 .year-tab:hover { color: var(--text); }
 .year-tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--text); }
 
-/* クイックモード中、年タブに添える「他の記録を読み込む」入口(2026年9月追加)。
-   通常の年タブと紛れないよう、うっすら枠を付けて別カテゴリの操作であることを示す。 */
+/* 常設の「🗺 全体マップ」タブ(2026年9月追加、下記「全体マップ」セクション参照)。
+   通常の年タブと紛れないよう、うっすら枠を付けて別カテゴリの入口であることを示す。 */
+.year-tab--map {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  margin-right: 4px;
+  padding: 4px 10px;
+}
+.year-tab--map.active { border-color: var(--text); }
+
+/* 設定モーダル内の「Driveへ送信」等と並べる、自宅Wi-Fi向けの一括読み込みボタン(下記参照) */
 .year-tab--load-all {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -290,265 +299,139 @@ html, body {
   padding: 4px 10px;
 }
 
-/* ---------------- スタートメニュー(2026年9月追加→同月中にVOYAGER GOLDEN RECORDモチーフへ全面刷新) ----------------
- * サインイン直後、メインデータ(全セッション・全カードのサムネイル)を読み込む前に、
- * どの通信量で始めるかを選んでもらう入口(js/app.jsのshowOpeningLoadingScreen()/openStartMenu()参照)。
- * **以前はアプリ本体の白ベース+セリフ体という既存の意匠(.modal等)をそのまま踏襲していたが、
- * 「ロード画面の業務っぽさを解消したい」というユーザー要望を受け、ボイジャーのゴールデンレコード
- * (パルサーマップ・水素原子の時間基準・探査機の軌道図)をモチーフにした、この場面専用の
- * 暗い宇宙背景+フラットな金(グラデーションの光沢ハイライトは使わない)の意匠に作り直した。
- * 同じオーバーレイの中に「ロード中(パルサーマップが走査するアニメーション)」→
- * 「クイックメニュー(4つの入口)」の2つの局面(phase-loading/phase-menu)を持たせ、
- * サインイン処理の完了と同時にクロスフェードする(js/app.jsのopenStartMenu()参照)。
- * ここで使う金色(#c9a227/#f1e4bd)は、Almagest(js/modules/almagest.js)の書庫UIで既に
- * 確立している金色をそのまま再利用し、アプリ内での「金=書庫・記録」の連想を一貫させている。 */
-.start-menu-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background:
-    radial-gradient(ellipse 90% 60% at 50% 32%, #171106 0%, transparent 60%),
-    #07070a;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.4s ease-out;
-  padding: 20px;
+/* ---------------- 全体マップ(2026年9月、クイックメニュー/スタートメニューの置き換え) ----------------
+ * 「出先の展覧会ではそのセッションだけの通信で済ませたい」というユーザー要望から、クイックモード
+ * (メインデータ全体とは別レイヤーで動く軽量な仮の状態)という仕組み自体を廃止し、代わりに
+ * **全てのセッションが同じ1つのルールで動く**設計へ作り直した: サインイン直後に読み込むのは
+ * 全セッションの名前・階層・カード枚数・代表サムネイルだけを持つ軽量な索引
+ * (constellation-data.json、2026年9月にカード本体を含まない形へ縮小した)だけで、各セッションの
+ * 実際のカード・接続は「そのセッションへ入った瞬間」に個別ファイル(constellation-session-<id>.json)
+ * として初めて取得する(js/app.jsのensureSessionLoaded()参照)。
+ *
+ * 以前のスタートメニュー(VOYAGER GOLDEN RECORDモチーフ、暗い宇宙背景+金色のグラスモーフィズム)は
+ * 「ロード画面の業務っぽさを解消したい」という目的で作られたものだったが、今回**Golden Record自体を
+ * 廃止し、アプリ本体の白ベース+ドット(.canvas-viewportと同じ背景)へ統一した**(ユーザー指定)。
+ * サインイン直後は特別な演出を挟まず、そのままこの画面(全体マップ)が表示される。
+ *
+ * 表示は年タブの常設「🗺 全体マップ」タブ(state.breadcrumbが空の状態)に対応し、`#canvas-viewport`
+ * と同じ`<main>`の隣に置いた別要素(#sessions-map)を出し入れする形にした(canvas.jsのパン/ズーム
+ * ジェスチャーと競合させないため、キャンバス本体とは完全に別のDOM)。 */
+.sessions-map {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.12) 1px, transparent 1px);
+  background-size: 26px 26px;
+  padding: 18px 16px 60px;
+}
+.sessions-map[hidden] { display: none; }
+
+.sessions-map-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 16px;
+  max-width: 920px;
+  margin: 0 auto;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .sessions-map-grid { grid-template-columns: 1fr; }
 }
 
-.start-menu-overlay.open { opacity: 1; pointer-events: auto; }
-
-/* 星空(2枚重ね、CSSのradial-gradientタイルのみでJS不要)。奥のレイヤーほど粒が小さく薄い。 */
-.start-menu-overlay::before,
-.start-menu-overlay::after {
-  content: '';
-  position: absolute;
-  inset: -10%;
-  pointer-events: none;
-  background-repeat: repeat;
+.sessions-map-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
 }
-.start-menu-overlay::before {
-  background-image:
-    radial-gradient(1.4px 1.4px at 12% 22%, rgba(241,228,189,.75), transparent),
-    radial-gradient(1px 1px at 38% 64%, rgba(241,228,189,.5), transparent),
-    radial-gradient(1.6px 1.6px at 64% 18%, rgba(241,228,189,.65), transparent),
-    radial-gradient(1px 1px at 82% 48%, rgba(241,228,189,.45), transparent),
-    radial-gradient(1.2px 1.2px at 22% 82%, rgba(241,228,189,.6), transparent),
-    radial-gradient(1px 1px at 92% 78%, rgba(241,228,189,.4), transparent),
-    radial-gradient(1.4px 1.4px at 50% 92%, rgba(241,228,189,.55), transparent);
-  background-size: 240px 240px;
-  animation: start-menu-stars-drift 100s linear infinite;
-}
-.start-menu-overlay::after {
-  background-image:
-    radial-gradient(1px 1px at 8% 55%, rgba(241,228,189,.3), transparent),
-    radial-gradient(1px 1px at 46% 12%, rgba(241,228,189,.25), transparent),
-    radial-gradient(1.2px 1.2px at 70% 70%, rgba(241,228,189,.3), transparent),
-    radial-gradient(1px 1px at 90% 20%, rgba(241,228,189,.22), transparent),
-    radial-gradient(1px 1px at 30% 96%, rgba(241,228,189,.25), transparent);
-  background-size: 340px 340px;
-  animation: start-menu-stars-drift 160s linear infinite reverse;
-}
-@keyframes start-menu-stars-drift {
-  from { transform: translate(0, 0); }
-  to { transform: translate(-4%, -6%); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .start-menu-overlay::before, .start-menu-overlay::after { animation: none; }
-}
-
-/* ---- 局面(ロード中/クイックメニュー)のクロスフェード ----
- * 2つの局面を同じ場所に重ねて配置し、opacityだけをクロスフェードさせる。**両方とも
- * position:absolute+inset:0でオーバーレイ全面を覆い、その内側でflexセンタリングする
- * こと**(2026年9月、実装直後の実機確認で判明した不具合の修正: 片方だけposition:relative
- * のまま(親のdisplay:flexの通常フローに参加)にしていたため、もう片方のposition:absolute
- * 要素(topなど個別指定なし)がブラウザの「静的位置」推定に頼る形になり、2つの局面の内容が
- * 中央付近で重なって表示されていた)。 */
-.start-menu-loading, .start-menu-menu, .start-menu-signin {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 16px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.5s ease;
-}
-/* **重要(2026年9月、重大バグの修正)**: 必ず`.open`も条件に含めること。以前は
- * `.start-menu-overlay.phase-menu .start-menu-menu {...}`のように`.open`を条件に
- * 入れていなかったため、closeStartMenu()が(`open`は外すが`phase-menu`は外さない仕様のため)
- * 呼ばれた後も、この局面固有のセレクタは`.phase-menu`が残っている限りマッチし続け、
- * `.start-menu-menu`(すなわち画面全面を覆う4つのタイル)がopacity:1・pointer-events:autoの
- * まま取り残されていた。オーバーレイ自身(`.start-menu-overlay`)はopacity:0で見た目には
- * 消えるが、**opacityは子要素の当たり判定(pointer-events)には影響しない**ため、
- * 「見えないのにクリックだけは効く、z-index:300の全画面レイヤー」がクイックメニューを
- * 閉じた後もずっと居座り続ける不具合になっていた。この不可視レイヤーが、カメラの
- * ターゲティングカーソル/Eclipseガイドや、Almagestの本タップなど、閉じたはずの
- * オーバーレイの下にある全ての操作を代わりに奪ってしまっていた(タップ位置がたまたま
- * STYLUS/LAUNCH等のタイル領域と重なると、その場所のクイックメニュー項目が誤って
- * 起動する)。`.open`をセレクタに含めることで、closeStartMenu()が`open`を外した瞬間に
- * この局面別ルールが一切マッチしなくなり、上の基本ルール(pointer-events:none)へ
- * 確実に戻るようにした。 */
-.start-menu-overlay.open.phase-loading .start-menu-loading { opacity: 1; pointer-events: auto; }
-.start-menu-overlay.open.phase-menu .start-menu-menu { opacity: 1; pointer-events: auto; }
-.start-menu-overlay.open.phase-signin .start-menu-signin { opacity: 1; pointer-events: auto; }
-
-.start-menu-signin-btn {
-  margin-top: 20px;
-  padding: 11px 28px;
-  border-radius: 999px;
-  border: 1px solid rgba(201, 162, 39, 0.55);
-  background: rgba(201, 162, 39, 0.14);
-  color: #f1e4bd;
+.sessions-map-panel h2 {
+  margin: 0 0 10px;
   font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: .08em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 400;
+}
+.sessions-map-legend {
+  font-size: 9.5px;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+}
+.sessions-map-legend span { display: flex; align-items: center; gap: 4px; }
+.sessions-map-legend .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; background: var(--text); }
+.sessions-map-legend .dot--unloaded { background: none; border: 1px solid var(--muted); }
+
+.sm-tree, .sm-tree ul { list-style: none; margin: 0; padding: 0; }
+.sm-tree ul { margin: 2px 0 2px 20px; border-left: 1px dashed var(--line); }
+
+.sm-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin: 1px 0;
+  border-radius: 6px;
   cursor: pointer;
-  transition: background .15s ease, border-color .15s ease, transform .1s ease;
 }
-.start-menu-signin-btn:hover { background: rgba(201, 162, 39, 0.26); border-color: rgba(201, 162, 39, 0.85); }
-.start-menu-signin-btn:active { transform: scale(.96); }
+.sm-node:hover { background: var(--surface-2); }
+.sm-node--current { outline: 1px dashed var(--rust); outline-offset: -1px; }
+.sm-node .sm-caret {
+  width: 11px; font-size: 9px; color: var(--muted);
+  transition: transform 0.12s;
+  flex: none;
+}
+.sm-node .sm-caret.collapsed { transform: rotate(-90deg); }
+.sm-node .sm-thumb {
+  width: 24px; height: 24px; border-radius: 4px; flex: none;
+  background-size: cover; background-position: center;
+  background-color: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  border: 1px solid var(--line);
+}
+.sm-node .sm-name { font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-node .sm-count { font-family: var(--mono); font-size: 10px; color: var(--muted); flex: none; }
+.sm-node .sm-status { width: 6px; height: 6px; border-radius: 50%; flex: none; background: none; border: 1px solid var(--muted); }
+.sm-node .sm-status--loaded { background: var(--text); border-color: var(--text); }
+.sm-node .sm-loading-tag { font-family: var(--mono); font-size: 9.5px; color: var(--muted); flex: none; }
 
-/* ---- ロード中: ゴールデンレコード(フラット金+パルサーマップの走査線) ---- */
-.start-menu-disc-wrap {
-  width: min(52vw, 210px);
-  aspect-ratio: 1 / 1;
-  filter: drop-shadow(0 0 22px rgba(201, 162, 39, 0.35));
-}
-.start-menu-disc-rotor {
-  width: 100%; height: 100%;
-  transform-origin: 150px 150px;
-  animation: start-menu-disc-spin 26s linear infinite;
-}
-@keyframes start-menu-disc-spin { to { transform: rotate(360deg); } }
-.start-menu-disc-face { fill: #c9a227; }
-.start-menu-disc-groove { fill: none; stroke: #7a5f14; stroke-width: 1; opacity: .5; }
-.start-menu-disc-spindle { fill: #07070a; }
-.start-menu-pulsar-line {
-  stroke: #f1e4bd;
-  stroke-width: 1.1;
-  stroke-linecap: round;
-  fill: none;
-  animation: start-menu-scan 3.2s ease-in-out infinite;
-}
-.start-menu-pulsar-tip { fill: #f1e4bd; }
-@keyframes start-menu-scan {
-  0%   { opacity: .15; }
-  38%  { opacity: 1; }
-  65%  { opacity: 1; }
-  100% { opacity: .15; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .start-menu-disc-rotor { animation: none; }
-  .start-menu-pulsar-line, .start-menu-pulsar-tip { animation: none; opacity: .8; }
+.sessions-map-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 2px;
 }
 
-.start-menu-wordmark {
-  margin-top: 24px;
-  font-family: var(--serif);
-  font-size: clamp(15px, 4vw, 19px);
-  letter-spacing: .4em;
-  text-indent: .4em;
-  font-weight: 600;
-  color: #f1e4bd;
-}
-.start-menu-wordmark--small { margin-top: 0; font-size: clamp(13px, 3.4vw, 15px); }
-
-.start-menu-caption {
-  margin-top: 10px;
-  min-height: 1.3em;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: .04em;
-  color: #a6987a;
-  transition: opacity .3s ease;
-}
-
-/* ---- クイックメニュー: 4つの入口(星座のように細い線で結ぶ) ---- */
-.start-menu-kicker {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: .32em;
-  text-indent: .32em;
-  color: #8a6d10;
+/* Almagestへの入口(このマップ内では独自にツリーを再実装せず、既存のAlmagest本体を開くだけ) */
+.sm-almagest-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
   margin-bottom: 8px;
 }
-
-.start-menu-grid {
-  position: relative;
-  width: 100%;
-  max-width: 380px;
-  margin-top: clamp(18px, 4vh, 28px);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(12px, 3vw, 18px);
-}
-.start-menu-links {
-  position: absolute; inset: 0;
-  width: 100%; height: 100%;
-  overflow: visible;
-}
-.start-menu-links polyline { fill: none; stroke: #6b551a; stroke-width: 1; stroke-dasharray: 2 5; opacity: .5; }
-.start-menu-links circle { fill: #8a6d10; opacity: .7; }
-
-.start-menu-tile {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  padding: clamp(14px, 3.2vw, 20px) 8px clamp(12px, 2.6vw, 16px);
-  background: rgba(20, 17, 10, 0.55);
-  border: 1px solid rgba(201, 162, 39, 0.28);
-  border-radius: 16px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  font-family: var(--sans);
-  color: #f1e4bd;
-  cursor: pointer;
-  transition: transform .15s ease, border-color .15s ease, background .15s ease;
-}
-.start-menu-tile:hover { border-color: rgba(201, 162, 39, 0.6); background: rgba(30, 25, 12, 0.65); }
-.start-menu-tile:active { transform: scale(.96); }
-
-.start-menu-tile-icon {
-  width: clamp(42px, 10vw, 52px);
-  height: clamp(42px, 10vw, 52px);
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  border: 1px solid rgba(201, 162, 39, 0.4);
-  color: #f1e4bd;
-}
-.start-menu-tile-icon svg { width: 58%; height: 58%; }
-
-.start-menu-tile-label {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: .1em;
-  color: #f1e4bd;
-}
-.start-menu-tile-desc {
+.sm-almagest-tile:hover { background: var(--surface-2); }
+.sm-almagest-tile .sm-almagest-icon { font-size: 20px; flex: none; }
+.sm-almagest-tile .sm-almagest-label { font-size: 13px; font-weight: 600; }
+.sm-almagest-tile .sm-almagest-desc { font-size: 10.5px; color: var(--muted); }
+.sessions-map-note {
   font-size: 10.5px;
-  color: #a6987a;
-  text-align: center;
-  line-height: 1.4;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-top: 6px;
 }
 
-.start-menu-footnote {
-  margin-top: clamp(16px, 3.6vh, 24px);
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: .08em;
-  color: #6b551a;
-  text-align: center;
-}
+/* ヘッダーの「📥 すべて読み込む」ボタン(自宅Wi-Fi向け一括ロード、2026年9月追加)。
+   セッション単位ロードとは別に、通信量を気にしない環境ではまとめて全部読み込んで
+   サムネイルも全表示にしたい、というユーザー要望への対応(js/app.jsのloadEverySession()参照)。 */
+#load-everything-btn.busy { opacity: 0.6; cursor: default; }
 
 .breadcrumb {
   flex: none;

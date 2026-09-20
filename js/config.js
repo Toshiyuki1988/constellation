@@ -34,21 +34,27 @@ const CONFIG = {
   // データの保存先フォルダ名(ユーザーのマイドライブ直下に作成される)
   APP_FOLDER_NAME: 'Constellation',
 
-  // 全カード情報をまとめて保存する JSON ファイル名(APP_FOLDER_NAME直下、メディアとは別置き)
+  // セッションの一覧(索引)を保存する JSON ファイル名(APP_FOLDER_NAME直下、メディアとは別置き)。
+  // **2026年9月、セッション単位ロードへ全面移行したことに伴い役割を変更した**。以前はカード本体
+  // (全セッション・全カードのサムネイルを含む)もこのファイルにまとめて入れていたため、サインイン
+  // のたび最も重いファイルとしてダウンロードされていた。今はカード本体を持たない軽量な索引
+  // (セッションの階層・名前・カード枚数・代表サムネイル1枚だけ)に変わり、各セッションのカード
+  // 本体は`constellation-session-<id>.json`という個別ファイルへ分離した(js/app.js参照)。
+  // ファイル名自体は変更していない(既存ユーザーのファイルをそのまま流用し、初回サインイン時に
+  // 中身だけを一度きりの移行処理で分割する)。
   DATA_FILE_NAME: 'constellation-data.json',
+
+  // 個々のセッション本体(そのセッション自身が直接持つカード・接続・自動線の非表示設定)を
+  // 保存するJSONファイル名のプレフィックス(2026年9月追加)。実際のファイル名は
+  // `${SESSION_FILE_PREFIX}${session.id}.json`。セッションに「入った」瞬間だけ取得する
+  // (js/app.jsのensureSessionLoaded()参照)。
+  SESSION_FILE_PREFIX: 'constellation-session-',
 
   // Almagest(書物モジュール)の書庫データ専用のJSONファイル名(2026年9月追加)。
   // メインのDATA_FILE_NAMEに埋め込むと、オートセーブOFF既定(端末内にしか保存されない)の
   // 影響を受けて登録した本が他端末へ同期されない・端末ローカルにしか残らないという実機不具合が
   // あったため、独立したファイルとして常にDriveへ即時保存する(js/modules/almagest.js参照)。
   ALMAGEST_FILE_NAME: 'almagest-library.json',
-
-  // 年セッションだけを写した軽量インデックスファイル名(2026年9月、スタートメニュー機能で追加)。
-  // メインのDATA_FILE_NAME(全カードのサムネイルを含む、いちばん重いファイル)を読み込まずに
-  // 「今年のセッション」のIDだけを知りたい(クイックカメラ/クイックセッション)場面のために、
-  // 年セッションのメタデータ(id/name/year/createdAt)だけを持つ極小のミラーを別ファイルとして
-  // 持つ。メインデータの保存(handleSave())のたびに追従して書き込む(js/app.js参照)。
-  YEARS_INDEX_FILE_NAME: 'constellation-years.json',
 
   // Ephemerisモジュール(js/modules/ephemeris.js、コード357)のスケジュールデータ専用ファイル名
   // (2026年9月追加)。Almagest・年インデックスと同じく、メインのDATA_FILE_NAMEとは独立した

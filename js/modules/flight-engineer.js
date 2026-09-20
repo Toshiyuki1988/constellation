@@ -711,6 +711,12 @@
     };
 
     applyStowForward(entry);
+    // 新しく作ったセッションは、今しがた中身を丸ごとstate.cardsへ移したばかりなので、
+    // 通信なしで「読み込み済み」として扱ってよい(2026年9月、セッション単位ロードへの対応)。
+    // pushFeHistory()内のscheduleAutoSave()は今アクティブなセッション(=parentSessionId)しか
+    // 見ないため、新しいセッション自身も明示的にdirty扱いにしておく。
+    state.loadedSessionIds.add(entry.newSessionId);
+    markSessionDirty(entry.newSessionId);
     clearSelectionAndPanel();
     renderAllCards();
     pushFeHistory(entry);
@@ -726,6 +732,7 @@
     if (cardIdx !== -1) state.cards.splice(cardIdx, 1);
     const sessIdx = state.sessions.findIndex((s) => s.id === entry.session.id);
     if (sessIdx !== -1) state.sessions.splice(sessIdx, 1);
+    state.loadedSessionIds.delete(entry.session.id); // 索引から消えたセッションなので追う必要が無い
 
     entry.childCardIds.forEach((id) => {
       const card = getCardById(id);
@@ -743,6 +750,9 @@
   function applyDisbandReverse(entry) {
     state.sessions.push({ ...entry.session });
     state.cards.push({ ...entry.sessionCard });
+    // 復元したセッションの中身(childCardIds)は既にstate.cards上に存在するカードを
+    // sessionId書き換えで戻すだけなので、通信不要でそのまま「読み込み済み」扱いにできる。
+    state.loadedSessionIds.add(entry.session.id);
     entry.childCardIds.forEach((id) => {
       const card = getCardById(id);
       if (!card) return;
@@ -756,13 +766,21 @@
     });
   }
 
-  function doDisband() {
+  async function doDisband() {
     const ids = Array.from(selection);
     if (ids.length !== 1) return;
     const card = getCardById(ids[0]);
     if (!card || card.mediaType !== 'session') return;
     const session = getSessionById(card.refSessionId);
     if (!session) return;
+    // **2026年9月、セッション単位ロードへの対応**: 解体対象のセッション自身は、タイル
+    // (このカード)が見えているだけで実際に「入った」ことはまだ無いことがある(=中身が
+    // state.cardsに存在しない)。読み込まずに解体すると、実際には中身があるのに
+    // 「0枚」と誤認したまま消してしまう(Drive上の実体は残るが、参照の無い孤児になる)ため、
+    // 必ず先に読み込んでから中身を数える。
+    if (typeof ensureSessionLoaded === 'function') {
+      try { await ensureSessionLoaded(session.id); } catch (err) { return; }
+    }
     const currentId = activeSessionId();
     const children = state.cards.filter((c) => c.sessionId === session.id);
     const childIds = children.map((c) => c.id);
@@ -998,11 +1016,33 @@
     renderBreadcrumb();
   }
 
-  /** 履歴上の任意の位置(targetIndex件ぶんが適用済みの状態)へジャンプする。 */
-  function jumpToHistoryIndex(targetIndex) {
+  /** 履歴上の任意の位置(targetIndex件ぶんが適用済みの状態)へジャンプする。
+   *  **2026年9月、セッション単位ロードへの対応**: このタブを開き直した後に古い履歴の
+   *  エントリを辿ろうとすると、そのエントリが指すセッション(parentSessionId・新規/解体
+   *  対象のセッション)が今回まだ読み込まれていない場合がある。跨る全エントリが参照する
+   *  セッションを先にまとめて読み込んでから、forward/reverseの適用ループへ進む
+   *  (既に存在するセッションだけを対象にする。まだ存在しない=このジャンプの中で新しく
+   *  作られる/復元されるセッションは読み込む必要が無い)。 */
+  async function jumpToHistoryIndex(targetIndex) {
     targetIndex = Math.max(0, Math.min(state.feHistory.length, targetIndex));
     const from = state.feHistoryIndex;
     if (targetIndex === from) return;
+    const lo = Math.min(from, targetIndex);
+    const hi = Math.max(from, targetIndex);
+    const touchedEntries = state.feHistory.slice(lo, hi);
+    const touchedSessionIds = new Set();
+    touchedEntries.forEach((entry) => {
+      touchedSessionIds.add(entry.parentSessionId);
+      if (entry.type === 'stow') touchedSessionIds.add(entry.newSessionId);
+      else if (entry.type === 'disband') touchedSessionIds.add(entry.session.id);
+    });
+    if (typeof ensureSessionLoaded === 'function') {
+      try {
+        await Promise.all(Array.from(touchedSessionIds).map((id) => (getSessionById(id) ? ensureSessionLoaded(id) : Promise.resolve())));
+      } catch (err) {
+        return;
+      }
+    }
     if (targetIndex < from) {
       for (let i = from - 1; i >= targetIndex; i--) applyEntryReverse(state.feHistory[i]);
     } else {
@@ -1017,7 +1057,7 @@
     else playFlightEngineerRedoSound();
     const entry = targetIndex > 0 ? state.feHistory[targetIndex - 1] : null;
     setStatus(entry ? `履歴を移動しました: ${entry.label}` : '履歴を操作前の状態に戻しました');
-    scheduleAutoSave();
+    scheduleAutoSave(Array.from(touchedSessionIds));
   }
 
   function feTimeAgo(ts) {
@@ -1074,17 +1114,24 @@
     return `<div class="fe-preview-tile"><span class="fe-preview-tile-icon">${icon}</span><span class="fe-preview-tile-label">${escapeHtml(label)}</span></div>`;
   }
 
-  function showSessionPreview(refSessionId) {
+  async function showSessionPreview(refSessionId) {
     const session = getSessionById(refSessionId);
     if (!session) return;
     ensureBarDom(); // previewOverlayを確実に用意する
-    const children = state.cards.filter((c) => c.sessionId === refSessionId);
+    // **2026年9月、セッション単位ロードへの対応**: プレビュー対象は「まだ入っていない
+    // セッション」であることが前提の機能のため、中身を見るには必ず先に読み込む。
     feEls.previewTitle.textContent = session.name;
+    feEls.previewCount.textContent = '読み込み中…';
+    feEls.previewGrid.innerHTML = '';
+    feEls.previewOverlay.classList.add('open');
+    if (typeof ensureSessionLoaded === 'function') {
+      try { await ensureSessionLoaded(refSessionId); } catch (err) { feEls.previewCount.textContent = '読み込みに失敗しました'; return; }
+    }
+    const children = state.cards.filter((c) => c.sessionId === refSessionId);
     feEls.previewCount.textContent = `${children.length}件`;
     feEls.previewGrid.innerHTML = children.length
       ? children.map((c) => previewTileHtml(c)).join('')
       : '<p class="fe-preview-empty">中身は空です。</p>';
-    feEls.previewOverlay.classList.add('open');
   }
 
   /* ---------------- キャンバス背景/カードへのポインタ配線 ---------------- */

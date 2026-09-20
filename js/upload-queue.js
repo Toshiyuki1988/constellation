@@ -41,11 +41,6 @@ const DATA_BACKUP_STORE = 'dataBackup';
 // onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーのpending/dataBackupは
 // 引き続き無事。
 const ALMAGEST_CACHE_STORE = 'almagestCache';
-// クイックカメラ/クイックセッション(2026年9月追加)が、メインデータ(state.cards/sessions全体)を
-// 読み込まずに作った「新規セッション+新規カードだけ」を一時的に置く場所。DBバージョンを4へ
-// 上げるが、onupgradeneededは既存storeが無い時だけ作る作りのため、既存ユーザーのpending/
-// dataBackup/almagestCacheは引き続き無事。下記「クイックバンドル」セクション参照。
-const QUICK_BUNDLE_STORE = 'quickBundle';
 // Almagestの各本の本文・要約・出典(2026年9月追加、「本を開いた時だけ本文を読み込む」
 // 対応)。書庫の索引(almagest-library.json)は本文を含まない軽量な形に変えたため、
 // オフライン閲覧用の端末内キャッシュも索引とは別に、本ごとにここへ保持する。DBバージョンを
@@ -76,9 +71,6 @@ function openUploadQueueDb() {
       }
       if (!req.result.objectStoreNames.contains(ALMAGEST_CACHE_STORE)) {
         req.result.createObjectStore(ALMAGEST_CACHE_STORE, { keyPath: 'id' });
-      }
-      if (!req.result.objectStoreNames.contains(QUICK_BUNDLE_STORE)) {
-        req.result.createObjectStore(QUICK_BUNDLE_STORE, { keyPath: 'id' });
       }
       if (!req.result.objectStoreNames.contains(ALMAGEST_BOOK_CACHE_STORE)) {
         req.result.createObjectStore(ALMAGEST_BOOK_CACHE_STORE, { keyPath: 'id' });
@@ -183,6 +175,15 @@ async function persistToUploadQueue(card, blob, filename) {
 const UPLOAD_QUEUE_ORPHAN_GRACE_MS = 10 * 60 * 1000; // 10分
 
 async function uploadQueuedEntry(entry, signal) {
+  // **2026年9月、セッション単位ロードへの対応**: このカードが属するセッション(entry.sessionId)が
+  // まだ読み込まれていない場合、getCardById()は必ずnullを返す(state.cardsには読み込み済みの
+  // セッションのカードしか無いため)。以前の「メインデータは常に全部読み込み済み」という前提が
+  // 崩れたため、対応先が見つからない=本当に削除された、と早合点しないよう、判定の前に必ず
+  // そのセッションを読み込んでおく(js/app.jsのensureSessionLoaded()参照)。既に読み込み済みなら
+  // 何もしない軽量なno-op。
+  if (entry.sessionId && typeof ensureSessionLoaded === 'function') {
+    await ensureSessionLoaded(entry.sessionId).catch(() => {});
+  }
   const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
   if (!card) {
     if (Date.now() - (entry.createdAt || 0) < UPLOAD_QUEUE_ORPHAN_GRACE_MS) {
@@ -323,13 +324,21 @@ function exportableBlobType(entry) {
 async function exportPendingUploadsToPhotos() {
   let entries;
   try {
-    // 既にdeviceSaved済みのものは除く(2026年9月追加。含めたままだと、まだDriveへ送信して
-    // いない間はボタンを押すたびに同じ写真を毎回また共有シートに乗せて重複保存させてしまう)。
-    entries = (await uploadQueueGetAll()).filter(isDeviceExportableEntry).filter(isNotYetDeviceSaved);
+    entries = (await uploadQueueGetAll()).filter(isDeviceExportableEntry);
   } catch (err) {
     console.error('待機列の読み込みに失敗', err);
     return 'error';
   }
+  // **2026年9月、セッション単位ロードへの対応**: isNotYetDeviceSaved()はgetCardById()で
+  // card.deviceSavedを見るため、対象カードのセッションが未読み込みのままだと正しく判定
+  // できない(常に「未保存」扱いになってしまう)。先に関係する全セッションを読み込んでおく。
+  if (typeof ensureSessionLoaded === 'function') {
+    const sessionIds = Array.from(new Set(entries.map((e) => e.sessionId).filter(Boolean)));
+    await Promise.all(sessionIds.map((id) => ensureSessionLoaded(id).catch(() => {})));
+  }
+  // 既にdeviceSaved済みのものは除く(2026年9月追加。含めたままだと、まだDriveへ送信して
+  // いない間はボタンを押すたびに同じ写真を毎回また共有シートに乗せて重複保存させてしまう)。
+  entries = entries.filter(isNotYetDeviceSaved);
   if (entries.length === 0) return 'empty';
 
   if (!navigator.share || !navigator.canShare) return 'unsupported';
@@ -347,14 +356,18 @@ async function exportPendingUploadsToPhotos() {
     // (Web Share APIは個々のファイルで保存先を選んだかまでは教えてくれないため、既存の
     // 「保険用コピー」という位置づけ通りベストエフォートで扱う)、対象カードにdeviceSavedを
     // 立てて「📵 端末未保存」バッジを消す。待機列・Driveアップロード状態には一切触れない。
+    const touchedSessionIds = [];
     entries.forEach((entry) => {
       const card = typeof getCardById === 'function' ? getCardById(entry.cardId) : null;
       if (!card) return;
       card.deviceSaved = true;
+      touchedSessionIds.push(card.sessionId);
       const el = typeof cardElById === 'function' ? cardElById(card.id) : null;
       if (el && typeof updateCardStatusBadges === 'function') updateCardStatusBadges(el, card);
     });
-    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    // 対象カードが今アクティブなセッション以外に属することもあるため(2026年9月、セッション
+    // 単位ロードへの対応)、影響のあった全セッションを明示的にdirty扱いにする。
+    if (typeof scheduleAutoSave === 'function') scheduleAutoSave(touchedSessionIds);
     return 'shared';
   } catch (err) {
     if (err && err.name === 'AbortError') return 'cancelled'; // ユーザーが共有シートを閉じただけ
@@ -365,13 +378,20 @@ async function exportPendingUploadsToPhotos() {
 }
 
 /**
- * 再読み込み直後、js/app.jsのonSignedIn()から1回呼ぶ。前回終了時に待機列へ残っていたぶんを
- * 表示上だけ拾い直す(**自動アップロードは一切行わない**、2026年9月に撤去)。
- * card.uploadQueuedが立っているのに実データが見つからない(別端末で作られた・ブラウザの
- * ストレージが消去された等)場合は、詰まったままにせず「アップロード失敗」扱いにして、
- * 少なくともユーザーが気づけるようにする。
+ * 前回終了時に待機列へ残っていたぶんを表示上だけ拾い直す(**自動アップロードは一切行わない**、
+ * 2026年9月に撤去)。card.uploadQueuedが立っているのに実データが見つからない(別端末で
+ * 作られた・ブラウザのストレージが消去された等)場合は、詰まったままにせず「アップロード失敗」
+ * 扱いにして、少なくともユーザーが気づけるようにする。
+ * **2026年9月、セッション単位ロードへの対応**: 以前はonSignedIn()から1回だけ、その時点で
+ * 全件読み込み済みだったstate.cards全体に対して行っていたが、今はサインイン直後は
+ * state.cardsが空(どのセッションもまだ読み込んでいない)なので、それでは何も補正できない。
+ * 対象カード配列を引数で受け取れるようにし、js/app.jsのensureSessionLoaded()がセッションを
+ * 1つ読み込むたびに「そのセッション分のカードだけ」を渡して呼ぶ(他のセッションの待機列
+ * エントリを無関係に「対応カード無し」と誤判定しないため)。引数省略時はstate.cards全体
+ * (「📥 すべて読み込む」で全セッションを読み込んだ後の一括チェック等に使う)。
  */
-async function restoreUploadQueueOnLoad() {
+async function restoreUploadQueueOnLoad(cards) {
+  const targetCards = cards || state.cards;
   let entries;
   try {
     entries = await uploadQueueGetAll();
@@ -380,7 +400,7 @@ async function restoreUploadQueueOnLoad() {
     entries = [];
   }
   const queuedCardIds = new Set(entries.map((e) => e.cardId));
-  state.cards.forEach((card) => {
+  targetCards.forEach((card) => {
     if (card.uploadQueued && !queuedCardIds.has(card.id)) {
       card.uploadQueued = false;
       card.uploadPending = false;
@@ -522,54 +542,28 @@ function clearAlmagestBookCache(entryId) {
   })).catch(() => {});
 }
 
-/* ---------------- クイックバンドル(クイックカメラ/クイックセッション、2026年9月追加) ----------------
- * 「スタートメニュー」機能の一部。クイックカメラ/クイックセッションは、メインデータ
- * (constellation-data.json、全セッション・全カードのサムネイルを含む、いちばん重いファイル)を
- * 一切読み込まずに、【現在の年】セッションの下へ新規セッション+新規カードを作る。この間、
- * js/app.jsのstate.cards/sessions等は「新規に作った分だけ」を持つ軽量な状態のままなので、
- * 既存のhandleSave()(state全体でDrive上のメインファイルを丸ごと上書きする)を呼んでしまうと
- * 過去の全記録を消してしまう。そのため、この間の保存先はDriveのメインファイルではなく、
- * ここ(IndexedDB)に留める。
- *
- * 実際にDriveへ反映されるのは、ユーザーが別のセッション(このクイックバンドルに含まれない
- * セッション)へ移動しようとした瞬間(js/app.jsのensureMainDataLoaded()経由)で、その時点で
- * 初めてメインファイルを読み込み、このバンドルの中身(新規セッション・新規カードだけ)を
- * 既存データへ追記の形でマージしてから、通常のhandleSave()で書き戻す(js/app.jsの
- * mergeQuickBundleIfAny()参照)。**削除・上書きは一切行わず、常に追記のみ**という、
- * 既存の「Driveの元データには触れない」方針と同じ考え方をここでも徹底している。
- *
- * 保存する中身はjs/app.jsのcollectSaveData()と同じ形(cards/sessions/connections/
- * hiddenAutoLinks等)をそのまま流用する。クイックモード中はstate自体が「新規に作った分だけ」
- * なので、collectSaveData()の戻り値がそのまま「マージすべき差分」になる。単一キー('latest')で
- * 1件だけを保持する(1回のクイック外出につき1つのバンドルという単純な設計、複数のクイック
- * セッションを同時並行では持たない)。 */
-
-function saveQuickBundle(data) {
+/** 端末内キャッシュに本文を持っている本のid一覧(2026年9月追加)。「電車の中で通信量を
+ *  抑えながら読みたい、どの本がオフラインで読めるか本棚で一目で分かるようにしたい」という
+ *  ユーザー要望に対応するため、js/modules/almagest.jsの本棚描画がこれを使って各本に
+ *  オフライン可否のバッジを付ける。1件ずつget()するより、getAllKeys()で一括取得した方が
+ *  本棚を開くたびの問い合わせ回数を抑えられる。 */
+function listAlmagestBookCacheIds() {
   return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
-    const tx = db.transaction(QUICK_BUNDLE_STORE, 'readwrite');
-    tx.objectStore(QUICK_BUNDLE_STORE).put({ id: 'latest', data, updatedAt: Date.now() });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  }));
-}
-
-function loadQuickBundle() {
-  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
-    const tx = db.transaction(QUICK_BUNDLE_STORE, 'readonly');
-    const req = tx.objectStore(QUICK_BUNDLE_STORE).get('latest');
-    req.onsuccess = () => resolve(req.result ? req.result.data : null);
+    const tx = db.transaction(ALMAGEST_BOOK_CACHE_STORE, 'readonly');
+    const req = tx.objectStore(ALMAGEST_BOOK_CACHE_STORE).getAllKeys();
+    req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
   })).catch((err) => {
-    console.error('クイックバンドルの読み込みに失敗', err);
-    return null;
+    console.error('Almagestの本文キャッシュ一覧の取得に失敗', err);
+    return [];
   });
 }
 
-function clearQuickBundle() {
-  return openUploadQueueDb().then((db) => new Promise((resolve, reject) => {
-    const tx = db.transaction(QUICK_BUNDLE_STORE, 'readwrite');
-    tx.objectStore(QUICK_BUNDLE_STORE).delete('latest');
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  })).catch(() => {});
-}
+/* ---------------- ローカルデータバックアップ・端末内キャッシュの用途変更(2026年9月) ----------------
+ * かつてここにあった「クイックバンドル」(クイックカメラ/クイックセッションが、メインデータを
+ * 読み込まずに作った新規セッション・新規カードを一時的にIndexedDBへ退避する仕組み)は、
+ * クイックモードという概念自体をセッション単位ロードへ置き換えたことに伴い廃止した(2026年9月)。
+ * セッション単位ロードでは、新規セッションを作った時点でそのセッション自身の本体ファイル
+ * (constellation-session-<id>.json)へ直接保存できるため、そもそも「メインデータとは別の
+ * 一時置き場」を経由する必要が無くなった。旧`quickBundle`というIndexedDB storeの定義自体は
+ * (既存ユーザーの端末に残っていても実害が無いため)削除せず放置してある。 */

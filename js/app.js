@@ -43,34 +43,35 @@ const state = {
   // グループビューイングモード(js/app.jsのgroupViewingTick())のコメント間隔(秒)。
   // js/modules/crews.jsのペルソナ管理パネルから設定できる。既定60秒。
   groupViewingIntervalSec: 60,
-  // オートセーブ(constellation-data.json全体のDrive自動保存)のON/OFF。
+  // オートセーブ(セッション単位でのDrive自動保存)のON/OFF。
   // **2026年9月、手動トグルを廃止し接続状態に自動連動させた**(updateOfflineIndicator()/
   // handleConnectivityChange()参照)。以前は端末ローカルのON/OFFボタンで手動切り替えしていたが、
   // ヘッダーのボタンが増えて煩雑になったこと、切り替え忘れによる「オンラインなのに未保存が
   // 溜まる」取りこぼしが起きうることから、シンプルな「オンライン中は自動保存・オフライン中は
   // 端末内バックアップのみ」という接続状態そのものへの連動に置き換えた。
   autoSaveEnabled: navigator.onLine,
-  // クイックカメラ/クイックセッション(2026年9月追加、スタートメニュー)。
-  // trueの間は、メインデータ(state.cards/sessions全体)を読み込んでいない代わりに、
-  // 【現在の年】セッション+今回新規に作ったセッションだけを持つ軽量な状態で動いている。
-  // この間の保存はDriveのメインファイルへは行わず、IndexedDBのクイックバンドルへ留める
-  // (js/upload-queue.jsのsaveQuickBundle()、js/app.jsのscheduleAutoSave()参照)。
-  quickMode: false,
-  // クイックモード中、フルデータを読み込まずに安全に出入りできるセッションID一覧
-  // (年セッション+今回作った新規セッションのみ)。enterSession()がこれを見て、
-  // 範囲外のセッションへ移動しようとした瞬間だけensureMainDataLoaded()を先に待つ。
-  quickSessionIds: null,
-  // 今回のクイック外出を識別するID(2026年9月追加、IndexedDBのクイックバンドルを保存する
-  // キーに使う)。startQuickSession()で発行し、マージ完了後はnullに戻す。単一キーだった頃、
-  // マージし損ねた過去の外出のバンドルを次の外出が上書きして消してしまうバグがあったため、
-  // 外出ごとに一意なキーを持たせるようにした(js/upload-queue.jsのクイックバンドルの
-  // コメント参照)。
-  quickBundleId: null,
-  // 年セッションだけの軽量インデックス(constellation-years.json)のファイルID・読み込み状況。
-  yearsIndexFileId: null,
-  yearsIndexAvailable: false,
   // Ephemerisモジュール(js/modules/ephemeris.js)のスケジュールデータ専用Driveファイルのid。
   ephemerisFileId: null,
+  // ---------------- セッション単位ロード(2026年9月、クイックモードの全面置き換え) ----------------
+  // 「出先の展覧会はそのセッションだけの通信で済ませたい」というユーザー要望への対応として、
+  // 以前存在した「クイックモード」(メインデータとは別レイヤーで動く軽量な仮の状態)という
+  // 仕組み自体を廃止し、**全セッションが同じ1つのルールで動く**設計に作り直した。
+  //
+  // state.sessionsは常に「索引」(constellation-data.json、id/parentId/name/年/カード枚数/
+  // 代表サムネイル1枚/本体ファイルidだけを持つ軽量なメタデータ)から組み立てられ、サインイン
+  // 直後から常に全件がここにある(=セッションの階層・件数はいつでも見える)。
+  // 一方、state.cards/state.connections/state.hiddenAutoLinksは「実際にそのセッションへ
+  // 入った(=ensureSessionLoaded()した)分だけ」を持つ。未読み込みのセッションはstate.sessions
+  // には存在するが、その配下のカードはstate.cardsに一切現れない。
+  //
+  // このため「セッションがロード済みかどうか」は、既存の`state.cards.filter(c => c.sessionId
+  // === id)`という頻出パターンが自然に「ロード済みなら中身、未読み込みなら空配列」を返すだけで
+  // 表現できる(=既存のカード描画・検索ロジックに追加の分岐がほぼ不要)。
+  loadedSessionIds: new Set(),
+  // 変更があったのにまだDriveへ書き戻していないセッションのID集合。scheduleAutoSave(sessionId)
+  // が(既定は活動中のセッション、必要に応じて明示的な配列)ここへ追加し、runScheduledSave()が
+  // 保存が終わったセッションだけをここから取り除く。
+  dirtySessionIds: new Set(),
 };
 
 const FIRST_YEAR = 2025;
@@ -103,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
   els.statusProgressBar = document.getElementById('statusProgressBar');
   els.viewport = document.getElementById('canvas-viewport');
   els.content = document.getElementById('canvas-content');
+  els.sessionsMap = document.getElementById('sessions-map');
   els.imageInput = document.getElementById('image-input');
   els.yearTabs = document.getElementById('year-tabs');
   els.breadcrumb = document.getElementById('breadcrumb');
@@ -136,49 +138,51 @@ document.addEventListener('DOMContentLoaded', () => {
   els.settingsCloseBtn.addEventListener('click', closeSettings);
 
   // Driveへの手動アップロード(2026年9月、完全手動化。設定モーダル内に置き、誤操作を防ぐ)。
-  // いずれもstate.cards(getCardById())を前提にするため、withMainData()で保護する
-  // (メインデータ読み込み前に呼ぶと、待機列のエントリを「対応カードが見つからない」=
-  // 削除済みと誤認して消してしまいかねない、2026年9月に発見した重大なリスクへの対応)。
+  // いずれもgetCardById()を前提にするが、対象カードのセッションが未読み込みでも
+  // js/upload-queue.jsのuploadQueuedEntry()が呼び出し時に自動でensureSessionLoaded()する
+  // ため(2026年9月、セッション単位ロードへの対応)、ここで先読みを待つ必要は無い。
   els.driveUploadBtn = document.getElementById('drive-upload-btn');
   els.driveUploadStatus = document.getElementById('drive-upload-status');
-  if (els.driveUploadBtn) els.driveUploadBtn.addEventListener('click', () => withMainData(handleDriveUploadBtnClick));
+  if (els.driveUploadBtn) els.driveUploadBtn.addEventListener('click', handleDriveUploadBtnClick);
   els.exportToPhotosBtn = document.getElementById('export-to-photos-btn');
-  if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', () => withMainData(handleExportToPhotos));
+  if (els.exportToPhotosBtn) els.exportToPhotosBtn.addEventListener('click', handleExportToPhotos);
   updateDriveUploadButton();
   const uploadStatusBtn = document.getElementById('upload-status-btn');
-  if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', () => withMainData(openUploadStatusList));
+  if (uploadStatusBtn) uploadStatusBtn.addEventListener('click', openUploadStatusList);
+
+  // 自宅Wi-Fi等、通信量を気にしない環境向けの一括読み込みボタン(2026年9月追加)。
+  els.loadEverythingBtn = document.getElementById('load-everything-btn');
+  if (els.loadEverythingBtn) els.loadEverythingBtn.addEventListener('click', loadEverySession);
 
   // 高画質差し替え(EXIF自動照合、2026年9月追加→同月中にユーザー判断でオフ、CLAUDE.md参照)。
   // 「今の使用状況では、必要な写真はズーム時に元画質で見られているため不要」との理由で
   // index.html側でボタンをhiddenにした。この配線・下の一連の関数は削除せず残してある
   // (また必要になればindex.htmlのhidden属性を外すだけで復活する)。
-  // state.cards(activeSessionId()の写真カード)を前提にするため、withMainData()で保護する
-  // (上と同じ理由)。
   els.exifMatchBtn = document.getElementById('exif-match-btn');
   els.exifMatchInput = document.getElementById('exif-match-input');
-  if (els.exifMatchBtn) els.exifMatchBtn.addEventListener('click', () => withMainData(() => els.exifMatchInput.click()));
+  if (els.exifMatchBtn) els.exifMatchBtn.addEventListener('click', () => els.exifMatchInput.click());
   if (els.exifMatchInput) els.exifMatchInput.addEventListener('change', handleExifMatchFilesSelected);
 
   debugLog('DOMContentLoaded, isConfigured=' + isConfigured());
 
   // **2026年9月追加、Ephemerisモジュール(js/modules/ephemeris.js、コード357)との連携**:
-  // Ephemerisでスケジュール登録した施行日当日は、ゴールデンレコードのロード画面の代わりに
-  // 画面全体を「花つる+タイムテーブル」にする(ユーザー指定)。この判定はDrive/認証のどちらも
+  // Ephemerisでスケジュール登録した施行日当日は、通常の白いツールバーの代わりに
+  // 画面全体を「丸時計+タイムテーブル」にする(ユーザー指定)。この判定はDrive/認証のどちらも
   // 待たずに端末のlocalStorageミラー(js/modules/ephemeris.jsが変更のたび書き込む)だけで
   // 同期的に行えるため、ここで最初に行う。**誤タップ防止のため、この日は通常の
   // armAutoSignInOnFirstGesture()(画面のどこをタップしても自動サイレントサインインを試みる)を
-  // アームしない**。花つる/タイムテーブルは操作に反応しない読み取り専用の演出で、サインインは
+  // アームしない**。丸時計/タイムテーブルは操作に反応しない読み取り専用の演出で、サインインは
   // Ephemeris側が用意する専用ボタン(花つる画面の上部バー)からのみ行う。
+  // **2026年9月、VOYAGER GOLDEN RECORDのロード画面を廃止した**(クイックメニューという概念
+  // 自体をセッション単位ロードへ置き換えたことに伴い、「サインイン前にどの通信量で始めるか
+  // 選ぶ」という前提そのものが無くなったため)。サインイン前は単純にアプリ本体と同じ白い
+  // ツールバー(disabled状態)がそのまま見えているだけで良いと判断し、専用のロード画面・
+  // オーバーレイは用意していない。
   const ephemerisTodaySchedules = (isConfigured() && typeof getTodayEphemerisSchedules === 'function')
     ? getTodayEphemerisSchedules()
     : [];
   if (ephemerisTodaySchedules.length > 0 && typeof showEphemerisFlash === 'function') {
     debugLog(`Ephemeris該当日(${ephemerisTodaySchedules.length}件) -> 花つるフラッシュを表示`);
-    // 静的に開いているゴールデンレコード(index.html側に埋め込み済み、JSの実行を待たず
-    // 最初のペイントから見えている)を閉じる。startMenuEls未構築の段階でも、要素自体は
-    // 既にDOMにあるため直接掴んで閉じられる。
-    const staticOverlay = document.getElementById('start-menu-overlay');
-    if (staticOverlay) staticOverlay.classList.remove('open');
     showEphemerisFlash(ephemerisTodaySchedules);
     els.signInBtn.disabled = false;
     els.signInBtn.hidden = true;
@@ -187,32 +191,18 @@ document.addEventListener('DOMContentLoaded', () => {
       initAuth(onSignedIn, onSignInFailed);
       // armAutoSignInOnFirstGesture()は呼ばない(誤タップ防止)。
     });
+  } else if (isConfigured()) {
+    els.signInBtn.disabled = false;
+    els.signInBtn.hidden = true;
+    whenGisReady(() => {
+      debugLog('whenGisReady -> initAuth() 呼び出し');
+      initAuth(onSignedIn, onSignInFailed);
+      // ページ読み込み直後(ユーザー操作なし)にrequestAccessTokenを呼ぶとポップアップブロックの
+      // 対象になりやすいため、最初のタップ/クリックのタイミングに合わせてサイレント試行する。
+      armAutoSignInOnFirstGesture();
+    });
   } else {
-    // **2026年9月追加**: サインインが完了する(または「Googleでサインイン」ボタンが必要になる)
-    // までの間、業務的な白いツールバー/空のキャンバスが一瞬でも見えないよう、ゴールデンレコードの
-    // ロード画面をここで表示する。実際には`index.html`側に`#start-menu-overlay`を
-    // `class="start-menu-overlay open phase-loading"`済みの状態で静的に埋め込んであるため、
-    // この呼び出しより前の最初のペイントから既に見えている(buildStartMenu()参照、JSの実行を
-    // 待たない)。ここでの呼び出しは、キャプションの巡回開始とクイックメニュー/サインイン促し
-    // 局面のDOM組み立て・イベント配線を行うためのもの。
-    showOpeningLoadingScreen();
-
-    if (isConfigured()) {
-      els.signInBtn.disabled = false;
-      els.signInBtn.hidden = true;
-      whenGisReady(() => {
-        debugLog('whenGisReady -> initAuth() 呼び出し');
-        initAuth(onSignedIn, onSignInFailed);
-        // ページ読み込み直後(ユーザー操作なし)にrequestAccessTokenを呼ぶとポップアップブロックの
-        // 対象になりやすいため、最初のタップ/クリックのタイミングに合わせてサイレント試行する。
-        armAutoSignInOnFirstGesture();
-      });
-    } else {
-      // 初回起動(APIキー未設定)は、ゴールデンレコードのオーバーレイ(z-index:300)が
-      // 設定モーダル(z-index:220)より上に来てしまい隠してしまうため、先に閉じてから開く。
-      closeStartMenu();
-      openSettings();
-    }
+    openSettings();
   }
 
   els.signInBtn.addEventListener('click', () => {
@@ -225,22 +215,24 @@ document.addEventListener('DOMContentLoaded', () => {
     stopGroupViewing(); // サインアウト後もタイマーが回り続けてAPIを呼び続けないようにする
     setStatus('サインアウトしました');
   });
-  // ボトムツールバーの各ボタンは、いずれも最終的にstate.cards/sessionsを前提にした
-  // カード作成へつながるため、withMainData()でメインデータの読み込みを待ってから実行する
-  // (2026年9月追加、「サインイン→すぐAlmagestで読書」の通信量最小化のためonSignedIn()を
-  // 2段階に分けたことに伴う対応。ensureMainDataLoaded()のコメント参照)。
-  els.toolUpload.addEventListener('click', () => withMainData(() => els.imageInput.click()));
+  // ボトムツールバーの各ボタンは、いずれも今アクティブなセッション(activeSessionId())への
+  // カード追加につながる。セッションへ入っている間はそのセッション本体が既に読み込み済みの
+  // はずなので(enterSession()参照)、ここで追加の読み込み待ちは不要。**未読み込みの心配より、
+  // 「まだどのセッションにも入っていない(全体マップを見ている)」状態で押された場合の方が
+  // 実際の懸念**であり、これはupdateToolbarSessionGate()がその間ボタン自体をdisabledにする
+  // ことで防いでいる(2026年9月、セッション単位ロードへの対応)。
+  els.toolUpload.addEventListener('click', () => els.imageInput.click());
   els.imageInput.addEventListener('change', handleImageSelected);
   els.retryUploadInput = document.getElementById('retry-upload-input');
   if (els.retryUploadInput) els.retryUploadInput.addEventListener('change', handleRetryUploadSelected);
-  els.toolCamera.addEventListener('click', () => withMainData(() => handleOpenCamera('photo')));
-  els.toolText.addEventListener('click', () => withMainData(handleOpenTextTool));
-  els.toolVideo.addEventListener('click', () => withMainData(() => handleOpenCamera('video')));
-  els.toolAudio.addEventListener('click', () => withMainData(() => handleOpenCamera('audio')));
-  els.toolSession.addEventListener('click', () => withMainData(handleCreateSession));
-  els.toolInfo.addEventListener('click', () => withMainData(createInfoCard));
-  els.toolSummary.addEventListener('click', () => withMainData(() => createSummaryCard()));
-  els.toolStreetview.addEventListener('click', () => withMainData(createStreetviewCard));
+  els.toolCamera.addEventListener('click', () => handleOpenCamera('photo'));
+  els.toolText.addEventListener('click', handleOpenTextTool);
+  els.toolVideo.addEventListener('click', () => handleOpenCamera('video'));
+  els.toolAudio.addEventListener('click', () => handleOpenCamera('audio'));
+  els.toolSession.addEventListener('click', handleCreateSession);
+  els.toolInfo.addEventListener('click', createInfoCard);
+  els.toolSummary.addEventListener('click', () => createSummaryCard());
+  els.toolStreetview.addEventListener('click', createStreetviewCard);
   els.toolKeypad.addEventListener('click', () => { if (window.openModuleKeypad) window.openModuleKeypad(); });
   els.infoTicker.addEventListener('click', () => {
     const card = infoTickerItems[infoTickerIndex];
@@ -500,17 +492,25 @@ function toggleAuthUI(signedIn) {
   els.signInBtn.hidden = signedIn;
   els.signOutBtn.hidden = !signedIn;
   if (els.driveQuotaBtn && !signedIn) els.driveQuotaBtn.hidden = true; // サインアウト後は表示を消す(古い数値を残さない)
-  els.toolUpload.disabled = !signedIn;
-  els.toolCamera.disabled = !signedIn;
-  els.toolText.disabled = !signedIn;
-  els.toolVideo.disabled = !signedIn;
-  els.toolAudio.disabled = !signedIn;
-  els.toolSession.disabled = !signedIn;
-  els.toolInfo.disabled = !signedIn;
-  els.toolSummary.disabled = !signedIn;
-  els.toolStreetview.disabled = !signedIn;
+  if (els.loadEverythingBtn) els.loadEverythingBtn.hidden = !signedIn;
   els.toolKeypad.disabled = !signedIn;
-  if (els.exifMatchBtn) els.exifMatchBtn.disabled = !signedIn;
+  updateToolbarSessionGate();
+}
+
+/**
+ * ボトムツールバーの、カード追加系ボタン(セッションへの新規追加を前提にする9個)の有効/無効を
+ * 一括更新する(2026年9月、セッション単位ロードへの対応)。サインインしていても、まだどの
+ * セッションにも入っていない(全体マップを見ている)間は`activeSessionId()`がnullになるため、
+ * この間は誤って`card.sessionId = null`のカードを作ってしまわないよう無効化しておく。
+ * `toggleAuthUI()`・`enterSession()`・パンくずクリック・`showSessionsMap()`/`hideSessionsMap()`
+ * など、breadcrumbが変わりうる箇所から呼ぶ。
+ */
+function updateToolbarSessionGate() {
+  const enabled = Boolean(state.folderId) && Boolean(activeSessionId());
+  [els.toolUpload, els.toolCamera, els.toolText, els.toolVideo, els.toolAudio,
+    els.toolSession, els.toolInfo, els.toolSummary, els.toolStreetview].forEach((btn) => {
+    if (btn) btn.disabled = !enabled;
+  });
 }
 
 // エラーなど「読めるまで消えてほしくない」ステータスを出した直後は、オートセーブなどの
@@ -801,40 +801,39 @@ function handleOfflineIndicatorClick() {
   });
 }
 
-function scheduleAutoSave() {
-  // クイックモード中(state.quickMode)は、メインデータを読み込んでいない軽量な状態なので、
-  // 通常のmainDataLoadedゲートより先にこちらを見る。Driveのメインファイルには一切触れず、
-  // IndexedDBのクイックバンドルへだけ保存する(runScheduledSave()参照)。
-  if (state.quickMode) {
-    pendingSave = true;
-    clearTimeout(autoSaveTimer);
-    autoSaveTimer = setTimeout(runScheduledSave, AUTO_SAVE_DELAY_MS);
-    return;
-  }
-  // サインイン前、またはメインデータ(state.cards/sessions等)をまだ読み込んでいない間は
-  // 何もしない。**mainDataLoadedのチェックは安全上必須**: 2026年9月にonSignedIn()を
-  // 「Almagestだけ先に使える」フェーズと「メインデータの読み込み(ensureMainDataLoaded())」
-  // フェーズへ分割した際、後者が完了する前にこの関数が万が一呼ばれてしまうと、まだ空の
-  // state.cards/sessionsでDrive上のconstellation-data.jsonを上書きしてしまいかねない
-  // (=これまでの記録が丸ごと消える最悪のケース)。個々の呼び出し元をすべて洗い出して
-  // ensureMainDataLoaded()で塞ぐことに加えて、ここでも二重に防ぐ。
-  if (!state.folderId || !mainDataLoaded) return;
+/** 指定したセッション(未指定なら今アクティブなセッション)を「変更あり」として記録する
+ *  (2026年9月、セッション単位ロードへの対応)。配列を渡すと複数セッションをまとめて
+ *  マークできる(Flight Engineerの格納/解体のように、一度の操作で複数セッションの中身が
+ *  変わる場合に使う)。 */
+function markSessionDirty(sessionIds) {
+  const ids = Array.isArray(sessionIds) ? sessionIds : [sessionIds];
+  ids.forEach((id) => { if (id) state.dirtySessionIds.add(id); });
+}
+
+/**
+ * @param {string|string[]} [sessionIds] 変更があったセッションのID(省略時は今アクティブな
+ *   セッション)。実際の保存は`runScheduledSave()`がデバウンス後にまとめて行う。
+ * **2026年9月、クイックモード廃止に伴う全面書き換え**: 以前は「メインデータを読み込み
+ * 済みか(mainDataLoaded)」で保存の可否を一括判定していたが、セッション単位ロードでは
+ * その概念自体が無くなったため、判定は単純に`state.folderId`(サインイン済みか)だけになった。
+ * どのセッションが変更されたかは`markSessionDirty()`が`state.dirtySessionIds`に記録し、
+ * 実際の書き戻しは対象セッションが確実にDriveへ届いてから初めて安全という前提は変わらない
+ * (=空の/未読み込みのセッションを上書き保存してしまう心配は、そもそも「読み込んだセッション
+ * だけがstate.cardsに存在する」という設計自体で構造的に防がれている)。
+ */
+function scheduleAutoSave(sessionIds) {
+  if (!state.folderId) return; // サインイン前は何もしない
+  markSessionDirty(sessionIds || activeSessionId());
   pendingSave = true;
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(runScheduledSave, AUTO_SAVE_DELAY_MS);
 }
 
 /** デバウンスを待たず、今すぐ保存する(新規カード追加など、タブが閉じられる前に必ず
- *  残しておきたい変更で使う)。scheduleAutoSave()と同じ安全上の理由でmainDataLoaded/
- *  quickModeも見る。 */
-function saveImmediately() {
-  if (state.quickMode) {
-    pendingSave = true;
-    clearTimeout(autoSaveTimer);
-    runScheduledSave();
-    return;
-  }
-  if (!state.folderId || !mainDataLoaded) return;
+ *  残しておきたい変更で使う)。 */
+function saveImmediately(sessionIds) {
+  if (!state.folderId) return;
+  markSessionDirty(sessionIds || activeSessionId());
   pendingSave = true;
   clearTimeout(autoSaveTimer);
   runScheduledSave();
@@ -847,15 +846,6 @@ async function runScheduledSave() {
   }
   saveInFlight = true;
   try {
-    // クイックモード中は、Driveのメインファイルにもオートセーブのローカルバックアップにも
-    // 触れず、専用のクイックバンドル(IndexedDB)へだけ保存する(js/upload-queue.js参照)。
-    // メインデータを読み込んでいない軽量な状態でhandleSave()/handleLocalBackupSave()を
-    // 呼ぶと、まだ空のstate.cards/sessionsで既存の記録を上書きしてしまう危険があるため、
-    // 他の分岐より先に判定する。
-    if (state.quickMode) {
-      await handleQuickModeSave();
-      return;
-    }
     // オートセーブOFF中はDriveへ送らず、端末内(IndexedDB)へのバックアップに留める
     // (js/upload-queue.jsのsaveLocalDataBackup()参照、モバイル通信量節約のため2026年9月追加)。
     if (state.autoSaveEnabled) {
@@ -893,914 +883,630 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 /**
- * 2026年9月、電車内など「サインイン→すぐAlmagestで読書」だけで済ませたい場面での通信量を
- * 最小限にするため、onSignedIn()を2段階に分割した:
- *   フェーズ1(この関数、常に即座に実行): フォルダ解決(小さなJSON照会のみ)と、
- *     年セッションだけの軽量インデックス(constellation-years.json)の読み込みを行う。
- *   フェーズ2(ensureMainDataLoaded()/loadMainData()、必要になるまで呼ばない): カード・
- *     セッション全体(各カードのサムネイルをbase64で埋め込んだ、普段いちばん重い
- *     constellation-data.json)の読み込み。年タブ・ボトムツールバー・モジュールキーパッドの
- *     Almagest以外のコード等、実際にメインのキャンバスを触る操作をした時に初めて読み込む
- *     (呼び出し箇所は下記ensureMainDataLoaded()のコメント参照)。
+ * サインイン成功時に呼ばれる。**2026年9月、セッション単位ロードへの全面移行に伴い書き換えた**:
+ * 以前はここで「メインデータ(全セッション・全カードのサムネイル)を読み込むかどうか選ぶ
+ * スタートメニュー」(クイックカメラ/クイックセッション/Almagest/スタートの4択、VOYAGER
+ * GOLDEN RECORDモチーフ)を経由していたが、この仕組みが目指していたこと(通信量を必要な分
+ * だけに抑える)自体を、**全セッションが同じ1つのルールで動くセッション単位ロード**が
+ * 構造的に満たすようになったため、クイックモードもスタートメニューも丸ごと廃止した。
  *
- * **2026年9月、スタートメニューを追加**: フェーズ1完了後、いきなりメインデータを読み込みに
- * 行くのではなく、まず「スタートメニュー」(クイックカメラ/クイックセッション/Almagest/
- * スタート)を開き、ユーザー自身にどの通信量で始めるかを選んでもらう(openStartMenu()参照)。
+ * ここで読み込むのは常に「索引」(constellation-data.json、全セッションの名前・階層・
+ * カード枚数・代表サムネイル1枚・本体ファイルidだけを持つ軽量なファイル)だけで、各セッションの
+ * 実際のカード・接続は「そのセッションへ入った瞬間」に個別ファイル
+ * (constellation-session-<id>.json)として初めて取得する(ensureSessionLoaded()参照)。
+ * サインイン直後は、この索引だけを元にした「全体マップ」(セッションツリー+Almagestへの入口)を
+ * 表示する(showSessionsMap()参照、旧スタートメニューの置き換え)。
  *
- * **2026年9月、Almagestの書庫データ読み込みも遅延化**: 以前はこのフェーズ1で
- * `window.initAlmagestData()`を無条件に呼び、Almagestの専用ファイル(almagest-library.json、
- * サムネイル付きの本が多いとそれなりの容量になる)を毎回ダウンロードしていた。スタートメニュー
- * 導入後、クイックカメラ/クイックセッションを選ぶだけの場面でもこの通信が走ってしまい、
- * 「ログインからスタートメニュー表示までが長い」という実機報告があったため、この読み込みを
- * Almagestを実際に開く瞬間(`js/modules/almagest.js`の`openAlmagest()`/
- * `ensureAlmagestDataLoaded()`)まで遅延させ、ここからは呼ばないようにした。あわせて、
- * 互いに依存しない残り2つの読み込み(メディアフォルダ解決・年インデックス)は
- * `Promise.all()`で並行に行い、逐次待ちによる遅延も減らしている。
- *
- * **2026年9月、ロード画面をVOYAGER GOLDEN RECORDモチーフへ刷新**: 「ロード画面が業務的に見える」
- * というユーザー要望を受け、この関数の先頭で`showOpeningLoadingScreen()`を呼び、フォルダ解決・
- * 年インデックス読み込みが終わるまでの間、ゴールデンレコード(パルサーマップが走査するアニメ
- * ーション)を全画面に表示するようにした。処理が成功したら`openStartMenu()`が同じオーバーレイを
- * クイックメニューへクロスフェードし、失敗したら`closeStartMenu()`でオーバーレイごと引っ込めて
- * 既存のエラーステータス表示に譲る。通信が速い環境だとアニメーションが一瞬も見えないまま
- * 切り替わってしまうため、`MIN_LOADING_DISPLAY_MS`で最低限の表示時間だけ保証している(上記の
- * 「ログインからスタートメニュー表示までが長い」不具合とは無関係な、900ms程度のごく小さい待ち)。
+ * Almagestの書庫データ(almagest-library.json)は従来通りAlmagestを実際に開いた瞬間まで
+ * 遅延させる(ensureAlmagestDataLoaded()、変更なし)。
  */
 async function onSignedIn() {
   toggleAuthUI(true);
-  // Ephemerisの花つるフラッシュ(表示中だった場合)を閉じ、通常のゴールデンレコード読み込み
-  // 画面へ引き継ぐ(js/modules/ephemeris.js参照)。表示していなければ何もしない。
+  // Ephemerisの丸時計フラッシュ(表示中だった場合)を閉じ、通常の画面へ引き継ぐ
+  // (js/modules/ephemeris.js参照)。表示していなければ何もしない。
   if (typeof hideEphemerisFlash === 'function') hideEphemerisFlash();
-  showOpeningLoadingScreen();
   setStatus('Google Driveと同期中…', { busy: true });
-  const loadingStartedAt = Date.now();
-  const MIN_LOADING_DISPLAY_MS = 900;
   try {
     state.folderId = await findOrCreateAppFolder();
     const [mediaFolderId] = await Promise.all([
       findOrCreateSubfolder(CONFIG.MEDIA_FOLDER_NAME, state.folderId),
-      loadYearsIndex(), // クイックカメラ/クイックセッションが「今年のセッション」を知るための軽量インデックス
+      loadSessionsIndex(),
     ]);
     state.mediaFolderId = mediaFolderId;
-    refreshDriveQuota(); // ヘッダーのDrive使用量表示(メインデータ不要)
+    refreshDriveQuota(); // ヘッダーのDrive使用量表示(索引だけで足りる、カード本体は不要)
+    ensureYearSessions();
+    renderYearTabs();
     setStatus('サインインしました');
-    const elapsed = Date.now() - loadingStartedAt;
-    if (elapsed < MIN_LOADING_DISPLAY_MS) await sleep(MIN_LOADING_DISPLAY_MS - elapsed);
+    if (!infoTickerIntervalStarted) {
+      // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
+      // (API通信は発生しない、ローカルの日付比較のみ)。サインインのたび二重登録しないよう
+      // フラグで一度きりに制限する。
+      infoTickerIntervalStarted = true;
+      setInterval(refreshInfoTicker, 30 * 60 * 1000);
+    }
     // Ephemerisのログイン前フラッシュ「▶ 記録を始める」から予約されていた場合は、
-    // スタートメニューを経由せずそのスケジュール専用のセッションへ直接入る(下記
+    // 全体マップを経由せずそのスケジュール専用のセッションへ直接入る(下記
     // requestEphemerisSessionEntry()/enterEphemerisSchedule()参照)。
     if (pendingEphemerisEntrySchedule) {
       const schedule = pendingEphemerisEntrySchedule;
       pendingEphemerisEntrySchedule = null;
       await enterEphemerisSchedule(schedule);
     } else {
-      openStartMenu();
+      showSessionsMap();
     }
   } catch (err) {
     console.error(err);
-    closeStartMenu();
-    setStatus('同期に失敗しました(コンソールを確認)');
+    setStatus('同期に失敗しました(コンソールを確認)', { important: true });
   }
 }
 
-/* ---------------- スタートメニュー・クイックカメラ・クイックセッション(2026年9月追加) ----------------
- * 「これまでは起動のたびにメインデータ(全セッション・全カードのサムネイル)を読み込んでいたが、
- * 個展を1件記録して帰るだけならその通信量は要らない」というユーザー要望への対応。
- * サインイン直後にこのメニューを出し、ユーザーが選んだ入口だけの通信量で始められるようにする。
+let infoTickerIntervalStarted = false;
+
+/* ---------------- セッションの索引(constellation-data.json、2026年9月に役割変更) ----------------
+ * 以前はこのファイルにカード本体(全セッション・全カードのサムネイルを含む)も一緒に
+ * 入っていたため、サインインのたび最も重いファイルとしてダウンロードされていた。
+ * **2026年9月、セッション単位ロードへ全面移行し、このファイルからカード本体を除いた**:
+ * 残るのは、セッションの階層・名前・カード枚数・代表サムネイル1枚・本体ファイルidと、
+ * カード以外のグローバルな状態(Crews・コメント履歴・展覧会カレンダーid・Flight Engineer
+ * 履歴・前回位置)だけで、これ自体は十分に軽量なため、サインイン直後に無条件で読み込んでも
+ * 通信量の問題にならない。
  *
- *   - クイックカメラ: カメラだけをその場で開く(通信ゼロ)。撮影した瞬間だけ、【現在の年】
- *     セッションの下に新規セッションを作って格納する(この判定に必要な「今年のセッションID」は
- *     上記の軽量インデックスから分かる)。以降の追加撮影・編集はこの1セッション分の通信量で完結する。
- *   - クイックセッション: 【現在の年】の下に空の新規セッションを作ってすぐ中へ入る。
- *   - Almagest: 既存のフェーズ1のまま、そのまま開く(メインデータ不要)。
- *   - スタート: 今まで通りの全データ読み込み。
- *
- * クイックカメラ/クイックセッションで動いている間(state.quickMode)は、state.cards/sessionsが
- * 「今回新規に作った分だけ」の軽量な状態になる。この間の保存はDriveのメインファイルには一切
- * 触れず、IndexedDBのクイックバンドルに留める(scheduleAutoSave()/saveImmediately()参照)。
- * 実際にメインファイルへ書き戻されるのは、ユーザーが他のセッションへ移動しようとして
- * ensureMainDataLoaded()が呼ばれた瞬間(=「他セッションに移動した時に初めて全データを
- * 読み込む」というユーザー指定の境界)で、その時にメインデータへ追記の形でマージする
- * (mergeQuickBundlesIfAny()参照、削除・上書きは一切行わない)。
+ * 各セッションが実際に持つカード・接続・自動線の非表示設定は、`constellation-session-<id>.json`
+ * という個別ファイルへ分離した(ensureSessionLoaded()参照)。
  */
 
-/** 年セッションだけの軽量インデックス(constellation-years.json)を読み込む。無ければ
- *  (初回利用、または過去に一度もこのファイルが作られていない古いアカウント)、
- *  state.yearsIndexAvailable=falseのままにする。クイックカメラ/クイックセッションは、
- *  この値がtrueの時だけ「安全に今年のセッションIDが分かる」と判断して即座に動く。
- *  falseの場合は、安全側に倒して先にensureMainDataLoaded()(通常の全データ読み込み)へ
- *  フォールバックする(=重複した年セッションを作ってしまうリスクを避ける)。 */
-async function loadYearsIndex() {
-  state.yearsIndexAvailable = false;
-  try {
-    const { fileId, data } = await loadNamedData(state.folderId, CONFIG.YEARS_INDEX_FILE_NAME);
-    // **fileIdを保持しておくこと(2026年9月バグ修正)**: 以前はdataだけ取り出しfileIdを
-    // 捨てていたため、state.yearsIndexFileIdが既存ファイルからは一切設定されず、
-    // saveYearsIndexMirror()が毎回既存ファイルへのPATCHではなく新規POSTを行い、サインインの
-    // たびにconstellation-years.jsonが複製されてDrive上に増え続けていた
-    // (findFileByName()がどれを拾うか不定になり、古いミラーを読んでしまうリスクもあった)。
-    state.yearsIndexFileId = fileId || null;
-    // **data===null(ファイル自体が無い)を「年セッション0件」として扱ってはいけない**:
-    // このミラーファイルは今回の機能追加で新設したものなので、既にconstellation-data.jsonに
-    // 年セッションが実在する既存アカウントでも、ミラーへ一度も保存していない間は同じく
-    // data===nullになる。ここで「0件」と誤認して新しい年セッションを作ってしまうと、
-    // 後でメインデータとマージした際に同じ年のセッションが重複してしまう。ファイルが
-    // 見つからない場合は「まだ分からない」として安全側(yearsIndexAvailable=false)に倒し、
-    // クイック系は一度だけ通常の全データ読み込みへフォールバックする。フォールバック後の
-    // 保存(handleSave())でこのミラーが作られるため、次回以降はクイックに動ける。
-    if (data && Array.isArray(data.years)) {
-      // state.sessionsはまだ空(メインデータ未読み込み)のはずだが、念のため重複を避けて足す。
-      const existingIds = new Set(state.sessions.map((s) => s.id));
-      data.years.forEach((y) => {
-        if (!existingIds.has(y.id)) state.sessions.push(y);
-      });
-      state.yearsIndexAvailable = true;
+let lastSavedSessionsIndexSignature = null;
+
+/** 索引ファイルとして保存する内容を組み立てる(セッションのメタデータ+カード以外の
+ *  グローバルな状態)。実際のセッション本体(カード等)はここには含めない。 */
+function collectSaveData() {
+  return {
+    sessions: state.sessions.map((s) => ({
+      id: s.id,
+      type: s.type,
+      parentId: s.parentId,
+      name: s.name,
+      year: s.year,
+      createdAt: s.createdAt,
+      driveMediaFolderId: s.driveMediaFolderId || null,
+      bodyFileId: s.bodyFileId || null,
+      cardCount: s.cardCount || 0,
+      coverThumb: s.coverThumb || null,
+    })),
+    exhibitionCalendarId: state.exhibitionCalendarId,
+    crews: state.crews,
+    // almagestEntriesはここには含めない(2026年9月〜): Almagestは専用のDriveファイル
+    // (almagest-library.json)へ変更のたびに即座に保存するようになったため、このファイルには含めない。
+    commentHistory: state.commentHistory,
+    groupViewingIntervalSec: state.groupViewingIntervalSec,
+    feHistory: state.feHistory,
+    feHistoryIndex: state.feHistoryIndex,
+    breadcrumb: state.breadcrumb,
+    updatedAt: Date.now(),
+  };
+}
+
+/** 索引の中身が実際に変わったかどうかを、保存の要否判定に使う軽量な文字列として返す
+ *  (旧`currentYearsSignature()`と同じ考え方)。 */
+function currentSessionsIndexSignature() {
+  const data = collectSaveData();
+  delete data.updatedAt; // 呼ぶたびに変わる値は比較から除く
+  return JSON.stringify(data);
+}
+
+/** 1つのセッションが直接持つカード・接続・自動線の非表示設定だけを集めた「本体」データ。
+ *  子セッションの中身は含まない(子セッション自身の本体ファイルに別途persistされる)。 */
+function collectSessionBodyData(sessionId) {
+  return {
+    cards: state.cards.filter((c) => c.sessionId === sessionId),
+    connections: state.connections.filter((c) => c.sessionId === sessionId),
+    hiddenAutoLinks: state.hiddenAutoLinks.filter((c) => c.sessionId === sessionId),
+    updatedAt: Date.now(),
+  };
+}
+
+/** セッションの索引エントリから、代表サムネイル・カード枚数を再計算して更新する
+ *  (2026年9月追加)。**このセッション自身が直接持つ画像カードだけを対象にする**(子セッションを
+ *  再帰的に辿らない簡略化): 子セッションが未読み込みのことがあるため、代表サムネイルの
+ *  ためだけに子セッションを強制的に読み込むことは避けた。自身に画像が無ければ、子セッションに
+ *  写真があっても表紙は付かない(既知の割り切り、CLAUDE.md参照)。 */
+function refreshSessionIndexFields(sessionId) {
+  const session = getSessionById(sessionId);
+  if (!session) return;
+  const ownCards = state.cards.filter((c) => c.sessionId === sessionId);
+  session.cardCount = ownCards.length;
+  const firstImage = ownCards.find((c) => c.mediaType === 'image' && c.thumbDataUrl);
+  session.coverThumb = firstImage ? firstImage.thumbDataUrl : (session.coverThumb || null);
+}
+
+/** サインイン直後に呼ぶ。索引ファイル(constellation-data.json)を読み込む。
+ *  - 新形式(既に`sessions[].bodyFileId`等を持つ)ならそのまま採用する。
+ *  - 旧形式(`cards`配列がトップレベルに直接埋め込まれた、セッション単位ロード導入前の
+ *    唯一のファイル)を検出した場合は、一度きりの移行(migrateLegacyMonolithToSessionFiles()）
+ *    でセッションごとの本体ファイルへ分割してから採用する。
+ *  - ファイル自体が存在しない(新規アカウント)場合は空の状態で始める。 */
+async function loadSessionsIndex() {
+  const { fileId, data } = await loadNamedData(state.folderId, CONFIG.DATA_FILE_NAME);
+  state.fileId = fileId;
+  if (!data) {
+    state.sessions = [];
+    state.lastKnownBreadcrumb = [];
+    lastSavedSessionsIndexSignature = currentSessionsIndexSignature();
+    return;
+  }
+
+  if (Array.isArray(data.cards)) {
+    // 旧形式(カード本体がこのファイルに直接埋め込まれている)を検出 -> 一度きりの分割移行。
+    // **この分岐に入るのは初回の一度きりのため、ローカルバックアップとの突き合わせは行わない**
+    // (この移行自体が非常に稀な経路のうえ、その直前にオフラインのまま終了した未送信の変更が
+    // 偶然重なる可能性は極めて低いと判断した単純化)。
+    await migrateLegacyMonolithToSessionFiles(data);
+    return;
+  }
+
+  let indexData = data;
+  let restoredSessionBodies = null;
+  // オートセーブOFF中に端末内だけへ保存された変更(js/upload-queue.jsのsaveLocalDataBackup())が
+  // Drive側より新しければ、そちらを採用する(2026年9月、セッション単位ロードに合わせて
+  // {index, sessions}という形へ変更。オフラインのまま終了したブラウザセッションがあった
+  // 場合の保険)。
+  if (typeof loadLocalDataBackup === 'function') {
+    try {
+      const backup = await loadLocalDataBackup();
+      if (backup && backup.data && backup.data.index && (backup.updatedAt || 0) > (data.updatedAt || 0)) {
+        indexData = backup.data.index;
+        restoredSessionBodies = backup.data.sessions || {};
+        setStatus('端末に残っていた未送信の変更を復元しました', { important: true });
+      }
+    } catch (err) {
+      console.error('ローカルバックアップの確認に失敗', err);
     }
-  } catch (err) {
-    console.error('年セッションの軽量インデックス読み込みに失敗', err);
-    // 読み込み失敗時はyearsIndexAvailable=falseのまま(=クイック系はフォールバックする)
   }
-}
 
-// saveYearsIndexMirror()を最後に書き込んだ時点の年セッションの顔ぶれ(id一覧)。
-// handleSave()は編集のたびに(デバウンス後、~1.2秒間隔で)呼ばれるが、年セッションの
-// 顔ぶれは新しい年が増える時くらいしか変わらないため、変化が無ければ余計なDrive書き込みを
-// 省く(2026年9月、コードレビューで指摘: 通信量節約が目的の機能なのに、無関係な編集のたびに
-// 2つ目のDriveリクエストを追加で発生させてしまっていた)。
-let lastSavedYearsSignature = null;
-
-function currentYearsSignature() {
-  return state.sessions.filter((s) => s.type === 'year').map((s) => s.id).sort().join(',');
-}
-
-/** handleSave()(メインデータの保存)成功後に呼ぶ、年セッションだけのミラーの書き戻し。
- *  失敗してもメインデータの保存自体には影響させない(ベストエフォート、次回のloadYearsIndex()で
- *  古い内容が残っていてもyearsIndexAvailableのフォールバックが安全側に効くため実害は小さい)。 */
-async function saveYearsIndexMirror() {
-  const signature = currentYearsSignature();
-  if (signature === lastSavedYearsSignature) return; // 年セッションの顔ぶれに変化なし、書き込み不要
-  try {
-    const years = state.sessions.filter((s) => s.type === 'year');
-    await saveNamedData(state.folderId, state.yearsIndexFileId, { years, updatedAt: Date.now() }, CONFIG.YEARS_INDEX_FILE_NAME)
-      .then((id) => { state.yearsIndexFileId = id; });
-    lastSavedYearsSignature = signature; // 成功した時だけ更新する(失敗時は次回また書き込みを試みる)
-  } catch (err) {
-    console.error('年セッションの軽量インデックス書き込みに失敗', err);
-  }
-}
-
-let startMenuEls = null;
-let startMenuCaptionTimer = null;
-
-/** ボイジャーのゴールデンレコードのジャケットに刻まれたパルサーマップ(14個のパルサーとの
- *  相対方向・距離を線の角度・長さで示す図)を簡略化した放射線データ。ロード画面の円盤に
- *  これを重ね、走査するように順番に描いては消えるアニメーション(CSSの.start-menu-scan)を
- *  つける。角度・長さは実物からの厳密な引き写しではなく、雰囲気を借りた近似値。 */
-const START_MENU_PULSARS = [
-  { angle: -100, len: 100 }, { angle: -72, len: 84 }, { angle: -42, len: 112 },
-  { angle: -12, len: 78 }, { angle: 14, len: 104 }, { angle: 44, len: 88 },
-  { angle: 74, len: 118 }, { angle: 100, len: 86 }, { angle: 130, len: 98 },
-  { angle: 158, len: 80 }, { angle: 188, len: 108 }, { angle: 218, len: 92 },
-  { angle: 248, len: 116 }, { angle: 278, len: 84 },
-];
-
-/** ロード画面の一言。「Loading...」のような業務的な文言ではなく、ゴールデンレコード
- *  そのものの文脈(パルサーマップ・水素原子の超微細構造遷移=時間の基準単位・針を落とす
- *  =再生開始)から借りた一言を数秒おきに切り替える。 */
-const START_MENU_CAPTIONS = [
-  'パルサーマップを参照中…',
-  '水素原子の振動を基準に…',
-  '針を降ろしています…',
-  '星々の位置を記録中…',
-];
-
-/** ロード画面中央のゴールデンレコード(円盤+パルサーマップ)をSVGで組み立てる。
- *  金は単色フラット塗り(グラデーションの光沢ハイライトは使わない)。 */
-function buildStartMenuDiscSvg() {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 300 300');
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', '100%');
-  const rotor = document.createElementNS(ns, 'g');
-  rotor.setAttribute('class', 'start-menu-disc-rotor');
-
-  const face = document.createElementNS(ns, 'circle');
-  face.setAttribute('class', 'start-menu-disc-face');
-  face.setAttribute('cx', '150'); face.setAttribute('cy', '150'); face.setAttribute('r', '118');
-  rotor.appendChild(face);
-
-  [100, 82, 64, 46].forEach((r) => {
-    const groove = document.createElementNS(ns, 'circle');
-    groove.setAttribute('class', 'start-menu-disc-groove');
-    groove.setAttribute('cx', '150'); groove.setAttribute('cy', '150'); groove.setAttribute('r', String(r));
-    rotor.appendChild(groove);
-  });
-
-  const spindle = document.createElementNS(ns, 'circle');
-  spindle.setAttribute('class', 'start-menu-disc-spindle');
-  spindle.setAttribute('cx', '150'); spindle.setAttribute('cy', '150'); spindle.setAttribute('r', '7');
-  rotor.appendChild(spindle);
-
-  const cx = 150, cy = 150;
-  START_MENU_PULSARS.forEach((p, i) => {
-    const rad = (p.angle * Math.PI) / 180;
-    const x2 = (cx + Math.cos(rad) * p.len).toFixed(1);
-    const y2 = (cy + Math.sin(rad) * p.len).toFixed(1);
-    const delay = `${(i * 0.14).toFixed(2)}s`;
-
-    const line = document.createElementNS(ns, 'line');
-    line.setAttribute('class', 'start-menu-pulsar-line');
-    line.setAttribute('x1', String(cx)); line.setAttribute('y1', String(cy));
-    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-    line.style.animationDelay = delay;
-    rotor.appendChild(line);
-
-    const tip = document.createElementNS(ns, 'circle');
-    tip.setAttribute('class', 'start-menu-pulsar-tip');
-    tip.setAttribute('cx', x2); tip.setAttribute('cy', y2); tip.setAttribute('r', '2.2');
-    tip.style.animationDelay = delay;
-    rotor.appendChild(tip);
-  });
-
-  svg.appendChild(rotor);
-  return svg;
-}
-
-function buildStartMenu() {
-  // **2026年9月追加**: ログイン前(初回タップで自動サインインを試みるまでの間)にも
-  // 「一瞬、業務的な白いツールバー/キャンバスが見えてしまう」という実機報告を受け、
-  // このオーバーレイの「ロード中」局面(円盤+ワードマーク+一言)だけは、JSの実行を
-  // 一切待たずに最初の1フレーム目から描画されるよう、`index.html`へ静的にあらかじめ
-  // 埋め込んである(`#start-menu-overlay`に`class="start-menu-overlay open phase-loading"`
-  // 済みの状態で配置済み)。ここではその既存の要素があれば作り直さずそのまま使い回し、
-  // クイックメニュー/サインイン促し(いずれも初回ペイントには関与しない、JS実行後で
-  // 十分な局面)だけをこの関数で組み立てて追加する。万一(将来index.html側の変更漏れ等で)
-  // 静的な要素が見つからなかった場合は、フォールバックとしてこれまで通りJSだけで
-  // 一から生成する。
-  let overlay = document.getElementById('start-menu-overlay');
-  let loading;
-  if (overlay) {
-    loading = overlay.querySelector('.start-menu-loading');
+  state.sessions = indexData.sessions || [];
+  state.exhibitionCalendarId = indexData.exhibitionCalendarId || null;
+  state.crews = indexData.crews || [];
+  if (window.migrateLegacyCrews) window.migrateLegacyCrews(); // 旧【人物情報】【その言葉】形式からConstellation形式への一度きりの移行
+  state.commentHistory = indexData.commentHistory || [];
+  state.groupViewingIntervalSec = typeof indexData.groupViewingIntervalSec === 'number' ? indexData.groupViewingIntervalSec : 60;
+  if (indexData.feHistory) {
+    state.feHistory = indexData.feHistory;
+    state.feHistoryIndex = typeof indexData.feHistoryIndex === 'number' ? indexData.feHistoryIndex : state.feHistory.length;
   } else {
-    overlay = document.createElement('div');
-    overlay.id = 'start-menu-overlay';
-    overlay.className = 'start-menu-overlay';
-    document.body.appendChild(overlay);
+    state.feHistory = [];
+    state.feHistoryIndex = 0;
   }
-  if (!loading) {
-    loading = document.createElement('div');
-    loading.className = 'start-menu-loading';
-    loading.innerHTML = `
-      <div class="start-menu-disc-wrap"></div>
-      <div class="start-menu-wordmark">CONSTELLATION</div>
-      <div class="start-menu-caption" id="start-menu-caption"></div>
-    `;
-    loading.querySelector('.start-menu-disc-wrap').appendChild(buildStartMenuDiscSvg());
-    overlay.appendChild(loading);
+  // 前回の作業位置(2026年9月、方針変更: 自動で読み込んで入るのではなく、全体マップ上で
+  // ハイライトするだけに留める。通信の主導権を常にユーザー側に置くという、セッション単位
+  // ロード全体の考え方に合わせた)。各IDが実在するかを先頭から検証し、削除されたセッションを
+  // 指していた箇所で打ち切る。
+  state.lastKnownBreadcrumb = [];
+  if (Array.isArray(indexData.breadcrumb) && indexData.breadcrumb.length > 0) {
+    const valid = [];
+    for (const id of indexData.breadcrumb) {
+      if (!(state.sessions.some((s) => s.id === id))) break;
+      valid.push(id);
+    }
+    state.lastKnownBreadcrumb = valid;
+  }
+  lastSavedSessionsIndexSignature = currentSessionsIndexSignature();
+
+  // ローカルバックアップに、まだDriveへ送れていないセッション本体が含まれていた場合、
+  // そのまま読み込み済み(かつ未保存)として取り込む(2026年9月追加)。次回のオンライン復帰時に
+  // 確実に送信し直されるよう、改めてdirty扱いにしておく。
+  if (restoredSessionBodies) {
+    Object.keys(restoredSessionBodies).forEach((sessionId) => {
+      if (!getSessionById(sessionId)) return; // 索引側で既に削除されたセッションは復元しない
+      const body = restoredSessionBodies[sessionId];
+      state.cards.push(...(body.cards || []));
+      state.connections.push(...(body.connections || []));
+      state.hiddenAutoLinks.push(...(body.hiddenAutoLinks || []));
+      state.loadedSessionIds.add(sessionId);
+      state.dirtySessionIds.add(sessionId);
+    });
+  }
+}
+
+/**
+ * 一度きりの移行処理: 旧形式(constellation-data.jsonにカード・接続・自動線の非表示設定が
+ * 直接埋め込まれている)を検出した場合、セッションごとに分けて個別の本体ファイル
+ * (constellation-session-<id>.json)へ書き出し、索引ファイル自体は軽量な形に上書きする。
+ * Almagestの`migrateAlmagestEntriesToSplitFiles()`と同じ設計(移行前のデータは、分割保存が
+ * 実際に成功するまでstate上には残したままにしておき、分割に失敗しても内容自体は失わない)を
+ * 踏襲する。
+ *
+ * **安全側の設計**: 分割保存(Driveへの書き込み)が1件でも失敗しても、そのセッションの
+ * カードは`state.cards`上には引き続き存在する(=アプリの見た目上は何も失われない)。
+ * 該当セッションの`bodyFileId`だけがnullのまま残るため、次回のscheduleAutoSave()で
+ * 改めて新規作成が試みられる。
+ */
+async function migrateLegacyMonolithToSessionFiles(legacyData) {
+  setStatus('保存形式を更新しています…', { busy: true });
+  state.sessions = legacyData.sessions || [];
+  state.exhibitionCalendarId = legacyData.exhibitionCalendarId || null;
+  state.crews = legacyData.crews || [];
+  if (window.migrateLegacyCrews) window.migrateLegacyCrews();
+  // Almagestの一度きりの移行の安全網(2026年9月): メインJSON埋め込みの旧データ
+  // (legacyEntries)がまだ専用ファイルへ移行されていない場合、ここで移行し直す
+  // (通常運用では専用ファイルは既に存在するため、この分岐に入ること自体まず無い)。
+  if (window.initAlmagestData && !state.almagestFileId && legacyData.almagestEntries && legacyData.almagestEntries.length &&
+      (!state.almagestEntries || state.almagestEntries.length === 0)) {
+    await window.initAlmagestData(legacyData.almagestEntries);
+  }
+  state.commentHistory = legacyData.commentHistory || [];
+  state.groupViewingIntervalSec = typeof legacyData.groupViewingIntervalSec === 'number' ? legacyData.groupViewingIntervalSec : 60;
+  if (legacyData.feHistory) {
+    state.feHistory = legacyData.feHistory;
+    state.feHistoryIndex = typeof legacyData.feHistoryIndex === 'number' ? legacyData.feHistoryIndex : state.feHistory.length;
+  } else if (legacyData.feUndoStack || legacyData.feRedoStack) {
+    // さらに旧い形式(Undo/Redoの2本のスタック)からの一度きりの移行
+    const undoStack = legacyData.feUndoStack || [];
+    const redoStack = legacyData.feRedoStack || [];
+    state.feHistory = [...undoStack, ...redoStack.slice().reverse()];
+    state.feHistoryIndex = undoStack.length;
+  } else {
+    state.feHistory = [];
+    state.feHistoryIndex = 0;
   }
 
-  const signin = document.createElement('div');
-  signin.className = 'start-menu-signin';
-  signin.innerHTML = `
-    <div class="start-menu-disc-wrap"></div>
-    <div class="start-menu-wordmark">CONSTELLATION</div>
-    <div class="start-menu-caption">サインインして書庫をひらく</div>
-    <button class="start-menu-signin-btn" id="start-menu-signin-btn">Googleでサインイン</button>
-  `;
-  signin.querySelector('.start-menu-disc-wrap').appendChild(buildStartMenuDiscSvg());
+  ensureYearSessions();
+  // セッション導入前に作られたカードはsessionIdを持たないため、当時の年セッションへ引き継ぐ
+  const migrationTargetId = getCurrentYearSessionId();
+  const allCards = legacyData.cards || [];
+  allCards.forEach((card) => {
+    if (!card.sessionId) card.sessionId = migrationTargetId;
+  });
+  const allConnections = legacyData.connections || [];
+  const allHiddenAutoLinks = legacyData.hiddenAutoLinks || [];
 
-  const menu = document.createElement('div');
-  menu.className = 'start-menu-menu';
-  menu.innerHTML = `
-    <div class="start-menu-kicker">GOLDEN RECORD EDITION</div>
-    <div class="start-menu-wordmark start-menu-wordmark--small">CONSTELLATION</div>
-    <div class="start-menu-grid">
-      <svg class="start-menu-links" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <polyline points="25,25 75,25 75,75 25,75 25,25"></polyline>
-        <polyline points="25,25 75,75"></polyline>
-        <polyline points="75,25 25,75"></polyline>
-        <circle cx="25" cy="25" r="1.1"></circle>
-        <circle cx="75" cy="25" r="1.1"></circle>
-        <circle cx="75" cy="75" r="1.1"></circle>
-        <circle cx="25" cy="75" r="1.1"></circle>
-      </svg>
-      <button class="start-menu-tile" id="start-menu-quick-camera">
-        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><line x1="34" y1="8" x2="16" y2="30" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="34" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="30" r="2" fill="currentColor"/><path d="M9 33 A15 15 0 0 0 29 40" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.6"/></svg></span>
-        <span class="start-menu-tile-label">STYLUS</span>
-        <span class="start-menu-tile-desc">かるく、いま撮る</span>
-      </button>
-      <button class="start-menu-tile" id="start-menu-quick-session">
-        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><path d="M11 35 C 17 30, 22 21, 31 9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 3.4" opacity="0.65"/><path d="M31 9 L24 11 M31 9 L28 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><circle cx="31" cy="9" r="2" fill="currentColor"/></svg></span>
-        <span class="start-menu-tile-label">LAUNCH</span>
-        <span class="start-menu-tile-desc">新しい航海をひらく</span>
-      </button>
-      <button class="start-menu-tile" id="start-menu-almagest">
-        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><path d="M24 15 C 18 11, 10 11, 6 13 L6 34 C 10 32, 18 32, 24 36 C 30 32, 38 32, 42 34 L42 13 C 38 11, 30 11, 24 15 Z" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="24" y1="15" x2="24" y2="36" stroke="currentColor" stroke-width="1" opacity="0.5"/></svg></span>
-        <span class="start-menu-tile-label">ALMAGEST</span>
-        <span class="start-menu-tile-desc">書庫をひらく</span>
-      </button>
-      <button class="start-menu-tile" id="start-menu-start">
-        <span class="start-menu-tile-icon"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="16" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="24" cy="24" r="10" fill="none" stroke="currentColor" stroke-width="1" opacity="0.6"/><circle cx="24" cy="24" r="4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.6"/><circle cx="24" cy="24" r="1.4" fill="currentColor"/></svg></span>
-        <span class="start-menu-tile-label">PLAYBACK</span>
-        <span class="start-menu-tile-desc">すべての記録を開く</span>
-      </button>
+  // 前回の作業位置(ハイライト用、自動では入らない)
+  state.lastKnownBreadcrumb = [];
+  if (Array.isArray(legacyData.breadcrumb) && legacyData.breadcrumb.length > 0) {
+    const valid = [];
+    for (const id of legacyData.breadcrumb) {
+      if (!(state.sessions.some((s) => s.id === id))) break;
+      valid.push(id);
+    }
+    state.lastKnownBreadcrumb = valid;
+  }
+
+  // セッションIDごとにグループ化し、1件ずつ本体ファイルへ書き出す。並行数を絞って
+  // Driveへの負荷・レート制限を避ける(js/upload-queue.jsのUPLOAD_QUEUE_CONCURRENCY等と
+  // 同じ考え方)。
+  const sessionIds = Array.from(new Set(allCards.map((c) => c.sessionId).filter(Boolean)));
+  const MIGRATION_CONCURRENCY = 3;
+  let doneCount = 0;
+  for (let i = 0; i < sessionIds.length; i += MIGRATION_CONCURRENCY) {
+    const batch = sessionIds.slice(i, i + MIGRATION_CONCURRENCY);
+    await Promise.all(batch.map(async (sessionId) => {
+      const session = getSessionById(sessionId);
+      if (!session) return; // 参照先のセッション自体が既に無い孤児カードは、索引には載らないだけで実データは保持され続ける
+      const body = {
+        cards: allCards.filter((c) => c.sessionId === sessionId),
+        connections: allConnections.filter((c) => c.sessionId === sessionId),
+        hiddenAutoLinks: allHiddenAutoLinks.filter((c) => c.sessionId === sessionId),
+        updatedAt: Date.now(),
+      };
+      try {
+        const fileName = `${CONFIG.SESSION_FILE_PREFIX}${sessionId}.json`;
+        session.bodyFileId = await saveNamedData(state.folderId, null, body, fileName);
+        session.cardCount = body.cards.length;
+        const firstImage = body.cards.find((c) => c.mediaType === 'image' && c.thumbDataUrl);
+        session.coverThumb = firstImage ? firstImage.thumbDataUrl : null;
+        // このセッションは既に完全な内容を手元に持っているので、そのまま読み込み済み扱いにする
+        // (再度Driveへ取りに行く必要は無い)。
+        state.cards.push(...body.cards);
+        state.connections.push(...body.connections);
+        state.hiddenAutoLinks.push(...body.hiddenAutoLinks);
+        state.loadedSessionIds.add(sessionId);
+      } catch (err) {
+        console.error(`セッション「${session.name}」の分割保存に失敗`, err);
+        // 失敗しても実データ自体は失われない(次回のscheduleAutoSave()で再試行される)。
+      }
+      doneCount++;
+      setStatus(`保存形式を更新しています… (${doneCount}/${sessionIds.length})`, { busy: true, progress: doneCount / sessionIds.length });
+    }));
+  }
+
+  // 索引ファイル自体を軽量な新形式で書き戻す(constellation-data.jsonという同じファイル名・
+  // 同じfileIdのまま、中身だけを更新する)。
+  await handleSave();
+  lastSavedSessionsIndexSignature = currentSessionsIndexSignature();
+  setStatus(`保存形式の更新が完了しました(${sessionIds.length}セッション)`, { important: true });
+}
+
+/**
+ * 指定したセッションの本体(カード・接続・自動線の非表示設定)がまだ読み込まれていなければ
+ * 取得する(2026年9月追加、セッション単位ロードの中核)。既に読み込み済みなら何もしない
+ * 軽量なno-op。新規に作られたばかりで本体ファイルがまだ存在しない(`bodyFileId`が無い)
+ * セッションは、通信を行わずその場で「空」として読み込み済み扱いにする。
+ */
+async function ensureSessionLoaded(sessionId) {
+  if (state.loadedSessionIds.has(sessionId)) return;
+  const session = getSessionById(sessionId);
+  if (!session) return;
+  let body = null;
+  if (session.bodyFileId) {
+    try {
+      body = await loadFileContentById(session.bodyFileId);
+    } catch (err) {
+      console.error(`セッション「${session.name}」の本体読み込みに失敗`, err);
+      setStatus(`「${session.name}」の読み込みに失敗しました(コンソールを確認)`, { important: true });
+      throw err;
+    }
+  }
+  const newCards = (body && body.cards) || [];
+  const newConnections = (body && body.connections) || [];
+  const newHiddenAutoLinks = (body && body.hiddenAutoLinks) || [];
+
+  // イマジナリーカード(Star Pencil)の高さ破損の一度きりの修復(2026年9月、セッション単位
+  // ロードに合わせてセッションを読み込むたびに行う形へ移設)。renderCard()末尾の
+  // syncCardHeight()が、中身が全てposition:absoluteのイマジナリーカードに対しても
+  // 呼ばれてしまっていたバグ(修正済み)により、そのバグが直る前に作られたカードは
+  // card.heightがmin-height(100px)相当まで潰れた状態でDriveに保存されてしまっていた。
+  // ストローク自体の座標(壊れていない)からbounding boxを逆算して復元する。
+  newCards.forEach((card) => {
+    if (card.mediaType !== 'imaginary' || !Array.isArray(card.strokes) || card.strokes.length === 0) return;
+    let maxX = 0, maxY = 0;
+    card.strokes.forEach((s) => (s.points || []).forEach((p) => {
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }));
+    const STAR_PENCIL_BOUNDING_PAD = 24; // js/modules/star-pencil.jsのBOUNDING_PADと同じ値
+    const correctWidth = Math.max(60, maxX + STAR_PENCIL_BOUNDING_PAD);
+    const correctHeight = Math.max(60, maxY + STAR_PENCIL_BOUNDING_PAD);
+    if (Math.abs((card.width || 0) - correctWidth) > 2) card.width = correctWidth;
+    if (Math.abs((card.height || 0) - correctHeight) > 2) card.height = correctHeight;
+  });
+
+  state.cards.push(...newCards);
+  state.connections.push(...newConnections);
+  state.hiddenAutoLinks.push(...newHiddenAutoLinks);
+  state.loadedSessionIds.add(sessionId);
+
+  // Drive未送信のまま残っていたファイルの表示状態を、今読み込んだセッション分だけ拾い直す
+  // (js/upload-queue.js、2026年9月にセッション単位へスコープを絞った)。
+  if (typeof restoreUploadQueueOnLoad === 'function' && newCards.length > 0) {
+    await restoreUploadQueueOnLoad(newCards);
+  }
+}
+
+/**
+ * ヘッダーの「📥 すべて読み込む」ボタン(2026年9月追加)。自宅Wi-Fi等、通信量を気にしない
+ * 環境向けに、索引に載っている全セッションの本体をまとめて取得する。セッション単位ロード
+ * (セッションに入った時だけ読み込む)とは独立した、あくまで「まとめて先読みしておく」ための
+ * 操作で、読み込んだ後の挙動(保存の粒度等)は普段と変わらない。
+ */
+async function loadEverySession() {
+  const targets = state.sessions.filter((s) => !state.loadedSessionIds.has(s.id));
+  if (targets.length === 0) {
+    setStatus('すべて読み込み済みです');
+    return;
+  }
+  if (els.loadEverythingBtn) { els.loadEverythingBtn.disabled = true; els.loadEverythingBtn.classList.add('busy'); }
+  const LOAD_ALL_CONCURRENCY = 4;
+  let done = 0;
+  try {
+    for (let i = 0; i < targets.length; i += LOAD_ALL_CONCURRENCY) {
+      const batch = targets.slice(i, i + LOAD_ALL_CONCURRENCY);
+      await Promise.all(batch.map((s) => ensureSessionLoaded(s.id).catch((err) => console.error(err))));
+      done += batch.length;
+      setStatus(`すべて読み込み中… (${done}/${targets.length})`, { busy: true, progress: done / targets.length });
+    }
+    setStatus(`読み込み完了(${targets.length}セッション、合計${state.cards.length}件)`, { important: true });
+  } finally {
+    if (els.loadEverythingBtn) { els.loadEverythingBtn.disabled = false; els.loadEverythingBtn.classList.remove('busy'); }
+  }
+  renderSessionsMap();
+  if (activeSessionId()) renderAllCards(); // 今見ているセッションのサムネイル(子セッションの表紙等)も更新する
+}
+
+/* ---------------- 全体マップ(2026年9月、旧スタートメニュー/クイックメニューの置き換え) ---------------- */
+
+/** state.breadcrumbが空の間、#canvas-viewportの代わりに#sessions-mapを表示する。
+ *  見た目はアプリ本体と同じ白+ドット(Golden Recordは廃止、ユーザー指定)。 */
+function showSessionsMap() {
+  state.breadcrumb = [];
+  if (els.viewport) els.viewport.hidden = true;
+  if (els.sessionsMap) els.sessionsMap.hidden = false;
+  renderYearTabs();
+  renderBreadcrumb();
+  updateToolbarSessionGate();
+  renderSessionsMap();
+}
+
+function hideSessionsMap() {
+  if (els.sessionsMap) els.sessionsMap.hidden = true;
+  if (els.viewport) els.viewport.hidden = false;
+}
+
+/** セッションツリーの1ノード分のHTML(索引の情報だけで描画できる、通信不要)。 */
+function smNodeHtml(session, isCurrentHighlight) {
+  const childCount = session.cardCount || 0;
+  const thumbHtml = session.coverThumb
+    ? `style="background-image:url(${session.coverThumb})"`
+    : '';
+  const icon = session.coverThumb ? '' : (session.type === 'year' ? '🗓️' : '🖼️');
+  const loaded = state.loadedSessionIds.has(session.id);
+  const countLabel = session.type === 'year' ? '' : `${childCount}件`;
+  return `
+    <div class="sm-node${isCurrentHighlight ? ' sm-node--current' : ''}" data-session-id="${session.id}">
+      <span class="sm-caret"></span>
+      <span class="sm-thumb" ${thumbHtml}>${icon}</span>
+      <span class="sm-name">${escapeHtml(session.name)}</span>
+      <span class="sm-count">${countLabel}</span>
+      <span class="sm-status${loaded ? ' sm-status--loaded' : ''}"></span>
     </div>
-    <div class="start-menu-footnote">SOUNDS · IMAGES · GREETINGS OF EARTH</div>
+  `;
+}
+
+function smBuildTree(parentId, highlightId) {
+  const children = state.sessions
+    .filter((s) => s.parentId === parentId)
+    .sort((a, b) => (a.type === 'year' && b.type === 'year' ? a.year - b.year : (a.createdAt || '').localeCompare(b.createdAt || '')));
+  if (children.length === 0) return '';
+  return `<ul>${children.map((s) => {
+    const nested = smBuildTree(s.id, highlightId);
+    return `<li>${smNodeHtml(s, s.id === highlightId)}${nested}</li>`;
+  }).join('')}</ul>`;
+}
+
+/** 全体マップの中身を組み立てる(セッションツリー+Almagestへの入口)。索引データだけで
+ *  完結するため、呼び出しに通信は発生しない。 */
+function renderSessionsMap() {
+  if (!els.sessionsMap) return;
+  const highlightId = (state.lastKnownBreadcrumb || [])[state.lastKnownBreadcrumb.length - 1] || null;
+  const yearNodes = state.sessions.filter((s) => s.type === 'year').sort((a, b) => a.year - b.year);
+  const treeHtml = yearNodes.length > 0
+    ? `<ul class="sm-tree">${yearNodes.map((y) => `<li>${smNodeHtml(y, y.id === highlightId)}${smBuildTree(y.id, highlightId)}</li>`).join('')}</ul>`
+    : '<div class="sessions-map-empty">まだセッションがありません。ボトムツールバーの「セッション」から作成できます。</div>';
+
+  els.sessionsMap.innerHTML = `
+    <div class="sessions-map-grid">
+      <div class="sessions-map-panel">
+        <h2>セッション
+          <span class="sessions-map-legend">
+            <span><i class="dot"></i>読み込み済み</span>
+            <span><i class="dot dot--unloaded"></i>未読み込み</span>
+          </span>
+        </h2>
+        ${treeHtml}
+        ${highlightId ? '<p class="sessions-map-note">点線の枠は前回作業していた場所です。タップすると読み込んで入れます。</p>' : ''}
+      </div>
+      <div class="sessions-map-panel">
+        <h2>Almagest(書庫)</h2>
+        <div class="sm-almagest-tile" id="sm-open-almagest">
+          <span class="sm-almagest-icon">📖</span>
+          <div>
+            <div class="sm-almagest-label">書庫をひらく</div>
+            <div class="sm-almagest-desc">全セッション横断の個人書庫(本・しおり)</div>
+          </div>
+        </div>
+        <p class="sessions-map-note">セッションとは独立した記録です。開いた時だけ内容を読み込みます。</p>
+      </div>
+    </div>
   `;
 
-  overlay.appendChild(signin);
-  overlay.appendChild(menu);
-  startMenuEls = { overlay, loading, signin, menu, caption: loading.querySelector('#start-menu-caption') };
-
-  signin.querySelector('#start-menu-signin-btn').addEventListener('click', () => signIn());
-
-  menu.querySelector('#start-menu-quick-camera').addEventListener('click', handleQuickCameraStart);
-  menu.querySelector('#start-menu-quick-session').addEventListener('click', handleQuickSessionStart);
-  menu.querySelector('#start-menu-almagest').addEventListener('click', () => {
-    closeStartMenu();
-    if (window.openAlmagest) window.openAlmagest();
+  els.sessionsMap.querySelectorAll('.sm-node').forEach((row) => {
+    const caret = row.querySelector('.sm-caret');
+    const childUl = row.parentElement.querySelector(':scope > ul');
+    if (childUl && childUl.children.length > 0) {
+      caret.textContent = '▾';
+    }
+    row.addEventListener('click', async (e) => {
+      if (e.target === caret && childUl) {
+        childUl.hidden = !childUl.hidden;
+        caret.classList.toggle('collapsed');
+        return;
+      }
+      const sessionId = row.dataset.sessionId;
+      const session = getSessionById(sessionId);
+      if (!session) return;
+      const statusEl = row.querySelector('.sm-status');
+      const wasLoaded = state.loadedSessionIds.has(sessionId);
+      if (!wasLoaded) {
+        row.insertAdjacentHTML('beforeend', '<span class="sm-loading-tag">読み込み中…</span>');
+      }
+      try {
+        if (session.type === 'year') {
+          await enterSession(sessionId, true);
+        } else {
+          // 全体マップからは階層を1段ずつ辿らずいきなり深いセッションへ直接ジャンプできるため、
+          // 通常のenterSession()(対象1つだけ読み込む)とは別に、パンくずに含まれる全ての
+          // 祖先セッションもまとめて読み込んでおく(2026年9月追加)。これを怠ると、後で
+          // パンくずを1段だけ戻った時にその祖先セッションが未読み込みのまま「空」に見えてしまう
+          // (state.breadcrumbに含まれるセッションは常に読み込み済み、という前提を保つため)。
+          const path = breadcrumbPathTo(sessionId);
+          await Promise.all(path.map((id) => ensureSessionLoaded(id)));
+          state.breadcrumb = path;
+          hideSessionsMap();
+          renderYearTabs();
+          renderBreadcrumb();
+          renderAllCards();
+          updateToolbarSessionGate();
+          scheduleAutoSave();
+          maybeShowDailyComment();
+          // 前回作業していた場所(点線ハイライト)へのジャンプの場合だけ、旧・自動復元と同じく
+          // 全カードが収まるよう俯瞰ズームする(通常のタイル経由の移動は、これまで通り
+          // ビューポートの位置を引き継ぐだけで自動フィットしない)。
+          if (sessionId === highlightId) fitAllCardsToScreen();
+        }
+      } catch (err) {
+        row.querySelector('.sm-loading-tag')?.remove();
+        return;
+      }
+      if (!wasLoaded) {
+        row.querySelector('.sm-loading-tag')?.remove();
+        statusEl.classList.add('sm-status--loaded');
+      }
+    });
   });
-  menu.querySelector('#start-menu-start').addEventListener('click', () => {
-    closeStartMenu();
-    // **2026年9月修正**: 以前は`withMainData(() => {})`を呼んでいたが、`withMainData()`は
-    // `state.quickMode`中は素通り(渡した空関数をそのまま実行するだけ)する仕様のため、
-    // 「☰ クイックメニュー」経由でクイックモード中にPLAYBACKを選び直した場合、
-    // 何も起きない(全データが読み込まれない)dead buttonになっていた。年タブの
-    // 「🌐 他の記録を読み込む」と同じく、常に直接ensureMainDataLoaded()を呼ぶ。
-    ensureMainDataLoaded().catch(() => {});
-  });
+
+  const almagestTile = document.getElementById('sm-open-almagest');
+  if (almagestTile) {
+    almagestTile.addEventListener('click', () => { if (window.openAlmagest) window.openAlmagest(); });
+  }
 }
 
-/** ロード中/クイックメニュー/サインイン促しの3局面を排他的に切り替える共通ヘルパー。
- *  各局面のCSS(`.start-menu-overlay.open.phase-xxx .start-menu-xxx`)は`.open`も
- *  条件に含めているため、closeStartMenu()で`.open`が外れた瞬間にどの局面も表示・
- *  クリック判定の対象にならなくなる(重大バグ修正、上記CSSのコメント参照)。 */
-function setStartMenuPhase(phase) {
-  const overlay = startMenuEls.overlay;
-  overlay.classList.toggle('phase-loading', phase === 'loading');
-  overlay.classList.toggle('phase-menu', phase === 'menu');
-  overlay.classList.toggle('phase-signin', phase === 'signin');
-}
-
-/** ロード中の一言(START_MENU_CAPTIONS)を数秒おきにクロスフェードで切り替える。
- *  クイックメニュー表示中・オーバーレイを閉じた後はstopStartMenuCaptionCycle()で止め、
- *  見えていない間もタイマーを回し続けないようにする。 */
-function startStartMenuCaptionCycle() {
-  stopStartMenuCaptionCycle();
-  if (!startMenuEls) return;
-  let idx = 0;
-  startMenuEls.caption.textContent = START_MENU_CAPTIONS[0];
-  startMenuEls.caption.style.opacity = 1;
-  startMenuCaptionTimer = setInterval(() => {
-    startMenuEls.caption.style.opacity = 0;
-    setTimeout(() => {
-      idx = (idx + 1) % START_MENU_CAPTIONS.length;
-      startMenuEls.caption.textContent = START_MENU_CAPTIONS[idx];
-      startMenuEls.caption.style.opacity = 1;
-    }, 300);
-  }, 2000);
-}
-
-function stopStartMenuCaptionCycle() {
-  if (startMenuCaptionTimer) { clearInterval(startMenuCaptionTimer); startMenuCaptionTimer = null; }
-}
-
-/** ページ読み込み直後(ログイン前、初回タップで自動サインインを試みるまでの間)〜
- *  サインイン直後のGoogle Driveとの同期(フォルダ解決・年インデックス読み込み)が終わる
- *  までの間、ゴールデンレコードが走査するロード画面を表示する(js/app.jsのDOMContentLoaded
- *  ハンドラ・onSignedIn()の双方から呼ばれる)。処理が完了したらopenStartMenu()が同じ
- *  オーバーレイをクイックメニューへクロスフェードする。 */
-function showOpeningLoadingScreen() {
-  if (!startMenuEls) buildStartMenu();
-  startMenuEls.overlay.classList.add('open');
-  setStartMenuPhase('loading');
-  startStartMenuCaptionCycle();
-}
-
-/** 自動サイレントサインインが失敗した場合(未ログイン・未同意など)、ロード画面と同じ
- *  オーバーレイ内で「Googleでサインイン」ボタンだけの局面へ切り替える(onSignInFailed()
- *  参照)。これも業務的な白いツールバー(既存の#sign-in-btn)を見せないための対応。 */
-function showSignInPrompt() {
-  if (!startMenuEls) buildStartMenu();
-  stopStartMenuCaptionCycle();
-  startMenuEls.overlay.classList.add('open');
-  setStartMenuPhase('signin');
-}
-
-/** クイックメニュー(STYLUS/LAUNCH/ALMAGEST/PLAYBACK)を表示する。ロード画面から続けて
- *  呼ばれた場合は同じオーバーレイ内でクロスフェードするが、キャンセル操作からの呼び出し
- *  (handleQuickSessionStart()等)やonAlmagestClosed()のように、オーバーレイが一度閉じた
- *  状態から呼ばれることも多いため、常に「クイックメニューを表示する」動作に固定してある
- *  (ロード画面へは戻さない)。 */
-function openStartMenu() {
-  if (!startMenuEls) buildStartMenu();
-  stopStartMenuCaptionCycle();
-  startMenuEls.overlay.classList.add('open');
-  setStartMenuPhase('menu');
-}
-
-function closeStartMenu() {
-  if (!startMenuEls) return;
-  stopStartMenuCaptionCycle();
-  startMenuEls.overlay.classList.remove('open');
-}
-
-/** js/modules/almagest.jsのcloseAlmagest()から呼ばれるフック(2026年9月追加)。
- *  スタートメニューからAlmagestだけを開いた場合、閉じた瞬間はまだメインデータを
- *  読み込んでおらずクイックモードにも入っていない(=キャンバスが空白のまま取り残される)
- *  ため、スタートメニューへ戻す。既にスタート/クイックのどちらかを選んで進んでいた場合
- *  (mainDataLoaded/state.quickModeのいずれかがtrue)は何もしない。 */
+/** Almagestを閉じた時に呼ばれる薄いフック(js/modules/almagest.js参照)。まだどのセッションにも
+ *  入っていなければ、全体マップが表示されたままであることを確認する(通常は既に表示されている
+ *  ため実質no-op、他の画面から誤って辿り着いた場合の保険)。 */
 function onAlmagestClosed() {
-  if (!mainDataLoaded && !state.quickMode) openStartMenu();
+  if (!activeSessionId() && els.sessionsMap && els.sessionsMap.hidden) showSessionsMap();
 }
 window.onAlmagestClosed = onAlmagestClosed;
 
-/** 現在(端末のローカル日時)の西暦年。 */
-function currentCalendarYear() {
-  return new Date().getFullYear();
-}
+/* ---------------- Ephemerisのスケジュール専用セッション(2026年9月、簡略化) ----------------
+ * 「Ephemerisの設定でスケジュールと連動するセッションを持たせ、スケジュールからそのセッション
+ * だけに入れるようにしたい」というユーザー要望への対応。**以前はクイックモード専用の特別な
+ * 経路(startQuickSession())が必要だったが、セッション単位ロードでは新規セッションを作ること
+ * 自体が既に「その1セッション分の通信で完結する」軽量な操作なので、通常のセッション作成
+ * (createChildSessionCard())をそのまま使い回すだけで済む。** */
 
-/**
- * 【現在の年】セッションを、メインデータを読み込まずに解決/作成する。
- * @returns {{ok: true, session: object} | {ok: false}} yearsIndexAvailableがfalseの場合は
- *   安全側に倒してok:falseを返す(呼び出し元はensureMainDataLoaded()へフォールバックすること)。
- */
-function findOrCreateCurrentYearSessionQuick() {
-  if (!state.yearsIndexAvailable) return { ok: false };
-  const year = currentCalendarYear();
-  let session = state.sessions.find((s) => s.type === 'year' && s.year === year);
-  if (!session) {
-    session = {
-      id: crypto.randomUUID(),
-      type: 'year',
-      parentId: null,
-      name: String(year),
-      year,
-      createdAt: new Date().toISOString(),
-    };
-    state.sessions.push(session);
+const ephemerisScheduleSessionMap = new Map(); // scheduleId(文字列) -> sessionId、このタブが開いている間だけ保持
+
+/** Ephemerisの「▶ 記録を始める」ボタン(ログイン前フラッシュ・小窓の両方)から呼ばれる。
+ *  既にこの起動中に同じスケジュール用のセッションを作っていれば、そのまま入り直すだけ。
+ *  無ければ、スケジュールのラベルを名前にした新規セッションを【現在の年】の下に作って入る。 */
+async function enterEphemerisSchedule(schedule) {
+  const existingSessionId = ephemerisScheduleSessionMap.get(schedule.id);
+  if (existingSessionId && getSessionById(existingSessionId)) {
+    // 既存のパンくずが何であれ関係なく、年から辿った正しいパンくずを組み立て直してから入る
+    // (enterSession()のpushだけに頼ると、既に別の場所へ移動していた場合に不正なネストの
+    // パンくずになってしまうため)。
+    const path = breadcrumbPathTo(existingSessionId);
+    await Promise.all(path.map((id) => ensureSessionLoaded(id)));
+    state.breadcrumb = path;
+    hideSessionsMap();
+    renderYearTabs();
+    renderBreadcrumb();
+    renderAllCards();
+    updateToolbarSessionGate();
+    scheduleAutoSave();
+    maybeShowDailyComment();
+    return;
   }
-  return { ok: true, session };
-}
-
-/** クイックカメラ/クイックセッション共通: 【現在の年】の下に新規セッションを作り、
- *  クイックモードへ入る。セッションカード(親=年セッション)も合わせて作る。 */
-function startQuickSession(name) {
-  const { session: yearSession } = findOrCreateCurrentYearSessionQuick();
-  const session = {
-    id: crypto.randomUUID(),
-    type: 'session',
-    parentId: yearSession.id,
-    name,
-    createdAt: new Date().toISOString(),
-  };
-  state.sessions.push(session);
-
-  const spawnPos = newCardSpawnPos();
-  const sessionCard = {
-    id: crypto.randomUUID(),
-    x: spawnPos.x,
-    y: spawnPos.y,
-    width: 190,
-    height: 150,
-    memo: '',
-    tags: [],
-    mediaType: 'session',
-    refSessionId: session.id,
-    imageFileId: null,
-    sessionId: yearSession.id,
-    createdAt: new Date().toISOString(),
-  };
-  state.cards.push(sessionCard);
-
-  state.quickMode = true;
-  state.quickSessionIds = new Set([yearSession.id, session.id]);
-  // このクイック外出専用のバンドルIDを発行する(2026年9月追加、IndexedDB上で他の未マージの
-  // 外出のデータと衝突・上書きしないようにするため)。
-  state.quickBundleId = crypto.randomUUID();
-  state.breadcrumb = [yearSession.id, session.id];
-  renderYearTabs();
-  renderBreadcrumb();
-  renderAllCards();
-  return session;
-}
-
-/**
- * loadMainData()から呼ぶ。IndexedDBに残っている全てのクイックバンドル(クイックカメラ/
- * クイックセッションで作った、まだDriveのメインファイルに無い新規セッション・新規カード)を、
- * 今しがたDriveから読み込んだ完全なstate.sessions/cards等へ**追記のみ**で合流させる
- * (既にfresh側に存在するidは上書きしない=常に既存データを優先し、失う/壊すことは無い)。
- * **2026年9月バグ修正**: 以前は単一キー('latest')の前提で1件しか読まなかったが、複数の
- * 未マージバンドルが同時に存在しうる(1回目の外出をマージせずタブを閉じ、後日また別の
- * 外出をした場合)ことが判明したため、`loadAllQuickBundles()`で全件を読み、1つずつ
- * 合流させるようにした。
- * @returns {Promise<string[]>} マージした(=Drive保存が成功したら消してよい)バンドルIDの配列。
- *   何もマージしなければ空配列。
- */
-async function mergeQuickBundlesIfAny() {
-  if (typeof loadAllQuickBundles !== 'function') return [];
-  let entries;
-  try {
-    entries = await loadAllQuickBundles();
-  } catch (err) {
-    console.error('クイックバンドルの読み込みに失敗', err);
-    return [];
-  }
-  if (!entries || entries.length === 0) return [];
-
-  const mergeArray = (targetArr, sourceArr) => {
-    if (!Array.isArray(sourceArr) || sourceArr.length === 0) return;
-    const existingIds = new Set(targetArr.map((x) => x.id));
-    sourceArr.forEach((item) => {
-      if (!existingIds.has(item.id)) {
-        targetArr.push(item);
-        existingIds.add(item.id);
-      }
-    });
-  };
-  entries.forEach(({ data: bundle }) => {
-    if (!bundle) return;
-    mergeArray(state.sessions, bundle.sessions);
-    mergeArray(state.cards, bundle.cards);
-    mergeArray(state.connections, bundle.connections);
-    mergeArray(state.hiddenAutoLinks, bundle.hiddenAutoLinks);
-    // **意図的に触れないフィールド**: bundleはcollectSaveData()と同じ形をしているため
-    // crews/commentHistory/exhibitionCalendarId/feHistory等も持っているが、これらは
-    // クイックモード中に一度も読み込んでいない「空の初期値」でしかない。もしここで
-    // state.crews等をbundle側の値で上書きしていたら、今しがたDriveから読み込んだ本物の
-    // データを空配列で消してしまうところだった。sessions/cards/connections/hiddenAutoLinks
-    // だけが「クイックモードで確かに新規に作られた」フィールドなので、この4つだけを対象にする。
-  });
-  return entries.map((e) => e.id);
-}
-
-/**
- * 軽量インデックスが使えずフォールバックした場合の共通処理(2026年9月追加、実機報告を受けて)。
- * 「作って中へ入る」というクイック系の体験は、フォールバックしても変えないようにする
- * (以前はフォールバック時、通常のhandleCreateSession()を呼ぶだけで新規セッションの中へは
- * 入らず、【現在の年】の全カードが見える状態のまま取り残される不具合があった)。
- * 呼び出し前に必ずensureMainDataLoaded()が済んでいること(mainDataLoaded===true)が前提。
- */
-async function createAndEnterSessionUnderCurrentYear(name) {
+  const label = (schedule.label || '').trim() || '(無題の展覧会)';
   const yearId = getCurrentYearSessionId();
   if (activeSessionId() !== yearId) {
     await enterSession(yearId, true);
   }
-  const session = createChildSessionCard(name);
+  const session = createChildSessionCard(label);
   await enterSession(session.id, false);
-}
-
-/* ---------------- Ephemerisのスケジュール専用セッション(2026年9月追加) ----------------
- * 「Ephemerisの設定でスケジュールと連動するセッションを持たせ、スケジュールからそのセッション
- * だけに入れるようにしたい(他のデータは一切読み込まない)」というユーザー要望への対応。
- *
- * constellation-data.jsonはセッション単位でファイルが分かれていない単一の巨大なJSONのため、
- * 「既存の任意のセッションを選んで紐付ける」方式では、結局そのセッションの中身を見るために
- * ファイル全体をDriveから取得する必要があり、「そのセッション以外は読み込まない」を文字通り
- * 満たせない。そのため、紐付けは「スケジュールのラベルを名前にした専用のクイックセッションを
- * その場で作る/既に作っていれば戻る」という、既存のクイックセッション機構(startQuickSession()、
- * 本ファイル上部の「スタートメニュー・クイックカメラ・クイックセッション」参照)にそのまま
- * 乗せる形にした。これなら実際にメインデータを一切読み込まずに「撮影→キャプションOCR→
- * アステリズム」まで完結する(いずれもstate.cards/sessionsだけで動く既存機能)。
- *
- * **既知の制約**: この対応関係(スケジュールid→セッションid)はDriveへ永続化せず、この
- * ブラウザタブが開いている間だけ保持する(`ephemerisScheduleSessionMap`)。ページを再読み込み
- * すると失われ、次に同じスケジュールから入ると新しい別のクイックセッションが作られる
- * (クイックモード自体がそもそも「今回の外出専用」という性質のため、これは既存のクイック
- * カメラ/クイックセッションの制約と同じ割り切りである)。 */
-
-const ephemerisScheduleSessionMap = new Map(); // scheduleId(文字列) -> sessionId
-
-/** Ephemerisの「▶ 記録を始める」ボタン(ログイン前フラッシュ・小窓の両方)から呼ばれる。
- *  既にこの外出中に同じスケジュール用のセッションを作っていれば、そのまま入り直すだけ。
- *  無ければ、スケジュールのラベルを名前にした新規クイックセッションを作って入る
- *  (メインデータは読み込まない)。軽量インデックスが使えない/既にメインデータ読み込み済みの
- *  場合は、既存のフォールバック(createAndEnterSessionUnderCurrentYear())へ委ねる。 */
-async function enterEphemerisSchedule(schedule) {
-  closeStartMenu();
-  const existingSessionId = ephemerisScheduleSessionMap.get(schedule.id);
-  if (existingSessionId && state.quickSessionIds && state.quickSessionIds.has(existingSessionId)) {
-    await enterSession(existingSessionId, false);
-    return;
-  }
-  const label = (schedule.label || '').trim() || '(無題の展覧会)';
-  if (!state.quickMode && !mainDataLoaded) {
-    if (state.yearsIndexAvailable) {
-      const session = startQuickSession(label);
-      ephemerisScheduleSessionMap.set(schedule.id, session.id);
-      setStatus(`「${label}」のセッションへ入りました(クイックモード)`);
-      return;
-    }
-    setStatus('初回だけ全データを読み込みます(次回からは軽量になります)…', { busy: true });
-    try {
-      await ensureMainDataLoaded();
-    } catch (err) {
-      return;
-    }
-  }
-  await createAndEnterSessionUnderCurrentYear(label);
-  ephemerisScheduleSessionMap.set(schedule.id, activeSessionId());
+  ephemerisScheduleSessionMap.set(schedule.id, session.id);
 }
 window.enterEphemerisSchedule = enterEphemerisSchedule;
 
 let pendingEphemerisEntrySchedule = null;
 
 /** ログイン前フラッシュの「▶ 記録を始める」ボタン(js/modules/ephemeris.js)から呼ばれる。
- *  サインインを開始しつつ、完了後にスタートメニューを経由せず直接enterEphemerisSchedule()を
+ *  サインインを開始しつつ、完了後に全体マップを経由せず直接enterEphemerisSchedule()を
  *  呼ぶよう予約する(上記onSignedIn()参照)。 */
 function requestEphemerisSessionEntry(schedule) {
   pendingEphemerisEntrySchedule = schedule;
   if (typeof signIn === 'function') signIn();
 }
 window.requestEphemerisSessionEntry = requestEphemerisSessionEntry;
-
-/** クイックセッションボタン。セッション名の入力方法(OCR/手入力)はhandleCreateSession()と
- *  同じ二択を踏襲する。軽量インデックスが使えない場合は、安全側に倒して通常の全データ
- *  読み込みへフォールバックするが、その場合も新規セッションを作って中へ入るところまでは
- *  必ず行う(createAndEnterSessionUnderCurrentYear()参照)。 */
-async function handleQuickSessionStart() {
-  closeStartMenu();
-  const choice = await showChoiceDialog({
-    title: 'セッション名の入力方法',
-    options: [
-      { label: 'OCRで読み取る', value: 'ocr' },
-      { label: '手入力する', value: 'manual', secondary: true },
-    ],
-  });
-  if (!choice) { openStartMenu(); return; }
-  let name;
-  if (choice === 'ocr') {
-    const result = await openCamera('caption');
-    if (!result || result.kind !== 'text' || !result.text.trim()) { openStartMenu(); return; }
-    name = result.text.trim();
-  } else {
-    name = window.prompt('新規セッションの名前(展覧会名や作品名など)');
-    if (!name) { openStartMenu(); return; }
-    name = name.trim();
-  }
-  if (state.yearsIndexAvailable) {
-    startQuickSession(name);
-    setStatus(`「${name}」セッションを作成しました(クイックモード)`);
-  } else {
-    setStatus('初回だけ全データを読み込みます(次回からは軽量になります)…', { busy: true });
-    try {
-      await ensureMainDataLoaded();
-    } catch (err) {
-      openStartMenu();
-      return;
-    }
-    await createAndEnterSessionUnderCurrentYear(name);
-  }
-}
-
-/** クイックカメラボタン。カメラをその場で開く(この時点では通信ゼロ)。撮影が確定した
- *  瞬間だけ、【現在の年】の下に新規セッションを作って格納する(2回目以降の撮影は同じ
- *  セッションへ、通常のカメラボタン経由で追加できる)。軽量インデックスが使えない場合は
- *  安全側に倒して通常の全データ読み込みへフォールバックするが、その場合も新規セッションの
- *  中へ入るところまでは必ず行う。 */
-async function handleQuickCameraStart() {
-  closeStartMenu();
-  const result = await openCamera('photo');
-  if (!result || result.kind !== 'photo') { openStartMenu(); return; }
-  const sessionName = `クイック撮影 ${new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}`;
-  if (state.yearsIndexAvailable) {
-    if (!state.quickMode && !mainDataLoaded) {
-      startQuickSession(sessionName);
-    }
-  } else {
-    setStatus('初回だけ全データを読み込みます(次回からは軽量になります)…', { busy: true });
-    try {
-      await ensureMainDataLoaded();
-    } catch (err) {
-      openStartMenu();
-      return;
-    }
-    await createAndEnterSessionUnderCurrentYear(sessionName);
-  }
-  await createCardFromCapture({
-    blob: result.blob,
-    filename: `${Date.now()}-photo.jpg`,
-    mediaType: 'image',
-  });
-}
-
-let mainDataLoaded = false; // メインデータ(state.cards/sessions等)を読み込み終えたか
-let mainDataLoadPromise = null;
-
-/**
- * メインデータ(state.cards/sessions等)がまだ読み込まれていなければ読み込む。複数箇所から
- * 同時に呼ばれてもPromiseを使い回すだけで、二重に読み込むことはない。
- * **呼び出し箇所(=メインのキャンバスを実際に触りうる操作)**: ボトムツールバーの各ボタン
- * (アップロード/カメラ/テクスト/動画/音声/セッション/インフォ/サマリー/ストリートビュー)、
- * モジュールキーパッドでAlmagest(159)以外のコードを入力した時(js/module-launcher.js)、
- * 年タブの「🌐 他の記録を読み込む」ボタン(quickMode中のrenderYearTabs()参照)、設定モーダルの
- * 「☁ Driveへ送信」「📤 端末へ保存」「📋 アップロード状況を見る」(いずれもstate.cardsを前提にする)、
- * enterSession()がクイックモードの範囲外のセッションへ移動しようとした時(2026年9月追加)。
- * **scheduleAutoSave()/saveImmediately()側にも、空のstateでDriveを上書きしてしまわない
- * ための二重の安全策(mainDataLoaded/quickModeチェック)を入れてある**ため、万が一ここでの
- * 呼び出し漏れがあっても、保存だけは確実に防がれる(=最悪でも「操作が効かない」で済み、
- * データが消えることはない)。**loadMainData()自体もmergeQuickBundlesIfAny()で、クイックモード中に
- * 溜まった変更をここで初めてメインデータへ合流させる**(削除・上書きは一切行わない)。
- */
-function ensureMainDataLoaded() {
-  if (mainDataLoaded) return Promise.resolve();
-  if (mainDataLoadPromise) return mainDataLoadPromise;
-  mainDataLoadPromise = loadMainData().finally(() => { mainDataLoadPromise = null; });
-  return mainDataLoadPromise;
-}
-
-/** メインデータの読み込みを待ってから実行する共通ラッパー(ボトムツールバー等の各ボタンから
- *  呼ぶ、上記ensureMainDataLoaded()のコメント参照)。読み込みに失敗した場合はloadMainData()
- *  側で既にエラーのステータス表示が済んでいるため、ここでは何もせず処理を諦める
- *  (中途半端な状態、例えばsessionIdの無いカードを作ってしまう等を避ける)。
- *  **クイックモード中(state.quickMode)は素通りする(2026年9月追加)**: ボトムツールバーの
- *  各ボタンは「今アクティブなセッションにカードを1枚追加する」だけの操作で、クイックモード中の
- *  軽量なstate.cards/sessionsでも安全に完結する(=わざわざ全データを読み込む必要が無い)。
- *  全データが必要になるのは、他のセッションへ移動しようとした瞬間だけ(enterSession()参照)。 */
-async function withMainData(fn) {
-  if (state.quickMode) {
-    fn();
-    return;
-  }
-  try {
-    await ensureMainDataLoaded();
-  } catch (err) {
-    // **2026年9月バグ修正**: スタートメニューの「スタート」を押した直後の読み込みが
-    // (一時的なネットワーク不調等で)失敗すると、以前はここで無言でreturnするだけで、
-    // ユーザーは何も選べる手段が無い空白画面に取り残されていた(旧・年タブのプレースホルダー
-    // 「📅 タップして読み込む」が、スタートメニュー導入時に削除され、代わりの再試行導線が
-    // 用意されていなかった)。まだ何も読み込めていない(mainDataLoaded/quickModeどちらも
-    // falseの)場合に限り、スタートメニューを開き直して選び直せるようにする。
-    if (!mainDataLoaded && !state.quickMode) openStartMenu();
-    return;
-  }
-  fn();
-}
-
-async function loadMainData() {
-  // ボトムツールバー等はtoggleAuthUI(true)で即座に有効化されるため、理論上はonSignedIn()の
-  // フォルダ解決(state.folderIdの設定)が終わるより前に押される可能性がゼロではない
-  // (この一瞬の競合自体は今回の変更以前から存在した)。folderId未確定のままDrive APIを
-  // 呼んで分かりにくいエラーになるのを避け、分かりやすい案内にする。
-  if (!state.folderId) {
-    setStatus('まだサインイン処理中です。少し待ってからもう一度お試しください', { important: true });
-    throw new Error('state.folderIdがまだ設定されていません');
-  }
-  // クイックモード中(state.quickMode)にensureMainDataLoaded()が呼ばれた=「他セッションに
-  // 移動しようとした」瞬間。今持っている(新規に作った分だけの)state.cards/sessions等を
-  // 失わないよう、まずクイックバンドル(IndexedDB)へ最新の内容を確実に書き出してから、
-  // Driveのメインデータを読みに行く(下でmergeQuickBundlesIfAny()が読み戻して合流させる)。
-  if (state.quickMode) {
-    await handleQuickModeSave();
-  }
-  setStatus('続きを読み込み中…', { busy: true });
-  try {
-    // Almagestの書庫データ(almagest-library.json)も、メインデータと並行して確実に読み込んで
-    // おく(2026年9月追加)。書庫データの読み込みはopenAlmagest()まで遅延させる設計にしたが、
-    // 全データ読み込み(=このloadMainData())が走る場面は「本」カード(mediaType:'book')の
-    // 描画(almagestBookCardInnerHtml())やその編集ガイドからのジャンプ(jumpToAlmagestEntry())が
-    // 起こりうる場面でもあり、書庫データが未読み込みのままだと本来存在する参照まで
-    // 「書庫から削除されました」と誤表示してしまう。ここで一緒に読み込むことで、
-    // renderAllCards()が呼ばれる時点には必ず揃っているようにする。
-    const [{ fileId, data: driveData }] = await Promise.all([
-      loadData(state.folderId),
-      typeof ensureAlmagestDataLoaded === 'function' ? ensureAlmagestDataLoaded() : Promise.resolve(),
-    ]);
-    state.fileId = fileId;
-    // オートセーブOFF中に端末内だけへ保存された変更(js/upload-queue.jsのsaveLocalDataBackup())が
-    // Drive側より新しければ、そちらを採用する(2026年9月追加。Driveへ送れないままブラウザが
-    // 閉じられた場合の保険)。
-    let data = driveData;
-    if (typeof loadLocalDataBackup === 'function') {
-      try {
-        const backup = await loadLocalDataBackup();
-        if (backup && backup.data && (backup.updatedAt || 0) > (driveData.updatedAt || 0)) {
-          data = backup.data;
-          setStatus('端末に残っていた未送信の変更を復元しました', { important: true });
-        }
-      } catch (err) {
-        console.error('ローカルバックアップの確認に失敗', err);
-      }
-    }
-    state.cards = data.cards || [];
-    state.sessions = data.sessions || [];
-    state.connections = data.connections || [];
-    state.hiddenAutoLinks = data.hiddenAutoLinks || [];
-    state.exhibitionCalendarId = data.exhibitionCalendarId || null;
-    state.crews = data.crews || [];
-    if (window.migrateLegacyCrews) window.migrateLegacyCrews(); // 旧【人物情報】【その言葉】形式からConstellation形式への一度きりの移行
-    // Almagestの一度きりの移行の安全網(2026年9月): onSignedIn()のフェーズ1で
-    // window.initAlmagestData()を引数無しで呼んでいるため、専用ファイル(almagest-library.json)
-    // がまだ存在せず、かつメインJSON埋め込みの旧データ(legacyEntries)がある場合の移行は
-    // そちらでは行えない。ここでメインデータが揃ったタイミングで、その場合に限り移行し直す
-    // (通常運用では専用ファイルは既に存在するため、この分岐に入ること自体まず無い)。
-    if (window.initAlmagestData && !state.almagestFileId && data.almagestEntries && data.almagestEntries.length &&
-        (!state.almagestEntries || state.almagestEntries.length === 0)) {
-      await window.initAlmagestData(data.almagestEntries);
-    }
-    state.commentHistory = data.commentHistory || [];
-    state.groupViewingIntervalSec = typeof data.groupViewingIntervalSec === 'number' ? data.groupViewingIntervalSec : 60;
-    if (data.feHistory) {
-      state.feHistory = data.feHistory;
-      state.feHistoryIndex = typeof data.feHistoryIndex === 'number' ? data.feHistoryIndex : state.feHistory.length;
-    } else if (data.feUndoStack || data.feRedoStack) {
-      // 旧データ形式(Undo/Redoの2本のスタック)からの一度きりの移行
-      const undoStack = data.feUndoStack || [];
-      const redoStack = data.feRedoStack || [];
-      state.feHistory = [...undoStack, ...redoStack.slice().reverse()];
-      state.feHistoryIndex = undoStack.length;
-    } else {
-      state.feHistory = [];
-      state.feHistoryIndex = 0;
-    }
-    // クイックカメラ/クイックセッションで作った、まだDriveのメインファイルに無い新規セッション・
-    // 新規カード(1件とは限らない、マージし損ねた過去の外出ぶんも含む)をここでマージする
-    // (2026年9月追加)。追記のみ・削除や上書きは一切行わない(mergeQuickBundlesIfAny()参照)。
-    // **ensureYearSessions()より必ず先に行うこと**: クイックバンドルが(年をまたいだ直後
-    // などで)新しい年セッションを含んでいる場合、先にこちらをマージしておかないと、直後の
-    // ensureYearSessions()が「まだ無い」と誤認して同じ年のセッションをもう1つ作ってしまう
-    // (=重複)。
-    const mergedQuickBundleIds = await mergeQuickBundlesIfAny();
-    state.quickMode = false;
-    state.quickSessionIds = null;
-    state.quickBundleId = null;
-    ensureYearSessions();
-    // セッション導入前に作られたカードは sessionId を持たないため、当時の年セッションへ引き継ぐ
-    const migrationTargetId = getCurrentYearSessionId();
-    state.cards.forEach((card) => {
-      if (!card.sessionId) card.sessionId = migrationTargetId;
-    });
-    // イマジナリーカード(Star Pencil)の高さ破損の一度きりの修復(2026年9月)。
-    // renderCard()末尾のsyncCardHeight()が、中身が全てposition:absoluteのイマジナリー
-    // カードに対しても呼ばれてしまっていたバグ(修正済み)により、そのバグが直る前に
-    // 作られたカードはcard.heightがmin-height(100px)相当まで潰れた状態でDriveに
-    // 保存されてしまっていた。コード側を直しただけでは既に壊れて保存されたデータは
-    // 直らない(長押し判定・移動・削除の当たり判定がその縮んだ高さに基づくため、
-    // 「線は見えるのに操作できない」という実機報告があった)ため、ストローク自体の
-    // 座標(壊れていない)からbounding boxを逆算して復元する。
-    state.cards.forEach((card) => {
-      if (card.mediaType !== 'imaginary' || !Array.isArray(card.strokes) || card.strokes.length === 0) return;
-      let maxX = 0, maxY = 0;
-      card.strokes.forEach((s) => (s.points || []).forEach((p) => {
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      }));
-      const STAR_PENCIL_BOUNDING_PAD = 24; // js/modules/star-pencil.jsのBOUNDING_PADと同じ値
-      const correctWidth = Math.max(60, maxX + STAR_PENCIL_BOUNDING_PAD);
-      const correctHeight = Math.max(60, maxY + STAR_PENCIL_BOUNDING_PAD);
-      if (Math.abs((card.width || 0) - correctWidth) > 2) card.width = correctWidth;
-      if (Math.abs((card.height || 0) - correctHeight) > 2) card.height = correctHeight;
-    });
-    // 前回作業していた場所を復元する(2026年9月追加、ユーザー要望)。保存されたbreadcrumbの
-    // 各IDが現在のsessionsに実在するかを先頭から検証し、削除されたセッションを指していた
-    // 箇所で打ち切る(Flight Engineerのensure BreadcrumbValid()と同じ考え方)。復元できる
-    // 分が無ければ、従来通り現在の年セッションへ戻す。
-    let restoredBreadcrumb = null;
-    if (Array.isArray(data.breadcrumb) && data.breadcrumb.length > 0) {
-      const valid = [];
-      for (const id of data.breadcrumb) {
-        if (!getSessionById(id)) break;
-        valid.push(id);
-      }
-      if (valid.length > 0) restoredBreadcrumb = valid;
-    }
-    state.breadcrumb = restoredBreadcrumb || [migrationTargetId];
-    mainDataLoaded = true; // renderAllCards()等より前に立てる(scheduleAutoSave()等がこの直後に動いても安全なように)
-    renderYearTabs();
-    renderBreadcrumb();
-    renderAllCards();
-    // 復元先はカードの生座標(scale 1, 原点0,0)のままだと画面外に散らばって見えるため、
-    // 既存の「全カードが収まるまでズームアウト」機能で毎回きれいにフィットさせる。
-    if (restoredBreadcrumb) fitAllCardsToScreen();
-    refreshInfoTicker();
-    // 日をまたいでアプリを開きっぱなしにした場合に備え、鑑賞可否を定期的に再判定する
-    // (API通信は発生しない、ローカルの日付比較のみ)。このsetIntervalはensureMainDataLoaded()の
-    // Promiseキャッシュにより、1セッション中に一度しかここへ来ないため二重登録の心配はない。
-    setInterval(refreshInfoTicker, 30 * 60 * 1000);
-    // 前回終了時にDrive未送信のまま残っていたファイルの表示状態を拾い直す(js/upload-queue.js)。
-    // **自動送信はしない**(2026年9月、完全手動化。実際の送信は設定モーダルの「☁ Driveへ送信」を押した時だけ)。
-    await restoreUploadQueueOnLoad();
-    maybeShowDailyComment(); // 起動時も「セッションを開いた」扱いで判定する(1日3回までの枠)
-    maybeAddRandomCardComment(); // 1日1回、全セッション横断でランダムな1枚にコメントを付ける(通知は出さない)
-    if (mergedQuickBundleIds.length > 0) {
-      // マージした内容を即座にDriveへ書き戻す(=クイックモード中に溜まった変更を確実に
-      // 永続化する)。成功した時だけIndexedDB上の該当バンドルを全て消す(失敗時は次回この
-      // タイミングで再度マージを試みればよく、二重にマージしても追記のみのため実害は無い)。
-      const saved = await handleSave();
-      if (saved && typeof clearQuickBundle === 'function') {
-        await Promise.all(mergedQuickBundleIds.map((id) => clearQuickBundle(id)));
-      }
-      setStatus(`読み込み完了(${state.cards.length}件、クイック記録を統合しました)`, { important: true });
-    } else {
-      setStatus(`読み込み完了(${state.cards.length}件)`);
-    }
-  } catch (err) {
-    console.error(err);
-    setStatus('同期に失敗しました(コンソールを確認)', { important: true });
-    throw err; // ensureMainDataLoaded()の呼び出し元(トグル/ボタン)へも失敗を伝え、再試行できるようにする
-  }
-}
 
 /* ---------------- セッション(年 / 展覧会 / 作品の入れ子) ---------------- */
 
@@ -1845,6 +1551,13 @@ function renderYearTabs() {
     .filter((s) => s.type === 'year')
     .sort((a, b) => a.year - b.year);
   els.yearTabs.innerHTML = '';
+  // 常設の「🗺 全体マップ」タブ(2026年9月追加、旧スタートメニュー/クイックメニューの
+  // 置き換え)。breadcrumbが空(=まだどのセッションにも入っていない)状態に対応する。
+  const mapBtn = document.createElement('button');
+  mapBtn.className = 'year-tab year-tab--map' + (state.breadcrumb.length === 0 ? ' active' : '');
+  mapBtn.textContent = '🗺 全体マップ';
+  mapBtn.addEventListener('click', () => showSessionsMap());
+  els.yearTabs.appendChild(mapBtn);
   years.forEach((session) => {
     const btn = document.createElement('button');
     btn.className = 'year-tab' + (state.breadcrumb[0] === session.id ? ' active' : '');
@@ -1852,29 +1565,6 @@ function renderYearTabs() {
     btn.addEventListener('click', () => enterSession(session.id, true));
     els.yearTabs.appendChild(btn);
   });
-  // クイックモード中(2026年9月追加): state.sessionsは今回新規に作った分だけの軽量な状態
-  // なので、年タブには他の年・他の展覧会が一切出てこない。「消えたわけではない、読めば
-  // 出てくる」ことが伝わるよう、全データを読み込む入口を明示的に添える。
-  if (state.quickMode) {
-    const backBtn = document.createElement('button');
-    backBtn.className = 'year-tab year-tab--load-all';
-    backBtn.textContent = '☰ クイックメニュー';
-    // 2026年9月追加: LAUNCH(クイックセッション)/STYLUS(クイックカメラ)でいったんセッションへ
-    // 入った後、「他の入口(Almagest等)を選び直したい」と思っても戻る手段が無いという
-    // 実機報告への対応。openStartMenu()はセッション作成後もいつでも呼べる(クイックモード自体
-    // やIndexedDB上のバンドルには一切触れない、ただゴールデンレコードのオーバーレイを
-    // 再度開くだけ)ため、単純にこのボタンから呼ぶだけで足りる。
-    backBtn.addEventListener('click', () => openStartMenu());
-    els.yearTabs.appendChild(backBtn);
-
-    const loadAllBtn = document.createElement('button');
-    loadAllBtn.className = 'year-tab year-tab--load-all';
-    loadAllBtn.textContent = '🌐 他の記録を読み込む';
-    // withMainData()はクイックモード中は素通りする仕様(トップの各ボタン用)のため、ここは
-    // 直接ensureMainDataLoaded()を呼ぶ(=意図的に全データ読み込みの境界を越える操作)。
-    loadAllBtn.addEventListener('click', () => ensureMainDataLoaded().catch(() => {}));
-    els.yearTabs.appendChild(loadAllBtn);
-  }
 }
 
 function renderBreadcrumb() {
@@ -1891,11 +1581,16 @@ function renderBreadcrumb() {
     btn.className = 'crumb' + (i === state.breadcrumb.length - 1 ? ' current' : '');
     btn.textContent = session.name;
     btn.disabled = i === state.breadcrumb.length - 1;
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
+      // パンくずに含まれるセッションは常に読み込み済みのはずだが(全体マップからのジャンプ含め、
+      // 侵入経路は必ず祖先もまとめて読み込む設計にしてある)、念のための保険として読み込みを
+      // 確認してから遷移する(2026年9月追加)。
+      try { await ensureSessionLoaded(id); } catch (err) { return; }
       state.breadcrumb = state.breadcrumb.slice(0, i + 1);
       renderYearTabs();
       renderBreadcrumb();
       renderAllCards();
+      updateToolbarSessionGate();
       scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
     });
     els.breadcrumb.appendChild(btn);
@@ -1903,18 +1598,17 @@ function renderBreadcrumb() {
 }
 
 /** セッションに入る。isYear=true のときは年タブからの切り替えとして breadcrumb をリセットする。
- *  **クイックモード中の境界(2026年9月追加)**: 今回のクイックカメラ/クイックセッションで
- *  作った範囲(state.quickSessionIds)の外へ出ようとした瞬間だけ、先にensureMainDataLoaded()
- *  (全データ読み込み+クイックバンドルのマージ)を待つ。これが「他セッションに移動した時に
- *  初めて全データを読み込む」というユーザー指定の境界そのもの。 */
+ *  **2026年9月、セッション単位ロードへの全面移行**: 以前はクイックモードの範囲外へ出ようと
+ *  した瞬間だけメインデータ全体を読み込んでいたが、今は「対象セッション自身」だけを
+ *  ensureSessionLoaded()で読み込む(=どのセッションへ移動しても、必要なのはそのセッション
+ *  1つ分の通信だけ)。 */
 async function enterSession(id, isYear) {
-  if (!mainDataLoaded && !(state.quickSessionIds && state.quickSessionIds.has(id))) {
-    try {
-      await ensureMainDataLoaded();
-    } catch (err) {
-      return;
-    }
+  try {
+    await ensureSessionLoaded(id);
+  } catch (err) {
+    return;
   }
+  if (els.sessionsMap && !els.sessionsMap.hidden) hideSessionsMap();
   if (isYear) {
     state.breadcrumb = [id];
   } else {
@@ -1923,6 +1617,7 @@ async function enterSession(id, isYear) {
   renderYearTabs();
   renderBreadcrumb();
   renderAllCards();
+  updateToolbarSessionGate();
   if (isYear) refreshInfoTicker(); // ティッカーは年タブ単位なので、年を切り替えた時だけ再集計する
   scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
   maybeShowDailyComment(); // セッションを開くたびに判定(1日3回までの枠、失敗/中身なしなら消費しない)
@@ -1973,9 +1668,9 @@ function createChildSessionCard(name) {
     createdAt: new Date().toISOString(),
   };
   state.cards.push(card);
-  // クイックモード中に作った入れ子セッションも、フルデータ読み込み無しで安全に出入りできる
-  // 対象へ加える(enterSession()のガード参照、2026年9月追加)。
-  if (state.quickMode && state.quickSessionIds) state.quickSessionIds.add(session.id);
+  // 新規セッションは中身が空であること自体が既に分かっているため、通信なしで「読み込み済み」
+  // 扱いにする(2026年9月、セッション単位ロードへの対応)。
+  state.loadedSessionIds.add(session.id);
   renderCard(card);
   redrawAsterismLines();
   setStatus(`「${session.name}」セッションを作成しました`);
@@ -2494,12 +2189,16 @@ function renderCard(card) {
 
   if (isSessionCard) {
     const refSession = getSessionById(card.refSessionId);
-    const childCount = state.cards.filter((c) => c.sessionId === card.refSessionId).length;
-    const thumbUrls = pickRandomThumbs(collectDescendantImageThumbs(card.refSessionId), 4);
-    const thumbsHtml = thumbUrls.length
-      ? `<div class="star-card-session-thumbs">${thumbUrls
-          .map((url) => `<div class="star-card-session-thumb" style="background-image:url(${url})"></div>`)
-          .join('')}</div>`
+    // **2026年9月、セッション単位ロードへの対応**: 以前は子セッションの中身を再帰的に
+    // state.cardsから数えて(collectDescendantImageThumbs())表紙サムネイルを拾っていたが、
+    // 未読み込みの子セッションはそもそもstate.cardsに現れないため表紙が出せなくなる。
+    // 代わりに索引側に持たせた代表サムネイル1枚・カード枚数(refreshSessionIndexFields()参照)を
+    // 使う。これは常に読み込み済み(索引はサインイン直後から全件揃っている)なので、
+    // 未読み込みの子セッションでも表紙・件数がそのまま表示できる。
+    const childCount = refSession ? (refSession.cardCount || 0) : 0;
+    const coverThumb = refSession ? refSession.coverThumb : null;
+    const thumbsHtml = coverThumb
+      ? `<div class="star-card-session-thumbs"><div class="star-card-session-thumb" style="background-image:url(${coverThumb})"></div></div>`
       : '';
     el.innerHTML = `
       <div class="star-card-session-body" title="タップで開く">
@@ -3272,6 +2971,12 @@ function handleSummonSummary(card) {
  * Geminiに「どの出典を一番参考にしたか」を番号で答えさせ、後から実際のカードへ引き当てる
  * (=最も参考にしたカードへ自動でASTR接続する)ための下ごしらえ。
  */
+/** **既知の制約(2026年9月、セッション単位ロードへの対応)**: 子セッション(mediaType:'session'の
+ *  カード)を再帰的に辿るが、その子セッション自身が未読み込みの場合は`state.cards`に何も
+ *  現れないため、その子の中身はサマリー・座談会の文脈に含まれない。サマリーカードは基本
+ *  そのセッションへ実際に入った状態で使う機能のため、直接の子までは大抵読み込まれているが、
+ *  さらに孫の代まで未読み込みだと同様に抜け落ちる。完全な文脈が必要な場合は「📥 すべて
+ *  読み込む」で先に読み込んでおくこと。 */
 function collectSessionTextContext(sessionId, sources, depth = 0) {
   if (depth > 10) return ''; // 循環参照などに備えた保険
   const session = getSessionById(sessionId);
@@ -3967,18 +3672,21 @@ async function runChatCascade(card, targetIds, imageParts) {
   setChatComposerBusy(card.id, false);
 }
 
-/* ---------------- コメントカード(2026年9月追加) ----------------
+/* ---------------- コメントカード(2026年9月追加→同月中に自動生成を廃止) ----------------
  * 顔文字(絵文字アバター)・名前・コメント本文だけの軽量な読み取り専用カード(mediaType:'comment')。
  * 座談会カードと同じくCrewsペルソナの声を借りるが、こちらは「セッション全体を要約する」
  * のではなく「1枚のカードに一言だけ反応する」軽いつぶやきという位置づけ。
- * カードとして永続するのはこの「付随タイプ」だけで、現れ方は2通り:
- * - 手動(このセクションのhandleCardComment()): 画像・動画・音声・テクストカードの編集ガイド
- *   「💬 Comment」から、ユーザーが選んだ(または唯一の)Crewsペルソナに一言コメントさせる
- * - 自動(後述のmaybeAddRandomCardComment()): 1日1回、全セッション横断でランダムに選んだ
- *   カードへ、ユーザーの操作なしで静かに付く
+ * 現れ方は手動(このセクションのhandleCardComment())のみ: 画像・動画・音声・テクストカードの
+ * 編集ガイド「💬 Comment」から、ユーザーが選んだ(または唯一の)Crewsペルソナに一言
+ * コメントさせる。**以前は「1日1回、全セッション横断でランダムに選んだカードへ静かに付く」
+ * 自動生成もあったが、セッション単位ロードへの全面移行に伴い廃止した**(全セッション・
+ * 全カードを横断してランダムに1枚選ぶには、常にどこかのセッションを読み込んでおく必要が
+ * あり、「セッションに入った時だけそのセッション本体を読み込む」という全セッション共通の
+ * ルールと構造的に相容れないため)。
  * これとは別に、カードにならない一過性の「デイリーコメント」「グループビューイング」がある
- * (後述のセクション参照)。無料枠の消費を抑えるため、いずれも手動トリガーか低頻度(1日1〜3回・
- * 1分間隔)の自動トリガーに限り、無制限に呼び出す設計にはしていない。
+ * (後述のセクション参照、こちらは今アクティブなセッションの範囲で完結するため影響を受けない)。
+ * 無料枠の消費を抑えるため、いずれも手動トリガーか低頻度(1日1〜3回・1分間隔)の自動トリガーに
+ * 限り、無制限に呼び出す設計にはしていない。
  */
 
 /**
@@ -4193,9 +3901,6 @@ function writeDailyCommentProgress(progress) {
 }
 
 async function maybeShowDailyComment() {
-  // クイックモード中(2026年9月追加)は自動的にGeminiを呼ばない。「クイックカメラは撮影しただけ
-  // では通信しない(美術様式リサーチを使った時だけ)」というユーザー指定を守るため。
-  if (state.quickMode) return;
   const progress = readDailyCommentProgress();
   if (progress.count >= DAILY_COMMENT_MAX_PER_DAY) return;
   // 2026年9月: Crewsペルソナが1つもONになっていないと誰も喋らず「何も起きない」ままだった
@@ -4250,29 +3955,6 @@ function hideDailyCommentToast() {
 
 /* ---- カードコメント(自動・全セッション横断、1日1回、ユーザーの認識外で静かに進める) ---- */
 
-const CARD_COMMENT_DATE_KEY = 'constellation-card-comment-date';
-
-/**
- * ASTR接続を「今アクティブなセッション」ではなく、渡されたsessionId(=カード自身の実際の
- * セッション)で作る、通知・効果音なしの静かな版。既存のcreateAstrConnection()は
- * activeSessionId()を使うため、ユーザーが今見ていないセッションのカード同士を繋ぐと
- * 誤ったsessionIdで保存されてしまう(=繋がったはずの線が永久に描画されない)。
- * 「僕の認識外で進んでほしい」という自動生成の性質上、効果音・発光演出・ステータス表示も
- * あえて鳴らさない。
- */
-function createAstrConnectionSilent(cardIdA, cardIdB, sessionId) {
-  if (!cardIdA || !cardIdB || cardIdA === cardIdB) return null;
-  const exists = state.connections.some(
-    (c) =>
-      c.sessionId === sessionId &&
-      ((c.cardIdA === cardIdA && c.cardIdB === cardIdB) || (c.cardIdA === cardIdB && c.cardIdB === cardIdA))
-  );
-  if (exists) return null;
-  const connection = { id: crypto.randomUUID(), sessionId, cardIdA, cardIdB };
-  state.connections.push(connection);
-  return connection;
-}
-
 /** 対象カードの内容(メモ・写真ならサムネイル)を1文でコメントさせる、共通のプロンプト組み立て。 */
 async function fetchPersonaCommentOnCard(persona, targetCard) {
   // 'imaginary'(Star Pencilのイマジナリーカード、2026年9月追加)も画像カードと同様、
@@ -4315,42 +3997,6 @@ window.fetchArtTargetAnalysis = async function fetchArtTargetAnalysis(base64, mi
   const raw = await askGemini({ prompt, images: [{ base64, mimeType }] });
   return raw.trim();
 };
-
-/**
- * アプリ起動時に1日1回、全セッション・全カードからランダムに1枚選び、ランダムなONの
- * Crewsペルソナにコメントさせて、ASTR接続済みの新規コメントカードとして残す。
- * ユーザー指示「僕の認識外で進んでほしい」により、成功・失敗どちらもsetStatus()等の
- * 通知は一切出さない(コンソール/デバッグログのみ)。
- */
-async function maybeAddRandomCardComment() {
-  try {
-    if (localStorage.getItem(CARD_COMMENT_DATE_KEY) === todayDateStr()) return;
-  } catch (err) {
-    return;
-  }
-  // 2026年9月: Crewsペルソナが1つもONになっていないと何も起きないままだった実機報告を受け、
-  // Boy/Professor/Geminiも候補に含める(buildRoundtableParticipants()は常に最低3人を返す)。
-  const participants = buildRoundtableParticipants();
-  const candidates = state.cards.filter((c) => COMMENTABLE_MEDIA_TYPES.includes(c.mediaType));
-  if (candidates.length === 0) return;
-
-  try {
-    localStorage.setItem(CARD_COMMENT_DATE_KEY, todayDateStr());
-  } catch (err) { /* 無視 */ }
-
-  const targetCard = candidates[Math.floor(Math.random() * candidates.length)];
-  const persona = participants[Math.floor(Math.random() * participants.length)];
-  try {
-    const text = await fetchPersonaCommentOnCard(persona, targetCard);
-    const newCard = createCommentCard({ sourceCard: targetCard, persona, name: persona.name, avatar: persona.avatar || '👤', text });
-    createAstrConnectionSilent(targetCard.id, newCard.id, targetCard.sessionId);
-    scheduleAutoSave();
-  } catch (err) {
-    console.error(err);
-    debugLog('カードコメント(自動)エラー: ' + err.message);
-    try { localStorage.removeItem(CARD_COMMENT_DATE_KEY); } catch (e2) { /* 無視 */ } // 失敗は「今日はやった」扱いにしない
-  }
-}
 
 /* ---- グループビューイングモード(手動ON/OFF、ONの間1分に1回) ---- */
 
@@ -4792,6 +4438,12 @@ async function migrateExistingMediaToFolders() {
 window.migrateExistingMediaToFolders = migrateExistingMediaToFolders;
 
 /** 現在の年タブ内で、今日鑑賞可能なインフォメーションカードを集める(階層をまたいだ全年横断はしない) */
+/** **既知の制約(2026年9月、セッション単位ロードへの対応)**: 現在の年タブ内であっても、
+ *  未読み込みのセッションが持つインフォメーションカードはこの一覧に出てこない
+ *  (state.cardsには読み込み済みのセッション分しか無いため)。今読み込んでいる範囲での
+ *  「今日鑑賞可能な展覧会」しか拾えない、という割り切り(ヘッダーの鑑賞可能日ティッカー用)。
+ *  年全体を漏れなく確認したい場合は、ヘッダーの「📥 すべて読み込む」で先に全セッションを
+ *  読み込んでおくこと。 */
 function collectVisitableInfoCards() {
   const currentYearId = state.breadcrumb[0];
   if (!currentYearId) return [];
@@ -5130,32 +4782,6 @@ function syncCardHeight(el) {
   redrawAsterismLines(); // 高さが変わるとカード中心もずれるため、繋がっている線を引き直す
 }
 
-/** セッション配下(入れ子を含む)にある画像カードのサムネイル(dataURL)を再帰的に集める */
-function collectDescendantImageThumbs(sessionId, depth = 0) {
-  if (depth > 6) return []; // 循環参照などに備えた保険
-  const thumbs = [];
-  state.cards
-    .filter((c) => c.sessionId === sessionId)
-    .forEach((c) => {
-      if (c.mediaType === 'session') {
-        thumbs.push(...collectDescendantImageThumbs(c.refSessionId, depth + 1));
-      } else if (c.mediaType === 'image' && c.thumbDataUrl) {
-        thumbs.push(c.thumbDataUrl);
-      }
-    });
-  return thumbs;
-}
-
-/** 配列からランダムにcount件を選ぶ(元の配列は変更しない) */
-function pickRandomThumbs(arr, count) {
-  const copy = arr.slice();
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy.slice(0, count);
-}
-
 /**
  * セッションカードの「Title」ガイドから呼ぶ。タイトルをその場でテキスト入力に切り替え、
  * OCRボタン(カメラ起動→読み取ったテキストをそのまま入力欄へ)も一時的に表示する。
@@ -5400,21 +5026,24 @@ document.addEventListener('paste', async (event) => {
 });
 
 /** セッション配下(入れ子を含む)のカード数・子セッション数を数える(削除確認の文言に使う) */
+/**
+ * **2026年9月、セッション単位ロードへの対応で索引ベースの集計へ変更**: 以前は`state.cards`を
+ * 直接再帰的に数えていたが、削除確認の対象は未読み込みのセッションであることが多く
+ * (=`state.cards`には現れない)、その場合`0件`と誤表示してしまう。削除操作自体は
+ * カード本体を読み込まなくても安全に行える(参照を外すだけ、Drive上の実体には触れない)ため、
+ * わざわざ読み込ませてまで正確な件数を出すのではなく、索引にある`cardCount`(このセッションが
+ * 直接持つカード数、子セッションのタイル自身も1件として数える)を使って再帰的に集計する。 */
 function countSessionContents(sessionId) {
-  let cardCount = 0;
-  let sessionCount = 0;
-  state.cards
-    .filter((c) => c.sessionId === sessionId)
-    .forEach((c) => {
-      if (c.mediaType === 'session') {
-        sessionCount += 1;
-        const sub = countSessionContents(c.refSessionId);
-        cardCount += sub.cardCount;
-        sessionCount += sub.sessionCount;
-      } else {
-        cardCount += 1;
-      }
-    });
+  const session = getSessionById(sessionId);
+  if (!session) return { cardCount: 0, sessionCount: 0 };
+  const childSessions = state.sessions.filter((s) => s.parentId === sessionId);
+  let cardCount = Math.max(0, (session.cardCount || 0) - childSessions.length);
+  let sessionCount = childSessions.length;
+  childSessions.forEach((child) => {
+    const sub = countSessionContents(child.id);
+    cardCount += sub.cardCount;
+    sessionCount += sub.sessionCount;
+  });
   return { cardCount, sessionCount };
 }
 
@@ -5989,6 +5618,11 @@ async function buildUploadStatusRowEl(card, entry) {
 async function renderUploadStatusList(list) {
   let queueEntries = [];
   try { queueEntries = await uploadQueueGetAll(); } catch (err) { /* 取得できなければ空のまま扱う */ }
+  // **2026年9月、セッション単位ロードへの対応**: 待機列のエントリは今アクティブなセッション
+  // 以外のものも含みうるため、対応するカードを見つけられるよう先に関係する全セッションを
+  // 読み込んでおく(そうしないと未読み込みのセッション分がこの一覧から漏れてしまう)。
+  const relatedSessionIds = Array.from(new Set(queueEntries.map((e) => e.sessionId).filter(Boolean)));
+  await Promise.all(relatedSessionIds.map((id) => ensureSessionLoaded(id).catch(() => {})));
   const queueByCardId = new Map(queueEntries.map((e) => [e.cardId, e]));
 
   const cards = state.cards.filter((c) => UPLOAD_STATUS_MEDIA_TYPES.includes(c.mediaType));
@@ -6736,76 +6370,75 @@ async function uploadCardFileInBackground(card, blob, filename, signal) {
   }
 }
 
-/** Driveへ保存するデータ本体。updatedAtは、オートセーブOFF中の端末内バックアップ
- *  (js/upload-queue.jsのsaveLocalDataBackup())とDrive側のどちらが新しいか、次回起動時の
- *  onSignedIn()が比較するために持たせている(2026年9月追加)。 */
-function collectSaveData() {
-  return {
-    cards: state.cards,
-    sessions: state.sessions,
-    connections: state.connections,
-    hiddenAutoLinks: state.hiddenAutoLinks,
-    exhibitionCalendarId: state.exhibitionCalendarId,
-    crews: state.crews,
-    // almagestEntriesはここには含めない(2026年9月〜): Almagestは専用のDriveファイル
-    // (almagest-library.json)へ変更のたびに即座に保存するようになったため、オートセーブの
-    // ON/OFF・デバウンスの影響を受けるこのメインファイルには含めない(js/modules/almagest.js参照)。
-    commentHistory: state.commentHistory,
-    groupViewingIntervalSec: state.groupViewingIntervalSec,
-    feHistory: state.feHistory,
-    feHistoryIndex: state.feHistoryIndex,
-    breadcrumb: state.breadcrumb,
-    updatedAt: Date.now(),
-  };
+/** 現時点でdirty扱いのセッション本体を、ローカルバックアップ用にまとめて集めておく
+ *  (2026年9月追加)。索引(index)と、送れていないセッション本体(sessions)を分けて持つ。 */
+function buildLocalBackupPayload() {
+  const sessions = {};
+  state.dirtySessionIds.forEach((id) => { sessions[id] = collectSessionBodyData(id); });
+  return { index: collectSaveData(), sessions };
 }
 
-/** @returns {Promise<boolean>} Driveへの保存に成功したか。mergeQuickBundlesIfAny()が、
- *  クイックバンドルをIndexedDBから消してよいか判断するために使う(2026年9月追加)。 */
+/**
+ * Driveへ保存する。**2026年9月、セッション単位ロードへの全面移行に伴い書き換えた**: 以前は
+ * cards/sessions/connections/hiddenAutoLinksを含む1つの巨大なJSONを毎回丸ごと書き戻して
+ * いたが、今は (1) `state.dirtySessionIds`に溜まった変更ぶんのセッションだけをそれぞれの
+ * 専用本体ファイルへ、(2) 索引(セッションの階層・件数・グローバルな状態)は内容が実際に
+ * 変わっていた場合だけ、という2段階で必要な分だけ書き戻す。
+ * @returns {Promise<boolean>} 全て成功したか。
+ */
 async function handleSave() {
   setStatus('自動保存中…');
-  const data = collectSaveData();
-  try {
-    state.fileId = await saveData(state.folderId, state.fileId, data);
-    if (typeof clearLocalDataBackup === 'function') clearLocalDataBackup();
-    // 年セッションだけの軽量インデックス(constellation-years.json)も追従させる(2026年9月追加、
-    // クイックカメラ/クイックセッションが読む。ベストエフォート、失敗してもメイン保存の
-    // 成否には影響させない)。
-    saveYearsIndexMirror().catch(() => {});
-    setStatus('自動保存しました');
-    return true;
-  } catch (err) {
-    console.error(err);
-    // Driveへの送信自体が(オフライン等で)失敗しても変更を失わないよう、端末内バックアップへ
-    // 逃がしておく(2026年9月追加、オートセーブOFF中の保護と同じ仕組みを再利用する)。
-    if (typeof saveLocalDataBackup === 'function') await saveLocalDataBackup(data).catch(() => {});
-    setStatus('自動保存に失敗しました(端末に保持、コンソールを確認)', { important: true });
-    return false;
+  const dirtyIds = Array.from(state.dirtySessionIds);
+  state.dirtySessionIds.clear();
+  let allOk = true;
+  for (const sessionId of dirtyIds) {
+    const session = getSessionById(sessionId);
+    if (!session) continue; // 既に参照が外れた(削除済みの)セッションは保存不要
+    const body = collectSessionBodyData(sessionId);
+    try {
+      const fileName = `${CONFIG.SESSION_FILE_PREFIX}${sessionId}.json`;
+      session.bodyFileId = await saveNamedData(state.folderId, session.bodyFileId, body, fileName);
+      refreshSessionIndexFields(sessionId);
+    } catch (err) {
+      console.error(`セッション「${session.name}」の保存に失敗`, err);
+      state.dirtySessionIds.add(sessionId); // 次回のオートセーブで再試行できるよう戻す
+      allOk = false;
+    }
   }
+  const signature = currentSessionsIndexSignature();
+  if (signature !== lastSavedSessionsIndexSignature) {
+    try {
+      state.fileId = await saveData(state.folderId, state.fileId, collectSaveData());
+      lastSavedSessionsIndexSignature = signature;
+    } catch (err) {
+      console.error('索引の保存に失敗', err);
+      allOk = false;
+    }
+  }
+  if (allOk) {
+    if (typeof clearLocalDataBackup === 'function') clearLocalDataBackup();
+    setStatus('自動保存しました');
+  } else {
+    // 失敗した分は端末内バックアップへ逃がしておく(2026年9月、オートセーブOFF中の保護と
+    // 同じ仕組みを再利用する。state.dirtySessionIdsには失敗したセッションが戻されているため、
+    // buildLocalBackupPayload()が正しくそのぶんだけ含める)。
+    if (typeof saveLocalDataBackup === 'function') await saveLocalDataBackup(buildLocalBackupPayload()).catch(() => {});
+    setStatus('自動保存に失敗しました(端末に保持、コンソールを確認)', { important: true });
+  }
+  return allOk;
 }
 
-/** オートセーブOFF中の保存先。Driveへは一切送らず、IndexedDBへ現在のデータ全体を
- *  バックアップするだけに留める(2026年9月追加)。 */
+/** オートセーブOFF中の保存先。Driveへは一切送らず、IndexedDBへ現在のdirtyな内容だけを
+ *  バックアップするだけに留める(2026年9月、セッション単位ロードに合わせて対象を絞った)。
+ *  **state.dirtySessionIdsはここではクリアしない**(実際にはまだDriveへ届いていないため、
+ *  オンライン復帰後の本保存で改めて対象になる必要がある)。 */
 async function handleLocalBackupSave() {
   if (typeof saveLocalDataBackup !== 'function') return;
   try {
-    await saveLocalDataBackup(collectSaveData());
+    await saveLocalDataBackup(buildLocalBackupPayload());
     setStatus('端末に保存しました(Drive未送信)');
   } catch (err) {
     console.error('ローカルバックアップの保存に失敗', err);
-    setStatus('端末への保存に失敗しました(コンソールを確認)', { important: true });
-  }
-}
-
-/** クイックモード中(state.quickMode)の保存先。Driveのメインファイルには一切触れず、
- *  IndexedDBの専用バンドルへ現在のstate(=今回新規に作った分だけ)を保存するだけに
- *  留める(2026年9月追加、js/upload-queue.jsのsaveQuickBundle()参照)。 */
-async function handleQuickModeSave() {
-  if (typeof saveQuickBundle !== 'function' || !state.quickBundleId) return;
-  try {
-    await saveQuickBundle(state.quickBundleId, collectSaveData());
-    setStatus('端末に保存しました(クイックモード、Drive未送信)');
-  } catch (err) {
-    console.error('クイックバンドルの保存に失敗', err);
     setStatus('端末への保存に失敗しました(コンソールを確認)', { important: true });
   }
 }

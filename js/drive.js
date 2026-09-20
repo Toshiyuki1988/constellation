@@ -145,6 +145,17 @@ async function loadNamedData(folderId, fileName) {
   return { fileId, data };
 }
 
+/**
+ * 既に分かっているfileIdからJSONを直接取得する(2026年9月追加、セッション単位ロード用)。
+ * `loadNamedData()`は毎回`findFileByName()`でDriveへ名前検索を掛けるが、セッションの索引
+ * (constellation-data.json)側に各セッション本体のfileId(`session.bodyFileId`)を既にキャッシュ
+ * してあるため、検索を挟まず`files/{id}?alt=media`を直接叩ける方が1回分のAPI呼び出しを省ける。
+ */
+async function loadFileContentById(fileId) {
+  const res = await driveFetch(`/files/${fileId}?alt=media`);
+  return res.json();
+}
+
 /** saveData()の汎用版。任意のファイル名でJSONを作成/上書き保存する。
  *  @returns {Promise<string>} 保存後のファイルID */
 async function saveNamedData(folderId, fileId, data, fileName) {

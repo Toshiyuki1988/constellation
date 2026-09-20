@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260919b">
+<link rel="stylesheet" href="css/style.css?v=20260921a">
 <link rel="stylesheet" href="css/camera.css?v=20260918c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -52,61 +52,6 @@
 </script>
 </head>
 <body>
-  <!-- **2026年9月追加**: サインイン前(初回タップで自動サインインを試みるまでの間)にも
-       業務的な白いツールバー/空のキャンバスが一瞬でも見えないよう、ゴールデンレコードの
-       ロード画面をJSの実行を待たず最初の1フレーム目から静的に表示しておく
-       (js/app.jsのbuildStartMenu()参照、この要素をそのまま見つけて使い回す)。
-       中の放射状の線(パルサーマップ)は`js/app.js`の`START_MENU_PULSARS`と同じ座標を
-       手書きで複製したもの(cx=cy=150、`buildStartMenuDiscSvg()`が計算するのと同一の
-       角度・長さから、Node.jsで一度だけ算出して埋め込んだ)。`START_MENU_PULSARS`を
-       変更する場合は、この静的マークアップも合わせて更新すること(でないと最初の1フレームだけ
-       レコードの模様がJS生成後とわずかにズレる)。 -->
-  <div id="start-menu-overlay" class="start-menu-overlay open phase-loading">
-    <div class="start-menu-loading">
-      <div class="start-menu-disc-wrap">
-        <svg viewBox="0 0 300 300" width="100%" height="100%">
-          <g class="start-menu-disc-rotor">
-            <circle class="start-menu-disc-face" cx="150" cy="150" r="118"></circle>
-            <circle class="start-menu-disc-groove" cx="150" cy="150" r="100"></circle>
-            <circle class="start-menu-disc-groove" cx="150" cy="150" r="82"></circle>
-            <circle class="start-menu-disc-groove" cx="150" cy="150" r="64"></circle>
-            <circle class="start-menu-disc-groove" cx="150" cy="150" r="46"></circle>
-            <circle class="start-menu-disc-spindle" cx="150" cy="150" r="7"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="132.6" y2="51.5" style="animation-delay:0.00s"></line>
-            <circle class="start-menu-pulsar-tip" cx="132.6" cy="51.5" r="2.2" style="animation-delay:0.00s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="176.0" y2="70.1" style="animation-delay:0.14s"></line>
-            <circle class="start-menu-pulsar-tip" cx="176.0" cy="70.1" r="2.2" style="animation-delay:0.14s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="233.2" y2="75.1" style="animation-delay:0.28s"></line>
-            <circle class="start-menu-pulsar-tip" cx="233.2" cy="75.1" r="2.2" style="animation-delay:0.28s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="226.3" y2="133.8" style="animation-delay:0.42s"></line>
-            <circle class="start-menu-pulsar-tip" cx="226.3" cy="133.8" r="2.2" style="animation-delay:0.42s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="250.9" y2="175.2" style="animation-delay:0.56s"></line>
-            <circle class="start-menu-pulsar-tip" cx="250.9" cy="175.2" r="2.2" style="animation-delay:0.56s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="213.3" y2="211.1" style="animation-delay:0.70s"></line>
-            <circle class="start-menu-pulsar-tip" cx="213.3" cy="211.1" r="2.2" style="animation-delay:0.70s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="182.5" y2="263.4" style="animation-delay:0.84s"></line>
-            <circle class="start-menu-pulsar-tip" cx="182.5" cy="263.4" r="2.2" style="animation-delay:0.84s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="135.1" y2="234.7" style="animation-delay:0.98s"></line>
-            <circle class="start-menu-pulsar-tip" cx="135.1" cy="234.7" r="2.2" style="animation-delay:0.98s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="87.0" y2="225.1" style="animation-delay:1.12s"></line>
-            <circle class="start-menu-pulsar-tip" cx="87.0" cy="225.1" r="2.2" style="animation-delay:1.12s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="75.8" y2="180.0" style="animation-delay:1.26s"></line>
-            <circle class="start-menu-pulsar-tip" cx="75.8" cy="180.0" r="2.2" style="animation-delay:1.26s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="43.1" y2="135.0" style="animation-delay:1.40s"></line>
-            <circle class="start-menu-pulsar-tip" cx="43.1" cy="135.0" r="2.2" style="animation-delay:1.40s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="77.5" y2="93.4" style="animation-delay:1.54s"></line>
-            <circle class="start-menu-pulsar-tip" cx="77.5" cy="93.4" r="2.2" style="animation-delay:1.54s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="106.5" y2="42.4" style="animation-delay:1.68s"></line>
-            <circle class="start-menu-pulsar-tip" cx="106.5" cy="42.4" r="2.2" style="animation-delay:1.68s"></circle>
-            <line class="start-menu-pulsar-line" x1="150" y1="150" x2="161.7" y2="66.8" style="animation-delay:1.82s"></line>
-            <circle class="start-menu-pulsar-tip" cx="161.7" cy="66.8" r="2.2" style="animation-delay:1.82s"></circle>
-          </g>
-        </svg>
-      </div>
-      <div class="start-menu-wordmark">CONSTELLATION</div>
-      <div class="start-menu-caption" id="start-menu-caption">起動しています…</div>
-    </div>
-  </div>
   <header class="toolbar">
     <h1>CONSTELLATION</h1>
     <div class="info-ticker" id="infoTicker" hidden title="タップでその展覧会へジャンプ">
@@ -154,6 +99,12 @@
            で取得できる(このアプリが作成したファイル以外は見えない制約の対象外)。タップで
            再取得する(js/app.jsのrefreshDriveQuota()参照)。 -->
       <button id="drive-quota-btn" class="drive-quota-btn" title="タップで更新" hidden></button>
+      <!-- 自宅Wi-Fi等、通信量を気にしない環境向けの一括読み込みボタン(2026年9月追加)。
+           セッション単位ロード(セッションに入った時だけそのセッション本体を読み込む)とは別に、
+           「全部読み込んでサムネイルも全表示で作業したい」というユーザー要望に応える。押すと
+           索引に載っている全セッションの本体ファイルをまとめて取得する(js/app.jsの
+           loadEverySession()参照)。 -->
+      <button id="load-everything-btn" title="全セッションの本体データをまとめて読み込みます(自宅Wi-Fi向け)" hidden>📥 すべて読み込む</button>
       <button id="sign-in-btn" disabled>Googleでサインイン</button>
       <button id="sign-out-btn" hidden>サインアウト</button>
     </div>
@@ -167,6 +118,13 @@
   <main id="canvas-viewport" class="canvas-viewport">
     <div id="canvas-content" class="canvas-content"></div>
   </main>
+
+  <!-- 全体マップ(2026年9月追加、旧スタートメニュー/クイックメニューの置き換え)。
+       state.breadcrumbが空の間(=まだどのセッションにも入っていない間)、#canvas-viewportの
+       代わりにこちらを表示する。パン/ズームのジェスチャー(canvas.js)と競合しないよう、
+       キャンバス本体とは完全に別のDOM・別のスクロール領域にしてある(js/app.jsの
+       renderSessionsMap()/showSessionsMap()参照)。 -->
+  <div id="sessions-map" class="sessions-map" hidden></div>
 
   <footer id="bottombar">
     <button class="tool-btn" id="tool-upload" disabled title="端末から画像を選ぶ">
@@ -531,26 +489,26 @@
   <!-- interact.js (drag / resize / pinch-zoom) -->
   <script src="https://cdn.jsdelivr.net/npm/interactjs@1.10.27/dist/interact.min.js"></script>
 
-  <script src="js/config.js?v=20260920a"></script>
+  <script src="js/config.js?v=20260921a"></script>
   <script src="js/auth.js?v=20260911a"></script>
-  <script src="js/drive.js?v=20260916a"></script>
-  <script src="js/upload-queue.js?v=20260916d"></script>
+  <script src="js/drive.js?v=20260921a"></script>
+  <script src="js/upload-queue.js?v=20260921a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260918d"></script>
   <script src="js/camera.js?v=20260918c"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260920b"></script>
+  <script src="js/app.js?v=20260921a"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
-  <script src="js/module-launcher.js?v=20260920a"></script>
+  <script src="js/module-launcher.js?v=20260921a"></script>
 
   <!-- モジュール(必須ではない追加機能)。基本機能より後ろに置く -->
   <script src="js/modules/wormgate.js?v=20260911a"></script>
   <script src="js/modules/crews.js?v=20260914a"></script>
   <script src="js/modules/mapping-storys.js?v=20260909a"></script>
-  <script src="js/modules/flight-engineer.js?v=20260918e"></script>
+  <script src="js/modules/flight-engineer.js?v=20260921a"></script>
   <script src="js/modules/astrometry-scope.js?v=20260914d"></script>
   <script src="js/modules/star-pencil.js?v=20260914c"></script>
   <script src="js/modules/almagest.js?v=20260917f"></script>
