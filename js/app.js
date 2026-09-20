@@ -946,7 +946,16 @@ async function onSignedIn() {
     setStatus('サインインしました');
     const elapsed = Date.now() - loadingStartedAt;
     if (elapsed < MIN_LOADING_DISPLAY_MS) await sleep(MIN_LOADING_DISPLAY_MS - elapsed);
-    openStartMenu();
+    // Ephemerisのログイン前フラッシュ「▶ 記録を始める」から予約されていた場合は、
+    // スタートメニューを経由せずそのスケジュール専用のセッションへ直接入る(下記
+    // requestEphemerisSessionEntry()/enterEphemerisSchedule()参照)。
+    if (pendingEphemerisEntrySchedule) {
+      const schedule = pendingEphemerisEntrySchedule;
+      pendingEphemerisEntrySchedule = null;
+      await enterEphemerisSchedule(schedule);
+    } else {
+      openStartMenu();
+    }
   } catch (err) {
     console.error(err);
     closeStartMenu();
@@ -1441,6 +1450,70 @@ async function createAndEnterSessionUnderCurrentYear(name) {
   const session = createChildSessionCard(name);
   await enterSession(session.id, false);
 }
+
+/* ---------------- Ephemerisのスケジュール専用セッション(2026年9月追加) ----------------
+ * 「Ephemerisの設定でスケジュールと連動するセッションを持たせ、スケジュールからそのセッション
+ * だけに入れるようにしたい(他のデータは一切読み込まない)」というユーザー要望への対応。
+ *
+ * constellation-data.jsonはセッション単位でファイルが分かれていない単一の巨大なJSONのため、
+ * 「既存の任意のセッションを選んで紐付ける」方式では、結局そのセッションの中身を見るために
+ * ファイル全体をDriveから取得する必要があり、「そのセッション以外は読み込まない」を文字通り
+ * 満たせない。そのため、紐付けは「スケジュールのラベルを名前にした専用のクイックセッションを
+ * その場で作る/既に作っていれば戻る」という、既存のクイックセッション機構(startQuickSession()、
+ * 本ファイル上部の「スタートメニュー・クイックカメラ・クイックセッション」参照)にそのまま
+ * 乗せる形にした。これなら実際にメインデータを一切読み込まずに「撮影→キャプションOCR→
+ * アステリズム」まで完結する(いずれもstate.cards/sessionsだけで動く既存機能)。
+ *
+ * **既知の制約**: この対応関係(スケジュールid→セッションid)はDriveへ永続化せず、この
+ * ブラウザタブが開いている間だけ保持する(`ephemerisScheduleSessionMap`)。ページを再読み込み
+ * すると失われ、次に同じスケジュールから入ると新しい別のクイックセッションが作られる
+ * (クイックモード自体がそもそも「今回の外出専用」という性質のため、これは既存のクイック
+ * カメラ/クイックセッションの制約と同じ割り切りである)。 */
+
+const ephemerisScheduleSessionMap = new Map(); // scheduleId(文字列) -> sessionId
+
+/** Ephemerisの「▶ 記録を始める」ボタン(ログイン前フラッシュ・小窓の両方)から呼ばれる。
+ *  既にこの外出中に同じスケジュール用のセッションを作っていれば、そのまま入り直すだけ。
+ *  無ければ、スケジュールのラベルを名前にした新規クイックセッションを作って入る
+ *  (メインデータは読み込まない)。軽量インデックスが使えない/既にメインデータ読み込み済みの
+ *  場合は、既存のフォールバック(createAndEnterSessionUnderCurrentYear())へ委ねる。 */
+async function enterEphemerisSchedule(schedule) {
+  closeStartMenu();
+  const existingSessionId = ephemerisScheduleSessionMap.get(schedule.id);
+  if (existingSessionId && state.quickSessionIds && state.quickSessionIds.has(existingSessionId)) {
+    await enterSession(existingSessionId, false);
+    return;
+  }
+  const label = (schedule.label || '').trim() || '(無題の展覧会)';
+  if (!state.quickMode && !mainDataLoaded) {
+    if (state.yearsIndexAvailable) {
+      const session = startQuickSession(label);
+      ephemerisScheduleSessionMap.set(schedule.id, session.id);
+      setStatus(`「${label}」のセッションへ入りました(クイックモード)`);
+      return;
+    }
+    setStatus('初回だけ全データを読み込みます(次回からは軽量になります)…', { busy: true });
+    try {
+      await ensureMainDataLoaded();
+    } catch (err) {
+      return;
+    }
+  }
+  await createAndEnterSessionUnderCurrentYear(label);
+  ephemerisScheduleSessionMap.set(schedule.id, activeSessionId());
+}
+window.enterEphemerisSchedule = enterEphemerisSchedule;
+
+let pendingEphemerisEntrySchedule = null;
+
+/** ログイン前フラッシュの「▶ 記録を始める」ボタン(js/modules/ephemeris.js)から呼ばれる。
+ *  サインインを開始しつつ、完了後にスタートメニューを経由せず直接enterEphemerisSchedule()を
+ *  呼ぶよう予約する(上記onSignedIn()参照)。 */
+function requestEphemerisSessionEntry(schedule) {
+  pendingEphemerisEntrySchedule = schedule;
+  if (typeof signIn === 'function') signIn();
+}
+window.requestEphemerisSessionEntry = requestEphemerisSessionEntry;
 
 /** クイックセッションボタン。セッション名の入力方法(OCR/手入力)はhandleCreateSession()と
  *  同じ二択を踏襲する。軽量インデックスが使えない場合は、安全側に倒して通常の全データ

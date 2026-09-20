@@ -325,11 +325,23 @@
     // 丸時計タップ→現在時刻に最も近いブロックへジャンプ(2026年9月追加、誤タップ防止の
     // サインイン導線とは無関係な単なる画面内スクロールのため、このタップだけ例外的に反応する)。
     clockWrap.addEventListener('click', jumpToNowHighlight);
-    // ブロックごとのスクリーンショット開閉トグル(再描画のたび要素が差し替わるため委譲にする)。
+    // ブロックごとのスクリーンショット開閉トグル・「▶ 記録を始める」ボタン
+    // (再描画のたび要素が差し替わるため、どちらもコンテナへの委譲にする)。
     flashEls.timetable.addEventListener('click', (e) => {
-      const btn = e.target.closest('.eph-flash-tt-img-toggle');
-      if (!btn) return;
-      btn.closest('.eph-flash-tt-item').classList.toggle('eph-flash-tt-item--open');
+      const imgBtn = e.target.closest('.eph-flash-tt-img-toggle');
+      if (imgBtn) {
+        imgBtn.closest('.eph-flash-tt-item').classList.toggle('eph-flash-tt-item--open');
+        return;
+      }
+      const enterBtn = e.target.closest('.eph-flash-tt-enter-btn');
+      if (enterBtn) {
+        const schedule = (flashEls.currentSchedules || []).find((s) => s.id === enterBtn.dataset.scheduleId);
+        if (schedule && typeof window.requestEphemerisSessionEntry === 'function') {
+          enterBtn.disabled = true;
+          enterBtn.textContent = '入室中…';
+          window.requestEphemerisSessionEntry(schedule);
+        }
+      }
     });
   }
 
@@ -346,16 +358,30 @@
 
   function renderFlashTimetable(schedules) {
     flashEls.timetable.innerHTML = '';
+    // クリックイベント委譲(下記)から、タップされたスケジュールの完全なオブジェクトを
+    // idで引き当てるために保持しておく(dataset属性にはidしか持たせられないため)。
+    flashEls.currentSchedules = schedules;
     // 「現在の時刻に最も近いブロック」のハイライトは、スケジュール(=展覧会)ごとに独立して
     // 判定する(複数のスケジュールが同日に並んでいても、互いの時刻を混ぜて比較しない)。
     flashEls.nowHighlightGroups = [];
     schedules.forEach((sch) => {
       const block = document.createElement('div');
       block.className = 'eph-flash-tt-block';
+      const header = document.createElement('div');
+      header.className = 'eph-flash-tt-header';
       const label = document.createElement('p');
       label.className = 'eph-flash-tt-label';
       label.textContent = sch.label || '(無題)';
-      block.appendChild(label);
+      header.appendChild(label);
+      // 「▶ 記録を始める」: このスケジュール専用のクイックセッションへ、メインデータを
+      // 一切読み込まずに直接入る(js/app.jsのrequestEphemerisSessionEntry()参照)。
+      const enterBtn = document.createElement('button');
+      enterBtn.type = 'button';
+      enterBtn.className = 'eph-flash-tt-enter-btn';
+      enterBtn.dataset.scheduleId = sch.id;
+      enterBtn.textContent = '▶ 記録を始める';
+      header.appendChild(enterBtn);
+      block.appendChild(header);
 
       const list = document.createElement('div');
       list.className = 'eph-flash-tt-list';
@@ -599,10 +625,12 @@
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .eph-row-btns { display: flex; gap: 4px; flex: none; }
-      .eph-row-edit, .eph-row-delete {
+      .eph-row-enter, .eph-row-edit, .eph-row-delete {
         width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.18);
         background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 10px; cursor: pointer; padding: 0;
       }
+      .eph-row-enter { border-color: rgba(150, 240, 178, 0.45); color: #d7fbe3; }
+      .eph-row-enter:hover { background: rgba(150, 240, 178, 0.22); border-color: rgba(150, 240, 178, 0.8); color: #fff; }
       .eph-row-edit:hover { border-color: rgba(150, 240, 178, 0.65); color: #fff; }
       .eph-row-delete:hover { border-color: #b3402b; color: #ff8a70; }
       .eph-form { margin-top: 6px; border-top: 1px dashed rgba(255, 255, 255, 0.14); padding-top: 10px; }
@@ -747,9 +775,21 @@
         .eph-clock-tendril.grow, .eph-clock-blossom { transition: none !important; }
       }
       .eph-flash-timetable { width: min(88vw, 320px); display: flex; flex-direction: column; gap: 18px; }
-      .eph-flash-tt-label {
-        margin: 0 0 8px; font-family: 'Fraunces', serif; font-size: 15px; color: #eef2e6; letter-spacing: 0.02em;
+      .eph-flash-tt-header {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;
       }
+      .eph-flash-tt-label {
+        margin: 0; font-family: 'Fraunces', serif; font-size: 15px; color: #eef2e6; letter-spacing: 0.02em;
+      }
+      /* 「▶ 記録を始める」: このスケジュール専用のクイックセッションへ、メインデータを
+         一切読み込まずに直接入る(2026年9月追加)。 */
+      .eph-flash-tt-enter-btn {
+        flex: none; padding: 7px 12px; border-radius: 999px; border: 1px solid rgba(150, 240, 178, 0.55);
+        background: rgba(150, 240, 178, 0.16); color: #eef2e6; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 11px; font-weight: 700; cursor: pointer;
+      }
+      .eph-flash-tt-enter-btn:hover { background: rgba(150, 240, 178, 0.3); }
+      .eph-flash-tt-enter-btn:disabled { opacity: 0.6; cursor: default; }
       .eph-flash-tt-list { display: flex; flex-direction: column; gap: 8px; }
       .eph-flash-tt-item {
         display: flex; flex-direction: column; gap: 8px;
@@ -834,10 +874,19 @@
           <span class="eph-row-label">${escapeHtml(s.label || '(無題)')}</span>
         </div>
         <div class="eph-row-btns">
+          <button class="eph-row-enter" title="記録を始める/入室する">▶</button>
           <button class="eph-row-edit" title="編集">✎</button>
           <button class="eph-row-delete" title="削除">🗑</button>
         </div>
       `;
+      // 「▶」: このスケジュール専用のセッションへ入る(js/app.jsのenterEphemerisSchedule()。
+      // 既にサインイン済みの文脈(小窓を開いている=アプリ内)なので、サインインを挟まず直接呼ぶ)。
+      row.querySelector('.eph-row-enter').addEventListener('click', () => {
+        if (typeof window.enterEphemerisSchedule === 'function') {
+          window.enterEphemerisSchedule(s);
+          closeEphemeris();
+        }
+      });
       row.querySelector('.eph-row-edit').addEventListener('click', () => startEdit(s.id));
       row.querySelector('.eph-row-delete').addEventListener('click', () => deleteSchedule(s.id));
       epEls.list.appendChild(row);
