@@ -1014,6 +1014,7 @@
     if (state.breadcrumb.length === 0) state.breadcrumb = [getCurrentYearSessionId()];
     renderYearTabs();
     renderBreadcrumb();
+    if (typeof updateEphemerisSessionClock === 'function') updateEphemerisSessionClock();
   }
 
   /** 履歴上の任意の位置(targetIndex件ぶんが適用済みの状態)へジャンプする。

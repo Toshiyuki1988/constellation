@@ -972,6 +972,10 @@ function collectSaveData() {
       bodyFileId: s.bodyFileId || null,
       cardCount: s.cardCount || 0,
       coverThumb: s.coverThumb || null,
+      // Ephemerisのスケジュールと永続的に紐付けられたセッションが持つ(2026年9月追加、
+      // js/modules/ephemeris.js参照)。このセッション自身がEphemeris経由で作られた/
+      // 紐付けられた場合だけ値を持つ(nullなら無関係な通常セッション)。
+      ephemerisScheduleId: s.ephemerisScheduleId || null,
     })),
     exhibitionCalendarId: state.exhibitionCalendarId,
     crews: state.crews,
@@ -1307,6 +1311,7 @@ async function loadEverySession() {
  *  見た目はアプリ本体と同じ白+ドット(Golden Recordは廃止、ユーザー指定)。 */
 function showSessionsMap() {
   state.breadcrumb = [];
+  updateEphemerisSessionClock(); // 花時計はセッション内だけの表示なので、全体マップでは消す
   if (els.viewport) els.viewport.hidden = true;
   if (els.sessionsMap) els.sessionsMap.hidden = false;
   renderYearTabs();
@@ -1329,6 +1334,9 @@ function smNodeHtml(session, isCurrentHighlight) {
   const icon = session.coverThumb ? '' : (session.type === 'year' ? '🗓️' : '🖼️');
   const loaded = state.loadedSessionIds.has(session.id);
   const countLabel = session.type === 'year' ? '' : `${childCount}件`;
+  // 年セッションは自動で作り直されてしまう(ensureYearSessions())ため削除対象から外す
+  // (2026年9月追加、全体マップからの直接削除)。
+  const deleteBtnHtml = session.type === 'year' ? '' : '<button class="sm-delete" title="このセッションを完全に削除">🗑</button>';
   return `
     <div class="sm-node${isCurrentHighlight ? ' sm-node--current' : ''}" data-session-id="${session.id}">
       <span class="sm-caret"></span>
@@ -1336,6 +1344,7 @@ function smNodeHtml(session, isCurrentHighlight) {
       <span class="sm-name">${escapeHtml(session.name)}</span>
       <span class="sm-count">${countLabel}</span>
       <span class="sm-status${loaded ? ' sm-status--loaded' : ''}"></span>
+      ${deleteBtnHtml}
     </div>
   `;
 }
@@ -1394,6 +1403,11 @@ function renderSessionsMap() {
       caret.textContent = '▾';
     }
     row.addEventListener('click', async (e) => {
+      if (e.target.closest('.sm-delete')) {
+        e.stopPropagation();
+        smDeleteSession(row.dataset.sessionId);
+        return;
+      }
       if (e.target === caret && childUl) {
         childUl.hidden = !childUl.hidden;
         caret.classList.toggle('collapsed');
@@ -1424,6 +1438,7 @@ function renderSessionsMap() {
           renderBreadcrumb();
           renderAllCards();
           updateToolbarSessionGate();
+          updateEphemerisSessionClock();
           scheduleAutoSave();
           maybeShowDailyComment();
           // 前回作業していた場所(点線ハイライト)へのジャンプの場合だけ、旧・自動復元と同じく
@@ -1448,6 +1463,30 @@ function renderSessionsMap() {
   }
 }
 
+/**
+ * 全体マップから、特定のセッション(+子孫セッション)を完全に削除する(2026年9月追加)。
+ * キャンバスから削除した/見当たらないセッションカードが全体マップに永久に残り続けるバグ
+ * (purgeSessionTree()参照)への対応として、キャンバス上に対応するカードが見当たらない
+ * 孤児セッションでも、ここから直接掃除できるようにした。
+ */
+function smDeleteSession(sessionId) {
+  const session = getSessionById(sessionId);
+  if (!session) return;
+  const { cardCount, sessionCount } = countSessionContents(sessionId);
+  const parts = [];
+  if (sessionCount > 0) parts.push(`内包セッション${sessionCount}件`);
+  if (cardCount > 0) parts.push(`カード${cardCount}件`);
+  const detail = parts.length > 0 ? `中身: ${parts.join(' / ')}\n` : '中身は空です。\n';
+  if (!window.confirm(`「${session.name}」を完全に削除しますか?\n${detail}(Drive上のファイル本体は削除されません)`)) return;
+  if (!window.confirm(`本当によろしいですか?\n「${session.name}」への参照が完全に失われます。`)) return;
+
+  const affectedOuterSessionIds = purgeSessionTree(sessionId);
+  affectedOuterSessionIds.forEach((id) => markSessionDirty(id));
+  scheduleAutoSave();
+  setStatus(`「${session.name}」を削除しました`);
+  renderSessionsMap();
+}
+
 /** Almagestを閉じた時に呼ばれる薄いフック(js/modules/almagest.js参照)。まだどのセッションにも
  *  入っていなければ、全体マップが表示されたままであることを確認する(通常は既に表示されている
  *  ため実質no-op、他の画面から誤って辿り着いた場合の保険)。 */
@@ -1456,35 +1495,54 @@ function onAlmagestClosed() {
 }
 window.onAlmagestClosed = onAlmagestClosed;
 
-/* ---------------- Ephemerisのスケジュール専用セッション(2026年9月、簡略化) ----------------
+/* ---------------- Ephemerisのスケジュール専用セッション(2026年9月、永続的な紐付けへ全面書き換え) ----------------
  * 「Ephemerisの設定でスケジュールと連動するセッションを持たせ、スケジュールからそのセッション
- * だけに入れるようにしたい」というユーザー要望への対応。**以前はクイックモード専用の特別な
- * 経路(startQuickSession())が必要だったが、セッション単位ロードでは新規セッションを作ること
- * 自体が既に「その1セッション分の通信で完結する」軽量な操作なので、通常のセッション作成
- * (createChildSessionCard())をそのまま使い回すだけで済む。** */
-
-const ephemerisScheduleSessionMap = new Map(); // scheduleId(文字列) -> sessionId、このタブが開いている間だけ保持
+ * だけに入れるようにしたい」というユーザー要望への対応。
+ *
+ * **以前の不具合**: 紐付け自体をこのタブが開いている間だけのメモリ上のMapで覚えていたため、
+ * ページを再読み込みするたびに紐付けが失われ、「▶ 記録を始める」を押すたびに同じ名前の
+ * セッションが何度も新規作成されてしまっていた(2026年9月、実機報告)。
+ *
+ * **対応**: 紐付けをDriveへ永続化する双方向の参照に作り直した。
+ *   - `schedule.sessionId`(constellation-ephemeris.json側、js/modules/ephemeris.js): この
+ *     スケジュールから入るべき、唯一のセッションid。
+ *   - `session.ephemerisScheduleId`(constellation-data.json側、collectSaveData()参照): この
+ *     セッションが、どのEphemerisスケジュールと紐付いているか。セッション内の花時計ボタン
+ *     (updateEphemerisSessionClock())が使う。
+ * 一度紐付いたセッションは「▶ 記録を始める」から常にその1つのセッションだけへ案内される
+ * (=そのセッションにしか飛ばない)。紐付け先のセッションが(全体マップからの削除等で)
+ * 無くなっていた場合だけ、新しいセッションを作り直して紐付け直す(自己修復)。 */
 
 /** Ephemerisの「▶ 記録を始める」ボタン(ログイン前フラッシュ・小窓の両方)から呼ばれる。
- *  既にこの起動中に同じスケジュール用のセッションを作っていれば、そのまま入り直すだけ。
- *  無ければ、スケジュールのラベルを名前にした新規セッションを【現在の年】の下に作って入る。 */
-async function enterEphemerisSchedule(schedule) {
-  const existingSessionId = ephemerisScheduleSessionMap.get(schedule.id);
-  if (existingSessionId && getSessionById(existingSessionId)) {
-    // 既存のパンくずが何であれ関係なく、年から辿った正しいパンくずを組み立て直してから入る
-    // (enterSession()のpushだけに頼ると、既に別の場所へ移動していた場合に不正なネストの
-    // パンくずになってしまうため)。
-    const path = breadcrumbPathTo(existingSessionId);
-    await Promise.all(path.map((id) => ensureSessionLoaded(id)));
-    state.breadcrumb = path;
-    hideSessionsMap();
-    renderYearTabs();
-    renderBreadcrumb();
-    renderAllCards();
-    updateToolbarSessionGate();
-    scheduleAutoSave();
-    maybeShowDailyComment();
-    return;
+ *  @param {object} scheduleRef Ephemerisのスケジュール。ログイン前フラッシュ経由の場合、
+ *    サインイン前にlocalStorageキャッシュから作られた別オブジェクトのことがあるため、
+ *    idで読み込み済みの実体(state.ephemerisSchedules)を引き直してから使う。 */
+async function enterEphemerisSchedule(scheduleRef) {
+  if (typeof window.ensureEphemerisDataLoaded === 'function') {
+    try { await window.ensureEphemerisDataLoaded(); } catch (err) { /* オフライン等は下のフォールバックに任せる */ }
+  }
+  const schedule = (state.ephemerisSchedules || []).find((s) => s.id === scheduleRef.id) || scheduleRef;
+
+  if (schedule.sessionId) {
+    const existing = getSessionById(schedule.sessionId);
+    if (existing) {
+      // 既存のパンくずが何であれ関係なく、年から辿った正しいパンくずを組み立て直してから入る
+      // (enterSession()のpushだけに頼ると、既に別の場所へ移動していた場合に不正なネストの
+      // パンくずになってしまうため)。
+      const path = breadcrumbPathTo(schedule.sessionId);
+      await Promise.all(path.map((id) => ensureSessionLoaded(id)));
+      state.breadcrumb = path;
+      hideSessionsMap();
+      renderYearTabs();
+      renderBreadcrumb();
+      renderAllCards();
+      updateToolbarSessionGate();
+      updateEphemerisSessionClock();
+      scheduleAutoSave();
+      maybeShowDailyComment();
+      return;
+    }
+    setStatus('紐付けられていたセッションが見つからないため、新しく作り直します', { important: true });
   }
   const label = (schedule.label || '').trim() || '(無題の展覧会)';
   const yearId = getCurrentYearSessionId();
@@ -1493,9 +1551,128 @@ async function enterEphemerisSchedule(schedule) {
   }
   const session = createChildSessionCard(label);
   await enterSession(session.id, false);
-  ephemerisScheduleSessionMap.set(schedule.id, session.id);
+  linkEphemerisScheduleToSession(schedule, session.id);
 }
 window.enterEphemerisSchedule = enterEphemerisSchedule;
+
+/**
+ * スケジュールとセッションを双方向に永続的に紐付ける(2026年9月追加)。「▶ 記録を始める」
+ * での新規作成、Ephemerisモジュール小窓の「🔗」ボタンでの既存セッション選択、どちらも
+ * 必ずこの1箇所を通す。
+ * @param {object} schedule state.ephemerisSchedules内のスケジュール実体
+ * @param {string} sessionId 紐付ける先のセッションid
+ */
+function linkEphemerisScheduleToSession(schedule, sessionId) {
+  const session = getSessionById(sessionId);
+  if (!session || !schedule) return;
+  if (session.ephemerisScheduleId && session.ephemerisScheduleId !== schedule.id) {
+    if (!window.confirm('このセッションは既に別のEphemerisスケジュールと紐付いています。上書きしますか?')) return;
+    // 1セッション:1スケジュールの対応を保つため、奪う側だった旧スケジュールの紐付けも外す
+    // (外さないと、旧スケジュールの「▶ 記録を始める」がこのセッションを指したままになり、
+    // 実際にはこのセッションが今の紐付け先(schedule)を指しているのと食い違ってしまう)。
+    const previousScheduleId = session.ephemerisScheduleId;
+    (state.ephemerisSchedules || []).forEach((s) => { if (s.id === previousScheduleId) s.sessionId = null; });
+  }
+  schedule.sessionId = sessionId;
+  session.ephemerisScheduleId = schedule.id;
+  if (typeof window.persistEphemerisSchedules === 'function') window.persistEphemerisSchedules();
+  markSessionDirty(sessionId);
+  scheduleAutoSave();
+  updateEphemerisSessionClock();
+}
+window.linkEphemerisScheduleToSession = linkEphemerisScheduleToSession;
+
+/** 現在のパンくずを末尾(今いる階層)から遡り、最初に見つかったEphemerisスケジュールidを返す
+ *  (紐付いたセッションの子孫セッションに入っていても、花時計が引き続き見えるようにするため)。 */
+function findEphemerisScheduleIdForBreadcrumb() {
+  for (let i = state.breadcrumb.length - 1; i >= 0; i--) {
+    const session = getSessionById(state.breadcrumb[i]);
+    if (session && session.ephemerisScheduleId) return session.ephemerisScheduleId;
+  }
+  return null;
+}
+
+let ephemerisSessionClockEl = null;
+
+/** セッション内の花時計ボタン(js/modules/ephemeris.jsのbuildEphemerisSessionClockButton())の
+ *  表示を、今のパンくずに合わせて更新する。enterSession()・パンくずクリック・全体マップ表示の
+ *  それぞれから呼ぶ(2026年9月追加)。 */
+function updateEphemerisSessionClock() {
+  if (ephemerisSessionClockEl) {
+    ephemerisSessionClockEl.remove();
+    ephemerisSessionClockEl = null;
+  }
+  const scheduleId = findEphemerisScheduleIdForBreadcrumb();
+  if (!scheduleId || typeof window.buildEphemerisSessionClockButton !== 'function' || !els.viewport) return;
+  ephemerisSessionClockEl = window.buildEphemerisSessionClockButton(scheduleId);
+  els.viewport.appendChild(ephemerisSessionClockEl);
+}
+
+/**
+ * 任意のセッション(年を除く)を選ぶ簡易ピッカー。索引データだけで完結する(通信不要)。
+ * Ephemerisの「🔗 既存セッションと紐付ける」から使う(2026年9月追加)。
+ * @param {(sessionId: string) => void} onPick 選択されたセッションidを受け取るコールバック
+ */
+function openSessionPicker(onPick, { title = 'セッションを選ぶ' } = {}) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay visible';
+  const modal = document.createElement('div');
+  modal.className = 'modal session-picker-modal';
+  const heading = document.createElement('h2');
+  heading.textContent = title;
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = '名前で絞り込み';
+  searchInput.className = 'session-picker-search';
+  const list = document.createElement('div');
+  list.className = 'session-picker-list';
+
+  function buildRows(filterText) {
+    list.innerHTML = '';
+    const needle = filterText.toLowerCase();
+    const candidates = state.sessions
+      .filter((s) => s.type !== 'year')
+      .map((s) => {
+        const pathLabel = breadcrumbPathTo(s.id).map((id) => getSessionById(id)).filter(Boolean).map((x) => x.name).join(' › ');
+        return { session: s, pathLabel };
+      })
+      .filter((entry) => !needle || entry.pathLabel.toLowerCase().includes(needle))
+      .sort((a, b) => a.pathLabel.localeCompare(b.pathLabel));
+    if (candidates.length === 0) {
+      list.innerHTML = '<p class="session-picker-empty">該当するセッションがありません。</p>';
+      return;
+    }
+    candidates.forEach(({ session, pathLabel }) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'session-picker-row';
+      row.innerHTML = `<span class="session-picker-row-name">${escapeHtml(session.name)}</span><span class="session-picker-row-path">${escapeHtml(pathLabel)}</span>`;
+      row.addEventListener('click', () => { close(); onPick(session.id); });
+      list.appendChild(row);
+    });
+  }
+  buildRows('');
+  searchInput.addEventListener('input', () => buildRows(searchInput.value.trim()));
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'secondary';
+  cancelBtn.textContent = 'キャンセル';
+  actions.appendChild(cancelBtn);
+
+  modal.appendChild(heading);
+  modal.appendChild(searchInput);
+  modal.appendChild(list);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+  const close = () => overlay.remove();
+  cancelBtn.addEventListener('click', close);
+  attachBackgroundTapToClose(overlay, close);
+  document.body.appendChild(overlay);
+  searchInput.focus();
+}
+window.openSessionPicker = openSessionPicker;
 
 let pendingEphemerisEntrySchedule = null;
 
@@ -1591,6 +1768,7 @@ function renderBreadcrumb() {
       renderBreadcrumb();
       renderAllCards();
       updateToolbarSessionGate();
+      updateEphemerisSessionClock();
       scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
     });
     els.breadcrumb.appendChild(btn);
@@ -1603,6 +1781,13 @@ function renderBreadcrumb() {
  *  ensureSessionLoaded()で読み込む(=どのセッションへ移動しても、必要なのはそのセッション
  *  1つ分の通信だけ)。 */
 async function enterSession(id, isYear) {
+  // 全体マップからの削除・セッションカードの削除等で参照先が既に無くなっていることがある
+  // (2026年9月追加、purgeSessionTree()参照)。無いまま進めるとbreadcrumb/renderBreadcrumb()が
+  // 存在しないセッション名を読もうとして壊れるため、ここで確実に弾く。
+  if (!getSessionById(id)) {
+    setStatus('このセッションは削除されています', { important: true });
+    return;
+  }
   try {
     await ensureSessionLoaded(id);
   } catch (err) {
@@ -1618,6 +1803,7 @@ async function enterSession(id, isYear) {
   renderBreadcrumb();
   renderAllCards();
   updateToolbarSessionGate();
+  updateEphemerisSessionClock(); // このセッション(または祖先)がEphemerisと紐付いていれば花時計を出す
   if (isYear) refreshInfoTicker(); // ティッカーは年タブ単位なので、年を切り替えた時だけ再集計する
   scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
   maybeShowDailyComment(); // セッションを開くたびに判定(1日3回までの枠、失敗/中身なしなら消費しない)
@@ -4461,6 +4647,7 @@ function jumpToInfoCard(card) {
   renderYearTabs();
   renderBreadcrumb();
   renderAllCards();
+  updateEphemerisSessionClock();
   scheduleAutoSave(); // 前回作業していた場所として復元できるよう、パンくずの変更も保存する
   requestAnimationFrame(() => {
     const el = cardElById(card.id);
@@ -4894,6 +5081,12 @@ function removeCardFromState(card, el) {
     refreshInfoTicker();
     if (card.infoParsed) removeInfoCardCalendarEvents(card);
   }
+  // **2026年9月、不具合修正**: セッションカードの削除は、タイルだけでなく参照先の
+  // セッション実体(+子孫セッション全て)自体も索引から完全に削除する(purgeSessionTree()。
+  // 以前はここが漏れており、全体マップに孤児セッションが永久に残り続けるバグになっていた)。
+  if (card.mediaType === 'session' && card.refSessionId) {
+    purgeSessionTree(card.refSessionId);
+  }
   // アップロード待機列(IndexedDB)にも実データが残っている場合があるため、カードの削除に
   // 合わせて破棄する。**2026年9月の不具合修正**: 以前はここで待機列を一切触っておらず、
   // 「⚠Drive未送信」カードを削除しても待機列の実データ(Blob)だけが孤児として残り続け、
@@ -5045,6 +5238,59 @@ function countSessionContents(sessionId) {
     sessionCount += sub.sessionCount;
   });
   return { cardCount, sessionCount };
+}
+
+/** 指定したセッション自身+その子孫セッション全てのidを配列で返す(自分自身を含む)。 */
+function collectSessionSubtreeIds(sessionId) {
+  const ids = [sessionId];
+  state.sessions.filter((s) => s.parentId === sessionId).forEach((child) => {
+    ids.push(...collectSessionSubtreeIds(child.id));
+  });
+  return ids;
+}
+
+/**
+ * セッション(+子孫セッション全て)を完全に削除する(2026年9月追加)。
+ *
+ * **これまでの不具合**: セッションカードを編集ガイドのDeleteで削除しても、消えるのは
+ * キャンバス上の参照(タイルカード)だけで、`state.sessions`側の実体(索引エントリ)は
+ * 一切削除されていなかった。全体マップ(js/app.jsのrenderSessionsMap())は`state.sessions`を
+ * 直接辿って描画するため、この孤児が永久に一覧へ残り続けるバグになっていた。この関数を
+ * 削除操作の唯一の実体とすることで、キャンバス上からの削除・全体マップからの直接削除の
+ * どちらを使っても同じように索引から完全に消える。
+ *
+ * 読み込み済みのカード・接続・自動線の非表示設定・このセッション木を参照するタイルカード
+ * (祖先が読み込み済みであれば)をstate上から取り除き、索引(state.sessions)からも消す。
+ * Drive上の本体ファイル(constellation-session-<id>.json)自体は削除しない(孤立したまま
+ * 残るだけの小さなJSONで実害は無い、Almagestの書物ファイルと同じ考え方。CLAUDE.md
+ * 「Almagest」セクション参照)。
+ *
+ * **Ephemerisとの紐付けについて**: 削除するセッションが`ephemerisScheduleId`を持っていても、
+ * ここでは対応するEphemerisスケジュール側(`schedule.sessionId`)を能動的に外しには行かない
+ * (Ephemerisのデータがこの時点で読み込まれているとは限らないため)。その代わり、
+ * `enterEphemerisSchedule()`が紐付け先セッションの実在を毎回確認する設計になっており、
+ * 次に「▶ 記録を始める」が押された時に「見つからない」と判定されて自動的に新しいセッションへ
+ * 作り直される(自己修復)。
+ * @returns {Set<string>} このセッション木の外側で見つかった、削除されたタイルカードが
+ *   属していたセッションid群。呼び出し元がmarkSessionDirty()する対象。
+ */
+function purgeSessionTree(sessionId) {
+  const idSet = new Set(collectSessionSubtreeIds(sessionId));
+  const affectedOuterSessionIds = new Set();
+  state.cards = state.cards.filter((c) => {
+    const insideTree = idSet.has(c.sessionId);
+    const referencesTree = c.mediaType === 'session' && idSet.has(c.refSessionId);
+    if (referencesTree && !insideTree) affectedOuterSessionIds.add(c.sessionId);
+    return !insideTree && !referencesTree;
+  });
+  state.connections = state.connections.filter((c) => !idSet.has(c.sessionId));
+  state.hiddenAutoLinks = state.hiddenAutoLinks.filter((c) => !idSet.has(c.sessionId));
+  state.sessions = state.sessions.filter((s) => !idSet.has(s.id));
+  idSet.forEach((id) => {
+    state.loadedSessionIds.delete(id);
+    state.dirtySessionIds.delete(id);
+  });
+  return affectedOuterSessionIds;
 }
 
 /**

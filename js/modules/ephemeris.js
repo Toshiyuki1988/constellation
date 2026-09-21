@@ -163,6 +163,11 @@
     }
   }
 
+  // js/app.jsのenterEphemerisSchedule()/linkEphemerisScheduleToSession()から、スケジュールと
+  // セッションの永続的な紐付けを保存するために呼ばれる(2026年9月追加)。
+  window.ensureEphemerisDataLoaded = ensureEphemerisDataLoaded;
+  window.persistEphemerisSchedules = saveEphemerisDataNow;
+
   /* ---------------- 植物で装飾された丸時計(装飾専用、スケジュールの内容は反映しない) ---------------- */
 
   // 時計の縁を囲む8方向の小さなつる+花(見た目のみ、角度で回転コピーする)。
@@ -288,6 +293,40 @@
   function ensureStylesInjected() {
     if (!stylesInjected) { injectStyles(); stylesInjected = true; }
   }
+
+  /* ---------------- セッション内の花時計(2026年9月追加) ----------------
+   * Ephemerisスケジュールから作られた/紐付けられたセッションのキャンバス上に置く小さな
+   * 花時計ボタン(js/app.jsのupdateEphemerisSessionClock()から呼ばれ、`els.viewport`直下へ
+   * 追加される)。タップすると、紐付いているそのスケジュールへ直接飛べる。装飾丸時計
+   * (buildClockFace())と同じSVGを小さく再利用しつつ、白いキャンバス背景でも見えるよう
+   * 配色だけ`.eph-session-clock-btn`スコープで上書きする(injectStyles()参照)。 */
+  function buildSessionClockButton(scheduleId) {
+    ensureStylesInjected();
+    const clock = buildClockFace();
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'eph-session-clock-btn';
+    btn.title = 'Ephemerisのスケジュールへ';
+    btn.appendChild(clock.svg);
+    // キャンバスのパン(interact.js)に巻き込まれないよう、他の浮遊ボタン(Flight Engineerの
+    // バー等)と同じ作法でpointerdownの伝播を止める。
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (window.openEphemeris) window.openEphemeris(scheduleId);
+    });
+    const intervalId = setInterval(clock.update, 1000);
+    // ボタンがDOMから外れた(app.js側がセッション移動等で入れ替えた)ら、更新タイマーを止める。
+    const observer = new MutationObserver(() => {
+      if (!document.body.contains(btn)) {
+        clearInterval(intervalId);
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return btn;
+  }
+  window.buildEphemerisSessionClockButton = buildSessionClockButton;
 
   function buildFlashDom() {
     ensureStylesInjected();
@@ -625,7 +664,7 @@
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .eph-row-btns { display: flex; gap: 4px; flex: none; }
-      .eph-row-enter, .eph-row-edit, .eph-row-delete {
+      .eph-row-enter, .eph-row-edit, .eph-row-delete, .eph-row-link {
         width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.18);
         background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 10px; cursor: pointer; padding: 0;
       }
@@ -825,6 +864,34 @@
         display: block; width: 100%; max-width: 340px; border-radius: 10px;
         border: 1px solid rgba(150, 240, 178, 0.32); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
       }
+      /* セッションと紐付いているスケジュールの表示(2026年9月追加)。 */
+      .eph-row-linked {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: rgba(150, 240, 178, 0.85);
+        flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 84px;
+      }
+      .eph-row-link:hover { border-color: rgba(150, 240, 178, 0.65); color: #fff; }
+      .eph-row-link--linked { border-color: rgba(150, 240, 178, 0.55); color: #d7fbe3; }
+      /* セッション内キャンバスに置く花時計ボタン(2026年9月追加、js/app.jsの
+         updateEphemerisSessionClock()からels.viewport直下へ追加される)。装飾丸時計と同じSVGを
+         流用しつつ、白いキャンバス背景でも見えるよう配色だけこのスコープで上書きする。 */
+      .eph-session-clock-btn {
+        position: absolute; top: 10px; right: 14px; z-index: 40;
+        width: 52px; height: 52px; padding: 5px; border: 1px solid rgba(150, 240, 178, 0.55);
+        border-radius: 50%; cursor: pointer; background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16); transition: transform 0.15s ease;
+      }
+      .eph-session-clock-btn:hover { transform: scale(1.05); }
+      .eph-session-clock-btn:active { transform: scale(0.92); }
+      .eph-session-clock-btn .eph-clock-svg { width: 100%; height: 100%; }
+      .eph-session-clock-btn .eph-clock-face { stroke: rgba(60, 130, 92, 0.55); }
+      .eph-session-clock-btn .eph-clock-tick { stroke: rgba(60, 130, 92, 0.4); }
+      .eph-session-clock-btn .eph-clock-tick--major { stroke: rgba(60, 130, 92, 0.75); }
+      .eph-session-clock-btn .eph-clock-hand--hour,
+      .eph-session-clock-btn .eph-clock-hand--minute { stroke: #2c5c40; }
+      .eph-session-clock-btn .eph-clock-hand--second { stroke: #c76b82; }
+      .eph-session-clock-btn .eph-clock-center { fill: #2c5c40; }
+      .eph-session-clock-btn .eph-clock-blossom { fill: #d97a92; }
     `;
     document.head.appendChild(style);
   }
@@ -866,14 +933,22 @@
       return;
     }
     schedules.forEach((s) => {
+      // 紐付け済みのセッション(2026年9月追加)。session一覧(索引)はサインイン直後から
+      // 常に揃っているため、通信なしで名前を引ける(js/app.jsのstate.sessions)。
+      const linkedSession = s.sessionId ? (state.sessions || []).find((x) => x.id === s.sessionId) : null;
+      const linkedBadgeHtml = linkedSession
+        ? `<span class="eph-row-linked" title="紐付け済み: ${escapeAttrLocal(linkedSession.name)}">🔗 ${escapeHtml(linkedSession.name)}</span>`
+        : '';
       const row = document.createElement('div');
       row.className = 'eph-row';
       row.innerHTML = `
         <div class="eph-row-main">
           <span class="eph-row-date">${escapeHtml(s.date || '')}</span>
           <span class="eph-row-label">${escapeHtml(s.label || '(無題)')}</span>
+          ${linkedBadgeHtml}
         </div>
         <div class="eph-row-btns">
+          <button class="eph-row-link${linkedSession ? ' eph-row-link--linked' : ''}" title="既存セッションと紐付ける">🔗</button>
           <button class="eph-row-enter" title="記録を始める/入室する">▶</button>
           <button class="eph-row-edit" title="編集">✎</button>
           <button class="eph-row-delete" title="削除">🗑</button>
@@ -886,6 +961,17 @@
           window.enterEphemerisSchedule(s);
           closeEphemeris();
         }
+      });
+      // 「🔗」: 新規作成に頼らず、既存の任意のセッションをこのスケジュールへ直接紐付ける
+      // (js/app.jsのopenSessionPicker()/linkEphemerisScheduleToSession()、2026年9月追加)。
+      // 一度紐付けると「▶ 記録を始める」は以降ずっとそのセッションだけへ案内する。
+      row.querySelector('.eph-row-link').addEventListener('click', () => {
+        if (typeof window.openSessionPicker !== 'function' || typeof window.linkEphemerisScheduleToSession !== 'function') return;
+        window.openSessionPicker((sessionId) => {
+          window.linkEphemerisScheduleToSession(s, sessionId);
+          renderList();
+          setStatus('セッションと紐付けました');
+        }, { title: `「${s.label || '(無題)'}」と紐付けるセッションを選ぶ` });
       });
       row.querySelector('.eph-row-edit').addEventListener('click', () => startEdit(s.id));
       row.querySelector('.eph-row-delete').addEventListener('click', () => deleteSchedule(s.id));
@@ -1103,7 +1189,10 @@
 
   /* ==================== 開閉 ==================== */
 
-  async function openEphemeris() {
+  /** @param {string} [focusScheduleId] セッション内の花時計ボタン(js/app.jsの
+   *  updateEphemerisSessionClock())から渡される。指定があれば、そのスケジュールの
+   *  編集フォームを開いた状態でモジュールを表示する(「セッションからスケジュールへ飛ぶ」導線)。 */
+  async function openEphemeris(focusScheduleId) {
     ensureStylesInjected();
     if (!epEls) buildDom();
     resetForm();
@@ -1114,6 +1203,9 @@
       setStatus('スケジュールを読み込みました');
     }
     renderList();
+    if (focusScheduleId && getSchedules().some((s) => s.id === focusScheduleId)) {
+      startEdit(focusScheduleId);
+    }
   }
 
   function closeEphemeris() {
