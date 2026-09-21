@@ -297,9 +297,13 @@
   /* ---------------- セッション内の花時計(2026年9月追加) ----------------
    * Ephemerisスケジュールから作られた/紐付けられたセッションのキャンバス上に置く小さな
    * 花時計ボタン(js/app.jsのupdateEphemerisSessionClock()から呼ばれ、`els.viewport`直下へ
-   * 追加される)。タップすると、紐付いているそのスケジュールへ直接飛べる。装飾丸時計
-   * (buildClockFace())と同じSVGを小さく再利用しつつ、白いキャンバス背景でも見えるよう
-   * 配色だけ`.eph-session-clock-btn`スコープで上書きする(injectStyles()参照)。 */
+   * 追加される)。タップすると、紐付いているそのスケジュールを**ログイン前フラッシュと
+   * 全く同じ見た目(丸時計+タイムテーブル)で**表示する(openEphemerisFlashForSchedule()参照)。
+   * **当初は編集用の小窓(openEphemeris())を開いていたが、「タップで出てくるのは編集
+   * モジュールでなく、フラッシュ画面スケジュールと同じものに飛んでほしい」という実機での
+   * 指摘を受けて差し替えた**。装飾丸時計(buildClockFace())と同じSVGを小さく再利用しつつ、
+   * 白いキャンバス背景でも見えるよう配色だけ`.eph-session-clock-btn`スコープで上書きする
+   * (injectStyles()参照)。 */
   function buildSessionClockButton(scheduleId) {
     ensureStylesInjected();
     const clock = buildClockFace();
@@ -313,7 +317,7 @@
     btn.addEventListener('pointerdown', (e) => e.stopPropagation());
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (window.openEphemeris) window.openEphemeris(scheduleId);
+      openEphemerisFlashForSchedule(scheduleId);
     });
     const intervalId = setInterval(clock.update, 1000);
     // ボタンがDOMから外れた(app.js側がセッション移動等で入れ替えた)ら、更新タイマーを止める。
@@ -336,6 +340,7 @@
       <div class="eph-flash-topbar">
         <span class="eph-flash-kicker">EPHEMERIS</span>
         <button class="eph-flash-signin-btn" type="button">サインイン</button>
+        <button class="eph-flash-close-btn" type="button" title="閉じる" hidden>✕</button>
       </div>
       <div class="eph-flash-stage">
         <div class="eph-flash-clock-wrap"></div>
@@ -350,6 +355,7 @@
     flashEls = {
       overlay,
       signinBtn: overlay.querySelector('.eph-flash-signin-btn'),
+      closeBtn: overlay.querySelector('.eph-flash-close-btn'),
       timetable: overlay.querySelector('.eph-flash-timetable'),
       clockUpdate: clock.update,
     };
@@ -361,6 +367,9 @@
       if (typeof soundAudioCtx === 'function') soundAudioCtx();
       if (typeof signIn === 'function') signIn();
     });
+    // セッション内の花時計から開いた場合(既にサインイン済み)だけ表示される、この画面を
+    // 閉じてキャンバスへ戻るボタン(2026年9月追加、openEphemerisFlashForSchedule()参照)。
+    flashEls.closeBtn.addEventListener('click', () => hideEphemerisFlash());
     // 丸時計タップ→現在時刻に最も近いブロックへジャンプ(2026年9月追加、誤タップ防止の
     // サインイン導線とは無関係な単なる画面内スクロールのため、このタップだけ例外的に反応する)。
     clockWrap.addEventListener('click', jumpToNowHighlight);
@@ -375,9 +384,15 @@
       const enterBtn = e.target.closest('.eph-flash-tt-enter-btn');
       if (enterBtn) {
         const schedule = (flashEls.currentSchedules || []).find((s) => s.id === enterBtn.dataset.scheduleId);
-        if (schedule && typeof window.requestEphemerisSessionEntry === 'function') {
-          enterBtn.disabled = true;
-          enterBtn.textContent = '入室中…';
+        if (!schedule) return;
+        enterBtn.disabled = true;
+        enterBtn.textContent = '入室中…';
+        // 既にサインイン済み(セッション内の花時計からこの画面を開いた場合)は、サインインを
+        // 挟まず直接そのセッションへ入る(2026年9月追加)。未サインインなら従来通り。
+        if (state.folderId && typeof window.enterEphemerisSchedule === 'function') {
+          hideEphemerisFlash();
+          window.enterEphemerisSchedule(schedule);
+        } else if (typeof window.requestEphemerisSessionEntry === 'function') {
           window.requestEphemerisSessionEntry(schedule);
         }
       }
@@ -492,8 +507,18 @@
     setTimeout(() => target.classList.remove('eph-flash-tt-item--jump'), 900);
   }
 
-  function showEphemerisFlash(schedules) {
+  /**
+   * @param {object[]} schedules 表示するスケジュール(複数可)
+   * @param {{closable?: boolean}} [opts] `closable: true`はセッション内の花時計から開いた
+   *   場合(=既にサインイン済み)専用のモード。サインインボタンの代わりに✕ボタンで閉じられる
+   *   ようにする(openEphemerisFlashForSchedule()参照)。省略時(ログイン前フラッシュの
+   *   本来の用途)はサインインボタンのみで、✕での離脱はできない。
+   */
+  function showEphemerisFlash(schedules, opts) {
+    const closable = Boolean(opts && opts.closable);
     if (!flashEls) buildFlashDom();
+    flashEls.signinBtn.hidden = closable;
+    flashEls.closeBtn.hidden = !closable;
     flashEls.signinBtn.disabled = false;
     flashEls.signinBtn.textContent = 'サインイン';
     renderFlashTimetable(schedules);
@@ -513,6 +538,25 @@
     if (flashEls) flashEls.overlay.classList.remove('open');
     if (clockIntervalId) { clearInterval(clockIntervalId); clockIntervalId = null; }
   }
+
+  /** セッション内の花時計ボタン(js/app.jsのupdateEphemerisSessionClock())から呼ばれる
+   *  (2026年9月追加)。編集用の小窓ではなく、ログイン前フラッシュと全く同じ見た目
+   *  (丸時計+タイムテーブル)で、そのセッションと紐付いている1件のスケジュールだけを表示する。
+   *  既にサインイン済みの文脈で開くため`{closable: true}`を渡し、✕で閉じられるようにする。 */
+  async function openEphemerisFlashForSchedule(scheduleId) {
+    ensureStylesInjected();
+    if (!ephemerisDataLoaded) {
+      setStatus('スケジュールを読み込み中…', { busy: true });
+      await ensureEphemerisDataLoaded();
+    }
+    const schedule = getSchedules().find((s) => s.id === scheduleId);
+    if (!schedule) {
+      setStatus('スケジュールが見つかりません(削除された可能性があります)', { important: true });
+      return;
+    }
+    showEphemerisFlash([schedule], { closable: true });
+  }
+  window.openEphemerisFlashForSchedule = openEphemerisFlashForSchedule;
 
   /* ---------------- モジュール小窓(スケジュール管理) ---------------- */
 
@@ -784,6 +828,14 @@
       .eph-flash-signin-btn:hover { background: rgba(150, 240, 178, 0.3); border-color: rgba(150, 240, 178, 0.9); }
       .eph-flash-signin-btn:active { transform: scale(0.96); }
       .eph-flash-signin-btn:disabled { opacity: 0.6; cursor: default; }
+      /* セッション内の花時計から開いた場合(既にサインイン済み)だけ、サインインボタンの
+         代わりに表示される閉じるボタン(2026年9月追加)。 */
+      .eph-flash-close-btn {
+        width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+        border: 1px solid rgba(150, 240, 178, 0.4); background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.85); font-size: 14px; cursor: pointer; padding: 0;
+      }
+      .eph-flash-close-btn:hover { background: rgba(150, 240, 178, 0.28); }
       .eph-flash-stage {
         flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
         gap: 22px; padding: 20px; overflow: auto;
@@ -1189,10 +1241,7 @@
 
   /* ==================== 開閉 ==================== */
 
-  /** @param {string} [focusScheduleId] セッション内の花時計ボタン(js/app.jsの
-   *  updateEphemerisSessionClock())から渡される。指定があれば、そのスケジュールの
-   *  編集フォームを開いた状態でモジュールを表示する(「セッションからスケジュールへ飛ぶ」導線)。 */
-  async function openEphemeris(focusScheduleId) {
+  async function openEphemeris() {
     ensureStylesInjected();
     if (!epEls) buildDom();
     resetForm();
@@ -1203,9 +1252,6 @@
       setStatus('スケジュールを読み込みました');
     }
     renderList();
-    if (focusScheduleId && getSchedules().some((s) => s.id === focusScheduleId)) {
-      startEdit(focusScheduleId);
-    }
   }
 
   function closeEphemeris() {
