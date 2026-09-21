@@ -338,6 +338,13 @@ html, body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* スマホで見た時、深く入れ子になったセッションツリーの分だけ横に伸びて意図せず
+     横スクロールできてしまう不具合の対策(2026年9月、実機報告)。overflow-yをauto
+     にした時点でoverflow-xも(visibleのままだと"見せた分だけ横にはみ出る"挙動に
+     なるため)ブラウザにより自動でauto相当として扱われてしまう。縦スクロールだけで
+     読めるようにするため、はみ出た分は流さずに明示的に隠す(下記min-width:0の修正と
+     合わせて、実際にはほぼ発生しなくなるはずの安全策)。 */
+  overflow-x: hidden;
   background-color: var(--bg);
   background-image: radial-gradient(circle, rgba(0, 0, 0, 0.12) 1px, transparent 1px);
   background-size: 26px 26px;
@@ -362,6 +369,11 @@ html, body {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px;
+  /* CSS Gridのグリッドアイテムは既定でmin-width:autoのため、中身(セッションツリー)の
+     最小内容サイズより縮められず、これが横スクロールの実質的な原因になっていた。
+     0にすることで、トラック幅いっぱいまで正しく縮み、.sm-nameのellipsis省略が
+     効くようになる(2026年9月追加)。 */
+  min-width: 0;
 }
 .sessions-map-panel h2 {
   margin: 0 0 10px;
@@ -395,6 +407,13 @@ html, body {
   margin: 1px 0;
   border-radius: 6px;
   cursor: pointer;
+  min-width: 0;
+}
+/* スマホ幅では、深い入れ子ほど段あたりのインデント(20px)が積み重なって幅を圧迫するため
+   狭くする(2026年9月追加、横スクロール対策の一環)。 */
+@media (max-width: 480px) {
+  .sm-tree ul { margin-left: 12px; }
+  .sm-node { gap: 5px; padding: 5px 4px; }
 }
 .sm-node:hover { background: var(--surface-2); }
 .sm-node--current { outline: 1px dashed var(--rust); outline-offset: -1px; }
