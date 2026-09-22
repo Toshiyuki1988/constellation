@@ -280,7 +280,8 @@ function ensureCameraDom() {
     selectProgressEl: document.getElementById('caption-select-progress'),
     selectProgressCancelBtn: document.getElementById('caption-select-progress-cancel'),
     selectThumbsEl: document.getElementById('caption-select-thumbs'),
-    gridColumnsInput: document.getElementById('caption-grid-columns'),
+    gridColsInput: document.getElementById('caption-grid-cols'),
+    gridRowsInput: document.getElementById('caption-grid-rows'),
     selectAiBtn: document.getElementById('caption-select-ai'),
     aiRegionListEl: document.getElementById('caption-ai-region-list'),
     aiRunBtn: document.getElementById('caption-ai-run'),
@@ -327,7 +328,7 @@ function wireCameraEvents() {
   camEls.selectProgressCancelBtn.addEventListener('click', handleSelectionOcrCancel);
   wireSelectionLayer();
   // 「段組みで一括作成」モード(2026年9月、手動の範囲選択とは独立した並存機能。
-  // 旧Gemini解析ボタンをローカル計算のgenerateColumnGridRegions()へ全面置き換え済み)。
+  // 旧Gemini解析ボタンをローカル計算のgenerateGridRegions()へ全面置き換え済み)。
   camEls.selectAiBtn.addEventListener('click', handleCreateColumnGrid);
   camEls.aiRunBtn.addEventListener('click', handleAiRunAll);
   camEls.aiCancelBtn.addEventListener('click', exitAiMode);
@@ -1967,7 +1968,8 @@ let captionPageIndex = -1;
 /* ---------------- 「段組みで一括作成」モード(2026年9月、Gemini解析(旧AI解析)から全面置き換え) ----------------
  * 手動の範囲選択(captionSelection、上記)とは独立した並存機能。当初はGeminiに1回問い合わせて
  * 矩形+読み順を自動検出していたが、「無駄な解析が多すぎる」というユーザー判断により、
- * 段数を指定してその場で均等割りするローカル計算(generateColumnGridRegions())へ全面置き換えた。
+ * 列数×段数を指定してその場で格子状に均等割りするローカル計算(generateGridRegions())へ
+ * 全面置き換えた。
  * 「現在の手動OCRを維持したまま」というユーザー指示により、上記の単一選択の状態
  * (captionSelection/camEls.selectRect)には一切触れない別の状態として持つ。
  * aiRegions各要素の x/y/w/h は captionSelection と同じ座標系(camEls.selectLayer/
@@ -2227,7 +2229,7 @@ function updateSelectionOcrUi() {
 /* ---------------- 「段組みで一括作成」モードのUI(2026年9月、Gemini解析(旧AI解析)から全面置き換え) ----------------
  * 「無駄な解析が多すぎる」というユーザー判断を受け、Geminiへ画像を送って矩形を検出する方式は
  * 撤去した(js/gemini.jsのanalyzeCaptionLayout()ごと削除済み)。書籍・雑誌ページはほぼ常に
- * 等幅の縦の段組みという前提のもと、指定した段数ぶんの矩形をgenerateColumnGridRegions()が
+ * 等幅の格子状の段組みという前提のもと、指定した列数×段数ぶんの矩形をgenerateGridRegions()が
  * その場で均等割りするだけの完全ローカル計算(通信なし)に置き換えた。手動の範囲選択フロー
  * (runSelectionOcrInline()等)には一切手を入れず、独立した並存機能のまま。
  * 作成した矩形+読み順を.cam-select-layer上へ直接重ねて表示し、画面左側の一覧
@@ -2239,26 +2241,38 @@ function updateSelectionOcrUi() {
  * という意味へ用途が変わっただけ)。ユーザーの目に触れるボタン文言・アイコンは
  * 「段組みで一括作成」に統一済み。 */
 
-/** デフォルトの段数(1ページ4段×見開き2ページ相当、ユーザー指定の典型例)。 */
-const AI_GRID_DEFAULT_COLUMNS = 8;
-const AI_GRID_MAX_COLUMNS = 16;
+/** 既定は列2×段4(見開き2ページ×各4段組み相当、ユーザー指定の典型例)。 */
+const AI_GRID_DEFAULT_COLS = 2;
+const AI_GRID_DEFAULT_ROWS = 4;
+const AI_GRID_MAX = 8;
 
-/** 現在のページ画像を、日本語縦書きの読み順(右→左)で等幅に分割したcolumnCount個の矩形へ
- *  一括変換する(Gemini呼び出し無し、同期処理)。返す各矩形はcaptionSelectionと同じCSS
- *  ピクセル座標(letterbox込み)のため、cropCanvasToBlob()をそのまま使って切り出せる。 */
-function generateColumnGridRegions(columnCount) {
+/** 現在のページ画像を、cols列×rows段の格子状に均等分割した矩形へ一括変換する(Gemini呼び出し
+ *  無し、同期処理)。**実機報告(2026年9月)を受けた変更**: 当初は列数だけを指定して画像全体を
+ *  横一列(=1段)に並ぶ縦長の矩形へ分割していたが、「横に8列でなく2列×4段にしたい」という
+ *  指摘があり、列(横方向の分割数)×段(縦方向の分割数)を独立指定できる格子分割へ作り直した。
+ *  返す各矩形はcaptionSelectionと同じCSSピクセル座標(letterbox込み)のため、
+ *  cropCanvasToBlob()をそのまま使って切り出せる。 */
+function generateGridRegions(cols, rows) {
   if (!captionFreezeCanvas) return [];
   const containerRect = camEls.freezeWrap.getBoundingClientRect();
   const { offsetX, offsetY, renderW, renderH } = computeContainRect(
     containerRect.width, containerRect.height, captionFreezeCanvas.width, captionFreezeCanvas.height
   );
-  const colWidth = renderW / columnCount;
+  const cellW = renderW / cols;
+  const cellH = renderH / rows;
   const regions = [];
-  for (let i = 0; i < columnCount; i++) {
-    // i=0が最も右の段(order=1、縦書きの読み始め)になるよう、右端から左へ向かって並べる。
-    const x = offsetX + renderW - colWidth * (i + 1);
-    aiRegionSeq += 1;
-    regions.push({ id: `ai${aiRegionSeq}`, x, y: offsetY, w: colWidth, h: renderH, order: i + 1, status: 'idle' });
+  let order = 0;
+  // 日本語縦書きの読み順(右の列から左へ、各列は上から下へ)に合わせて並べる。
+  // 列/段の割り当てが意図と逆だった場合も、ユーザー自身が「列」「段」の数値を
+  // 入れ替えるだけで調整できる。
+  for (let c = cols - 1; c >= 0; c--) {
+    for (let r = 0; r < rows; r++) {
+      order += 1;
+      aiRegionSeq += 1;
+      const x = offsetX + c * cellW;
+      const y = offsetY + r * cellH;
+      regions.push({ id: `ai${aiRegionSeq}`, x, y, w: cellW, h: cellH, order, status: 'idle' });
+    }
   }
   return regions;
 }
@@ -2271,16 +2285,17 @@ function aiRegionStatusBadge(status) {
   return '';
 }
 
-/** 「📐 段組みで一括作成」ボタン。#caption-grid-columnsで指定された段数ぶんの矩形を
+/** 「📐 一括作成」ボタン。#caption-grid-cols×#caption-grid-rowsで指定された格子状の矩形を
  *  その場で均等割りする(通信なし、瞬時に完了)。手動フロー(handleSelectionRun()等)は
  *  一切呼ばない、完全に独立した経路。既に作成済みの矩形があっても、押すたびに現在の
- *  段数指定で作り直す(確認ダイアログは挟まない、以前のGemini解析ボタンと同じ挙動)。 */
+ *  指定で作り直す(確認ダイアログは挟まない、以前のGemini解析ボタンと同じ挙動)。 */
 function handleCreateColumnGrid() {
   if (!captionFreezeCanvas || captionOcrBusy) return;
-  const requested = Math.round(Number(camEls.gridColumnsInput.value)) || AI_GRID_DEFAULT_COLUMNS;
-  const count = clamp(requested, 1, AI_GRID_MAX_COLUMNS);
-  camEls.gridColumnsInput.value = count;
-  aiRegions = generateColumnGridRegions(count);
+  const cols = clamp(Math.round(Number(camEls.gridColsInput.value)) || AI_GRID_DEFAULT_COLS, 1, AI_GRID_MAX);
+  const rows = clamp(Math.round(Number(camEls.gridRowsInput.value)) || AI_GRID_DEFAULT_ROWS, 1, AI_GRID_MAX);
+  camEls.gridColsInput.value = cols;
+  camEls.gridRowsInput.value = rows;
+  aiRegions = generateGridRegions(cols, rows);
   aiMode = true;
   captionSelection = null; // 手動選択と混在させない
   camEls.selectRect.hidden = true;
@@ -2288,7 +2303,7 @@ function handleCreateColumnGrid() {
   renderAiRegionOverlay();
   renderAiRegionList();
   updateAiActionsUi();
-  if (typeof setStatus === 'function') setStatus(`${count}段の矩形を作成しました。位置を確認・修正してから読み取ってください`);
+  if (typeof setStatus === 'function') setStatus(`${cols}列×${rows}段(計${cols * rows}件)の矩形を作成しました。位置を確認・修正してから読み取ってください`);
 }
 
 function clearAiRegionElements() {

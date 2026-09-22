@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260922a">
-<link rel="stylesheet" href="css/camera.css?v=20260923c">
+<link rel="stylesheet" href="css/camera.css?v=20260923d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -380,13 +380,18 @@
       <div class="cam-select-actions" id="caption-select-actions">
         <button class="cam-select-btn cam-select-retake" id="caption-select-retake">撮り直す</button>
         <!-- 「段組みで一括作成」(2026年9月、Gemini解析(旧AI解析)から全面置き換え): 書籍・雑誌の
-             ページはほぼ常に等幅の縦の段組みのため、Geminiへ問い合わせず、指定した段数ぶんの
-             矩形をその場で均等割りして作るだけにした(「無駄な解析が多すぎる」というユーザー
-             判断による、通信不要・無料枠を一切消費しない方式への変更)。既存の手動OCR
-             (全体を読み取る/この範囲を読み取る)は一切変更しない、並存する独立の入口。 -->
-        <label class="cam-grid-columns-label" for="caption-grid-columns">段数</label>
-        <input type="number" class="cam-grid-columns-input" id="caption-grid-columns" min="1" max="16" value="8" inputmode="numeric">
-        <button class="cam-select-btn cam-select-ai" id="caption-select-ai">📐 段組みで一括作成</button>
+             ページはほぼ常に等幅の格子状の段組みのため、Geminiへ問い合わせず、指定した
+             列数×段数ぶんの矩形をその場で均等割りして作るだけにした(「無駄な解析が多すぎる」
+             というユーザー判断による、通信不要・無料枠を一切消費しない方式への変更)。
+             当初は横一列に並ぶ矩形(列数のみ指定)だったが、実機で「見開き2ページを横に
+             ８列でなく２列×４段にしたい」との指摘を受け、列(横方向の分割数)×段(縦方向の
+             分割数)を独立指定できるようにした(2026年9月)。既存の手動OCR(全体を読み取る/
+             この範囲を読み取る)は一切変更しない、並存する独立の入口。 -->
+        <label class="cam-grid-columns-label" for="caption-grid-cols">列</label>
+        <input type="number" class="cam-grid-columns-input" id="caption-grid-cols" min="1" max="8" value="2" inputmode="numeric">
+        <label class="cam-grid-columns-label" for="caption-grid-rows">段</label>
+        <input type="number" class="cam-grid-columns-input" id="caption-grid-rows" min="1" max="8" value="4" inputmode="numeric">
+        <button class="cam-select-btn cam-select-ai" id="caption-select-ai">📐 一括作成</button>
         <button class="cam-select-btn cam-select-run" id="caption-select-run">全体を読み取る</button>
         <!-- 範囲を1回でも読み取ると現れる(=複数段組みの続けて読み取りモード)。押すまで
              カメラは閉じず、同じ画像のまま次の範囲を選び続けられる。 -->
@@ -536,7 +541,7 @@
   <script src="js/upload-queue.js?v=20260921a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260923c"></script>
-  <script src="js/camera.js?v=20260923c"></script>
+  <script src="js/camera.js?v=20260923d"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260922a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
