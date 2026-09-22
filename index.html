@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260922a">
-<link rel="stylesheet" href="css/camera.css?v=20260918c">
+<link rel="stylesheet" href="css/camera.css?v=20260923a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -370,12 +370,31 @@
            (Almagest等)向けに、「今どこまで/どの範囲を読めたか」を件数の数字だけでなく
            見た目でも追えるようにする。 -->
       <div class="cam-select-thumbs" id="caption-select-thumbs" hidden></div>
+      <!-- 「AI解析」モード専用: Geminiが検出した矩形+読み順の一覧(2026年9月追加)。
+           画面左側に縦一列で並べ、タップで対応する矩形を選択、▲▼で順番変更、✕で削除できる。
+           手動OCRを維持したまま追加する独立機能のため、通常の範囲選択(.cam-select-thumbs等)
+           には一切手を入れていない(js/camera.jsのhandleAiAnalyzeClick()参照)。 -->
+      <div class="cam-ai-region-list" id="caption-ai-region-list" hidden></div>
+      <!-- AI解析中のインライン表示(2026年9月追加)。読み取り自体(OCR)ではなく、矩形検出の
+           Gemini呼び出し中であることを示す。 -->
+      <div class="cam-ai-analyzing" id="caption-ai-analyzing" hidden>
+        <span class="cam-select-progress-spinner"></span>AI解析中…
+      </div>
       <div class="cam-select-actions" id="caption-select-actions">
         <button class="cam-select-btn cam-select-retake" id="caption-select-retake">撮り直す</button>
+        <!-- 「AI解析」ボタン(2026年9月追加): 手動の範囲選択とは別に、Geminiへ1回だけ
+             問い合わせて矩形+読み順を自動検出する。既存の手動OCR(全体を読み取る/この範囲を
+             読み取る)は一切変更しない、並存する独立の入口(CLAUDE_CODE_SPEC.mdの検証結果
+             (実装可能・バックエンド不要)に基づく実装)。 -->
+        <button class="cam-select-btn cam-select-ai" id="caption-select-ai">🤖 AI解析</button>
         <button class="cam-select-btn cam-select-run" id="caption-select-run">全体を読み取る</button>
         <!-- 範囲を1回でも読み取ると現れる(=複数段組みの続けて読み取りモード)。押すまで
              カメラは閉じず、同じ画像のまま次の範囲を選び続けられる。 -->
         <button class="cam-select-btn cam-select-finish" id="caption-select-finish" hidden>✓ 読み取りを終える</button>
+        <!-- AI解析モード専用のボタン(2026年9月追加)。既定は非表示、handleAiAnalyzeClick()成功時に現れる。 -->
+        <button class="cam-select-btn cam-ai-run" id="caption-ai-run" hidden>この順番でまとめて読み取る</button>
+        <button class="cam-select-btn cam-ai-add" id="caption-ai-add" hidden>＋ 手動で範囲を追加</button>
+        <button class="cam-select-btn cam-ai-cancel" id="caption-ai-cancel" hidden>手動選択に戻す</button>
       </div>
     </div>
 
@@ -517,8 +536,8 @@
   <script src="js/drive.js?v=20260921a"></script>
   <script src="js/upload-queue.js?v=20260921a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
-  <script src="js/gemini.js?v=20260918d"></script>
-  <script src="js/camera.js?v=20260922a"></script>
+  <script src="js/gemini.js?v=20260923a"></script>
+  <script src="js/camera.js?v=20260923a"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260922a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>

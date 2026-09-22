@@ -738,6 +738,93 @@
   font-size: 18px; color: #fff; background: rgba(0, 0, 0, 0.55);
 }
 
+/* ---------- 「AI解析」モード(2026年9月追加) ----------
+   手動の範囲選択(上記.cam-select-rect等)は一切変更せず、並存する独立機能として追加した。
+   Geminiが検出した複数の矩形+読み順を .cam-select-layer 上へ直接重ねて表示し(.cam-ai-rect)、
+   画面左側の一覧(.cam-ai-region-list)で順番の入れ替え・削除ができる。 */
+
+/* 解析中のインライン表示(OCR自体の進捗.cam-select-progressとは別、矩形検出の呼び出し中)。 */
+.cam-ai-analyzing {
+  position: absolute; top: calc(96px + env(safe-area-inset-top, 0px)); left: 50%; z-index: 8;
+  transform: translateX(-50%); pointer-events: none;
+  display: none; align-items: center; gap: 8px;
+  font-family: inherit; font-size: 10.5px; color: #fff;
+  background: rgba(0, 0, 0, 0.6); border-radius: 20px; padding: 6px 14px;
+}
+.cam-ai-analyzing:not([hidden]) { display: inline-flex; }
+
+/* AI解析ボタン(通常のcam-select-btnを継承しつつ、AI由来と分かるアクセント色を付ける)。 */
+.cam-select-ai { background: rgba(178, 133, 255, 0.22); color: #e4d8ff; border: 1px solid rgba(178, 133, 255, 0.55); }
+.cam-select-ai:hover { background: rgba(178, 133, 255, 0.34); }
+.cam-ai-run { background: #2e9e5b; color: #fff; border: none; }
+.cam-ai-add { background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px dashed rgba(255, 255, 255, 0.4); }
+.cam-ai-cancel { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.75); border: 1px solid rgba(255, 255, 255, 0.24); }
+
+/* Gemini検出/手動追加した矩形そのもの(.cam-select-layerの子として動的に追加・削除する、
+   js/camera.jsのrenderAiRegionOverlay()参照)。手動選択の.cam-select-rect(白の破線)とは
+   意図的に色を変え、AI解析モードだと見た目で区別できるようにしている。 */
+.cam-ai-rect {
+  position: absolute; box-sizing: border-box;
+  border: 2px solid rgba(178, 133, 255, 0.75); background: rgba(178, 133, 255, 0.14);
+  touch-action: none;
+}
+.cam-ai-rect.selected { border-color: #e4d8ff; background: rgba(178, 133, 255, 0.26); box-shadow: 0 0 0 2px rgba(228, 216, 255, 0.5); }
+.cam-ai-rect-badge {
+  position: absolute; left: -1px; top: -1px; min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 9px 9px 9px 0; background: rgba(178, 133, 255, 0.95); color: #201430;
+  font-family: inherit; font-size: 10px; font-weight: 700; line-height: 18px; text-align: center;
+  pointer-events: none;
+}
+.cam-ai-rect-remove {
+  position: absolute; right: -9px; top: -9px; width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: rgba(0, 0, 0, 0.68); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
+}
+.cam-ai-rect-remove:hover { background: rgba(217, 83, 79, 0.85); }
+.cam-ai-rect-handle {
+  position: absolute; width: 30px; height: 30px; margin: -15px; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+}
+.cam-ai-rect-handle::after {
+  content: ''; width: 11px; height: 11px; border-radius: 50%;
+  background: #fff; border: 2px solid rgba(178, 133, 255, 0.9); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.cam-ai-rect-handle--nw { left: 0; top: 0; cursor: nwse-resize; }
+.cam-ai-rect-handle--ne { right: 0; top: 0; left: auto; cursor: nesw-resize; }
+.cam-ai-rect-handle--sw { left: 0; bottom: 0; top: auto; cursor: nesw-resize; }
+.cam-ai-rect-handle--se { right: 0; bottom: 0; left: auto; top: auto; cursor: nwse-resize; }
+
+/* AI解析結果の一覧(画面左側の縦カラム、.cam-select-thumbsの左右対称の位置)。
+   タップで対応する矩形を選択・ハイライトし、▲▼で読み順を、✕で削除できる。ここだけは
+   行そのものが常時操作対象のため.cam-select-thumbsと違いpointer-events:autoのままにしている。 */
+.cam-ai-region-list {
+  position: absolute; top: 60px; bottom: 112px; left: 8px; z-index: 7;
+  width: 150px; display: none; flex-direction: column; gap: 5px; overflow-y: auto; padding: 2px;
+}
+.cam-ai-region-list:not([hidden]) { display: flex; }
+.cam-ai-region-row {
+  flex-shrink: 0; display: flex; align-items: center; gap: 5px; padding: 4px 6px;
+  border-radius: 7px; background: rgba(20, 14, 30, 0.72); border: 1px solid rgba(178, 133, 255, 0.35);
+  cursor: pointer;
+}
+.cam-ai-region-row.selected { border-color: #e4d8ff; background: rgba(178, 133, 255, 0.3); }
+.cam-ai-region-row-num {
+  flex-shrink: 0; min-width: 16px; height: 16px; border-radius: 8px; background: rgba(178, 133, 255, 0.9);
+  color: #201430; font-family: inherit; font-size: 9px; font-weight: 700; line-height: 16px; text-align: center;
+}
+.cam-ai-region-row-type {
+  flex: 1; min-width: 0; font-family: inherit; font-size: 9.5px; color: rgba(255, 255, 255, 0.8);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cam-ai-region-row-status { flex-shrink: 0; font-size: 10px; line-height: 1; }
+.cam-ai-region-row-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
+.cam-ai-region-row-up, .cam-ai-region-row-down, .cam-ai-region-row-del {
+  width: 16px; height: 14px; font-size: 8px; line-height: 1; border: none; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14); color: #fff; padding: 0; cursor: pointer;
+}
+.cam-ai-region-row-del { background: rgba(217, 83, 79, 0.35); }
+.cam-ai-region-row-del:hover { background: rgba(217, 83, 79, 0.7); }
+.cam-ai-region-row-up:disabled, .cam-ai-region-row-down:disabled { opacity: 0.3; cursor: default; }
+
 /* 複数ページ取り込み(2026年9月追加、上記.cam-select-thumbsセクションとは別の「ページ」概念)。
    #camera-close(右上)・.cam-upload-ocr-btn(左上)の下、画面上部中央に横一列で並べる。
    1ページしか無い間はJS側(renderCaptionPageStrip())が.showを付けないため表示されない。 */

@@ -280,6 +280,12 @@ function ensureCameraDom() {
     selectProgressEl: document.getElementById('caption-select-progress'),
     selectProgressCancelBtn: document.getElementById('caption-select-progress-cancel'),
     selectThumbsEl: document.getElementById('caption-select-thumbs'),
+    selectAiBtn: document.getElementById('caption-select-ai'),
+    aiAnalyzingEl: document.getElementById('caption-ai-analyzing'),
+    aiRegionListEl: document.getElementById('caption-ai-region-list'),
+    aiRunBtn: document.getElementById('caption-ai-run'),
+    aiAddBtn: document.getElementById('caption-ai-add'),
+    aiCancelBtn: document.getElementById('caption-ai-cancel'),
 
     videoScreen: document.getElementById('camera-screen-video'),
     videoVideo: document.getElementById('camera-video-video'),
@@ -321,6 +327,23 @@ function wireCameraEvents() {
   camEls.selectFinishBtn.addEventListener('click', handleSelectionFinish);
   camEls.selectProgressCancelBtn.addEventListener('click', handleSelectionOcrCancel);
   wireSelectionLayer();
+  // 「AI解析」モード(2026年9月追加、手動の範囲選択とは独立した並存機能)。
+  camEls.selectAiBtn.addEventListener('click', handleAiAnalyzeClick);
+  camEls.aiRunBtn.addEventListener('click', handleAiRunAll);
+  camEls.aiAddBtn.addEventListener('click', addManualAiRegion);
+  camEls.aiCancelBtn.addEventListener('click', exitAiMode);
+  camEls.aiRegionListEl.addEventListener('click', (e) => {
+    const row = e.target.closest('.cam-ai-region-row');
+    if (!row) return;
+    const id = row.dataset.regionId;
+    const upBtn = e.target.closest('.cam-ai-region-row-up');
+    const downBtn = e.target.closest('.cam-ai-region-row-down');
+    const delBtn = e.target.closest('.cam-ai-region-row-del');
+    if (upBtn) { moveAiRegionOrder(id, -1); return; }
+    if (downBtn) { moveAiRegionOrder(id, 1); return; }
+    if (delBtn) { removeAiRegion(id); return; }
+    selectAiRegion(id);
+  });
 
   camEls.videoRecBtn.addEventListener('click', () => {
     if (isRecording()) {
@@ -1940,6 +1963,20 @@ let captionThumbs = [];
 let captionPages = [];
 let captionPageIndex = -1;
 
+/* ---------------- 「AI解析」モード(2026年9月追加) ----------------
+ * 手動の範囲選択(captionSelection、上記)とは独立した並存機能。Geminiに1回だけ問い合わせ、
+ * 矩形+読み順を自動検出してから、既存のocrImage()を矩形ごとに順番どおり呼ぶ。
+ * 「現在の手動OCRを維持したまま」というユーザー指示により、上記の単一選択の状態
+ * (captionSelection/camEls.selectRect)には一切触れない別の状態として持つ。
+ * aiRegions各要素の x/y/w/h は captionSelection と同じ座標系(camEls.selectLayer/
+ * camEls.freezeWrapのCSSピクセル、letterbox込み)で持つ。これによりcropCanvasToBlob()を
+ * そのまま流用でき、新しい切り出しロジックを増やさずに済む。 */
+let aiMode = false; // AI解析結果を表示・編集中か
+let aiAnalyzing = false; // レイアウト解析(Gemini呼び出し)自体が進行中か
+let aiRegions = []; // [{id, x, y, w, h, order, type, status}]
+let aiRegionSelectedId = null;
+let aiRegionSeq = 0;
+
 function resetCaptionState() {
   camEls.capBtn.hidden = false;
   camEls.capBtn.disabled = false;
@@ -1968,6 +2005,7 @@ function resetCaptionState() {
   camEls.selectFinishBtn.hidden = true;
   camEls.selectCountEl.hidden = true;
   camEls.selectProgressEl.hidden = true;
+  resetAiRegionState();
 }
 
 function camDebugLog(msg) {
@@ -2125,6 +2163,11 @@ function switchCaptionPage(index) {
   camEls.selectRect.classList.remove('scanning');
   updateSelectRunLabel();
   renderCaptionPageStrip();
+  // captionSelectionGen(gen)は「撮り直し等でセッション自体が無効になった」ことを示す既存の
+  // 仕組みで、ページ切り替えでは意図的にインクリメントしない(続けて選択モードは複数ページを
+  // またいでcaptionOcrBuffer/captionThumbsを維持する設計のため、既存のコメント参照)。
+  // AI解析結果(aiRegions)だけはページごとにレイアウトが異なるため、ここで個別に破棄する。
+  exitAiMode();
 }
 
 /** ページストリップ(複数ページ取り込み時だけ現れる横一列のサムネイル)を描き直す。
@@ -2169,11 +2212,382 @@ function updateSelectRunLabel() {
 function updateSelectionOcrUi() {
   camEls.selectProgressEl.hidden = !captionOcrBusy;
   camEls.selectRunBtn.disabled = captionOcrBusy;
-  camEls.selectRetakeBtn.disabled = captionOcrBusy;
+  camEls.selectRetakeBtn.disabled = captionOcrBusy || aiAnalyzing;
   camEls.selectFinishBtn.hidden = captionOcrBuffer.length === 0;
   camEls.selectFinishBtn.disabled = captionOcrBusy;
   camEls.selectCountEl.hidden = captionOcrBuffer.length === 0;
   camEls.selectCountEl.textContent = `読み取り済み: ${captionOcrBuffer.length}件`;
+  // AI解析ボタン自体は、OCR実行中・解析中はどちらも押せないようにする(2026年9月追加)。
+  camEls.selectAiBtn.disabled = captionOcrBusy || aiAnalyzing;
+}
+
+/* ---------------- 「AI解析」モードのUI(2026年9月追加) ----------------
+ * 手動の範囲選択フロー(runSelectionOcrInline()等)には一切手を入れず、独立した並存機能
+ * として実装する。Geminiのレイアウト解析結果(矩形+読み順)を.cam-select-layer上へ直接
+ * 重ねて表示し、画面左側の一覧(camEls.aiRegionListEl)で順番の入れ替え・削除ができる。
+ * 最終的なOCR自体はrunAiRegionOcr()が矩形ごとに既存のocrImage()を呼ぶだけで、OCR結果は
+ * 手動フローと同じcaptionOcrBuffer/captionThumbsへ積む(「✓ 読み取りを終える」ボタンも
+ * そのまま共用できる)。 */
+
+/** 与えられたcanvasを長辺maxEdge以下に縮小したJPEG Blobにする(レイアウト解析専用。
+ *  実際のOCRは元解像度のまま矩形ごとに切り出すため、このダウンスケールは解析呼び出し
+ *  1回だけに閉じている)。 */
+function resizeCanvasToBlob(canvas, maxEdge, quality) {
+  const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
+  if (scale >= 1) return canvasToBlob(canvas, quality);
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(canvas.width * scale));
+  out.height = Math.max(1, Math.round(canvas.height * scale));
+  out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+  return canvasToBlob(out, quality).finally(() => { out.width = 0; out.height = 0; });
+}
+
+/** Geminiのbox_2d([ymin,xmin,ymax,xmax]、0〜1000正規化・画像基準)を、captionSelectionと
+ *  同じCSSピクセル座標(camEls.selectLayer/camEls.freezeWrap基準、letterbox込み)へ変換する。
+ *  computeContainRect()の逆変換にあたる。これにより、AI解析で得た矩形もcropCanvasToBlob()を
+ *  そのまま使って切り出せる(新しい切り出しロジックを増やさない)。 */
+function aiBoxToCssRect(box, canvas, containerRect) {
+  const { offsetX, offsetY, renderW } = computeContainRect(containerRect.width, containerRect.height, canvas.width, canvas.height);
+  const scale = renderW / canvas.width; // canvas px → CSS px
+  const [ymin, xmin, ymax, xmax] = box;
+  const px0 = (xmin / 1000) * canvas.width;
+  const py0 = (ymin / 1000) * canvas.height;
+  const px1 = (xmax / 1000) * canvas.width;
+  const py1 = (ymax / 1000) * canvas.height;
+  return {
+    x: offsetX + px0 * scale,
+    y: offsetY + py0 * scale,
+    w: Math.max(4, (px1 - px0) * scale),
+    h: Math.max(4, (py1 - py0) * scale),
+  };
+}
+
+const AI_REGION_TYPE_LABELS = { body: '本文', heading: '見出し', caption: 'キャプション', footnote: '脚注', unknown: '不明' };
+
+function aiRegionTypeLabel(type) {
+  return AI_REGION_TYPE_LABELS[type] || AI_REGION_TYPE_LABELS.unknown;
+}
+
+function aiRegionStatusBadge(status) {
+  if (status === 'pending') return '<span class="cam-select-thumb-spinner" style="width:10px;height:10px;"></span>';
+  if (status === 'done') return '✓';
+  if (status === 'empty') return '？';
+  if (status === 'failed' || status === 'cancelled') return '✕';
+  return '';
+}
+
+/** 「🤖 AI解析」ボタン。現在のページの静止画をGeminiへ1回送り、矩形+読み順を取得する。
+ *  手動フロー(handleSelectionRun()等)は一切呼ばない、完全に独立した経路。 */
+async function handleAiAnalyzeClick() {
+  if (!captionFreezeCanvas || captionOcrBusy || captionRunGuardActive || aiAnalyzing) return;
+  aiAnalyzing = true;
+  camEls.aiAnalyzingEl.hidden = false;
+  updateSelectionOcrUi();
+  try {
+    const blob = await resizeCanvasToBlob(captionFreezeCanvas, 1024, 0.82);
+    const result = await analyzeCaptionLayout(blob);
+    const containerRect = camEls.freezeWrap.getBoundingClientRect();
+    aiRegions = result.regions.map((r) => {
+      const rect = aiBoxToCssRect(r.box, captionFreezeCanvas, containerRect);
+      aiRegionSeq += 1;
+      return { id: `ai${aiRegionSeq}`, x: rect.x, y: rect.y, w: rect.w, h: rect.h, order: r.order, type: r.type, status: 'idle' };
+    });
+    aiMode = true;
+    captionSelection = null; // 手動選択と混在させない
+    camEls.selectRect.hidden = true;
+    aiRegionSelectedId = aiRegions[0] ? aiRegions[0].id : null;
+    renderAiRegionOverlay();
+    renderAiRegionList();
+    updateAiActionsUi();
+    if (typeof setStatus === 'function') setStatus(`${aiRegions.length}件の範囲を検出しました。確認・修正してから読み取ってください`);
+  } catch (err) {
+    console.error(err);
+    camDebugLog('AI解析エラー: ' + err.message);
+    showCameraError(`AI解析に失敗しました: ${err.message}`);
+  } finally {
+    aiAnalyzing = false;
+    camEls.aiAnalyzingEl.hidden = true;
+    updateSelectionOcrUi();
+  }
+}
+
+function clearAiRegionElements() {
+  camEls.selectLayer.querySelectorAll('.cam-ai-rect').forEach((el) => el.remove());
+}
+
+function applyAiRegionRectStyle(el, region) {
+  el.style.left = `${region.x}px`;
+  el.style.top = `${region.y}px`;
+  el.style.width = `${region.w}px`;
+  el.style.height = `${region.h}px`;
+}
+
+function renderAiRegionOverlay() {
+  clearAiRegionElements();
+  aiRegions.forEach((region) => {
+    const el = document.createElement('div');
+    el.className = 'cam-ai-rect' + (region.id === aiRegionSelectedId ? ' selected' : '');
+    el.dataset.regionId = region.id;
+    applyAiRegionRectStyle(el, region);
+    el.innerHTML =
+      `<span class="cam-ai-rect-badge">${region.order}</span>` +
+      '<button type="button" class="cam-ai-rect-remove" title="この範囲を削除">✕</button>' +
+      '<span class="cam-ai-rect-handle cam-ai-rect-handle--nw" data-handle="nw"></span>' +
+      '<span class="cam-ai-rect-handle cam-ai-rect-handle--ne" data-handle="ne"></span>' +
+      '<span class="cam-ai-rect-handle cam-ai-rect-handle--sw" data-handle="sw"></span>' +
+      '<span class="cam-ai-rect-handle cam-ai-rect-handle--se" data-handle="se"></span>';
+    camEls.selectLayer.appendChild(el);
+    wireAiRegionRectEl(el, region);
+  });
+}
+
+function wireAiRegionRectEl(el, region) {
+  const removeBtn = el.querySelector('.cam-ai-rect-remove');
+  removeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeAiRegion(region.id); });
+  el.querySelectorAll('.cam-ai-rect-handle').forEach((handle) => {
+    handle.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      beginAiRegionDrag(e, el, region, 'resize', handle.dataset.handle);
+    });
+  });
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.cam-ai-rect-handle, .cam-ai-rect-remove')) return;
+    e.stopPropagation();
+    selectAiRegion(region.id);
+    beginAiRegionDrag(e, el, region, 'move', null);
+  });
+}
+
+/** 矩形のドラッグ移動/ハンドルリサイズ(js/camera.jsのEclipseガイド実装と同じ、
+ *  pointerdown時点のオフセットを基準にpointermoveで差分を反映する方式)。MIN_SIZE未満には
+ *  縮められないようにし、選択レイヤーの外へはclamp()する(canvas.jsの既存グローバル関数を
+ *  再利用、camera.js側で重複定義しない)。 */
+function beginAiRegionDrag(e, el, region, mode, handle) {
+  const layerRect = camEls.selectLayer.getBoundingClientRect();
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const orig = { x: region.x, y: region.y, w: region.w, h: region.h };
+  const pointerId = e.pointerId;
+  const MIN_SIZE = 24;
+  try { el.setPointerCapture(pointerId); } catch (err) { /* 無効なpointerIdは無視 */ }
+
+  function onMove(ev) {
+    if (ev.pointerId !== pointerId) return;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (mode === 'move') {
+      region.x = clamp(orig.x + dx, 0, Math.max(0, layerRect.width - region.w));
+      region.y = clamp(orig.y + dy, 0, Math.max(0, layerRect.height - region.h));
+    } else {
+      let x = orig.x, y = orig.y, w = orig.w, h = orig.h;
+      if (handle.includes('w')) { x = orig.x + dx; w = orig.w - dx; }
+      if (handle.includes('e')) { w = orig.w + dx; }
+      if (handle.includes('n')) { y = orig.y + dy; h = orig.h - dy; }
+      if (handle.includes('s')) { h = orig.h + dy; }
+      if (w < MIN_SIZE) { if (handle.includes('w')) x = orig.x + orig.w - MIN_SIZE; w = MIN_SIZE; }
+      if (h < MIN_SIZE) { if (handle.includes('n')) y = orig.y + orig.h - MIN_SIZE; h = MIN_SIZE; }
+      region.x = clamp(x, 0, layerRect.width - MIN_SIZE);
+      region.y = clamp(y, 0, layerRect.height - MIN_SIZE);
+      region.w = Math.min(w, layerRect.width - region.x);
+      region.h = Math.min(h, layerRect.height - region.y);
+    }
+    applyAiRegionRectStyle(el, region);
+  }
+  function onUp(ev) {
+    if (ev.pointerId !== pointerId) return;
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', onUp);
+    el.removeEventListener('pointercancel', onUp);
+  }
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerup', onUp);
+  el.addEventListener('pointercancel', onUp);
+}
+
+function selectAiRegion(id) {
+  aiRegionSelectedId = id;
+  camEls.selectLayer.querySelectorAll('.cam-ai-rect').forEach((el) => {
+    el.classList.toggle('selected', el.dataset.regionId === id);
+  });
+  renderAiRegionList();
+}
+
+function renderAiRegionList() {
+  if (!camEls.aiRegionListEl) return;
+  const ordered = [...aiRegions].sort((a, b) => a.order - b.order);
+  camEls.aiRegionListEl.innerHTML = ordered.map((region, i) => (
+    `<div class="cam-ai-region-row${region.id === aiRegionSelectedId ? ' selected' : ''}" data-region-id="${region.id}">` +
+    `<span class="cam-ai-region-row-num">${region.order}</span>` +
+    `<span class="cam-ai-region-row-type">${aiRegionTypeLabel(region.type)}</span>` +
+    `<span class="cam-ai-region-row-status">${aiRegionStatusBadge(region.status)}</span>` +
+    '<span class="cam-ai-region-row-actions">' +
+    `<button type="button" class="cam-ai-region-row-up" ${i === 0 ? 'disabled' : ''} title="順番を上げる">▲</button>` +
+    `<button type="button" class="cam-ai-region-row-down" ${i === ordered.length - 1 ? 'disabled' : ''} title="順番を下げる">▼</button>` +
+    '<button type="button" class="cam-ai-region-row-del" title="この範囲を削除">✕</button>' +
+    '</span>' +
+    '</div>'
+  )).join('');
+}
+
+/** 指定した領域の読み順を1つ上下へ入れ替える(隣接する領域とorderを交換するだけの
+ *  シンプルな実装、Almagestの挿絵並べ替えmoveBodyImage()と同じ考え方)。 */
+function moveAiRegionOrder(id, dir) {
+  const ordered = [...aiRegions].sort((a, b) => a.order - b.order);
+  const idx = ordered.findIndex((r) => r.id === id);
+  const targetIdx = idx + dir;
+  if (idx < 0 || targetIdx < 0 || targetIdx >= ordered.length) return;
+  const a = ordered[idx];
+  const b = ordered[targetIdx];
+  const tmp = a.order;
+  a.order = b.order;
+  b.order = tmp;
+  renderAiRegionOverlay();
+  renderAiRegionList();
+}
+
+function removeAiRegion(id) {
+  aiRegions = aiRegions.filter((r) => r.id !== id);
+  // 削除した分の欠番を詰め、常に1始まりの連番を保つ。
+  aiRegions.sort((a, b) => a.order - b.order).forEach((r, i) => { r.order = i + 1; });
+  if (aiRegionSelectedId === id) aiRegionSelectedId = aiRegions[0] ? aiRegions[0].id : null;
+  renderAiRegionOverlay();
+  renderAiRegionList();
+  updateAiActionsUi();
+}
+
+/** 「＋ 手動で範囲を追加」: AIが見落とした範囲を人間が補うための入口。画面中央付近に
+ *  既定サイズの矩形を追加するだけで、実際の位置・大きさはハンドルドラッグで合わせてもらう。 */
+function addManualAiRegion() {
+  if (!captionFreezeCanvas) return;
+  const layerRect = camEls.selectLayer.getBoundingClientRect();
+  const w = Math.min(layerRect.width * 0.5, 220);
+  const h = Math.min(layerRect.height * 0.3, 160);
+  aiRegionSeq += 1;
+  const region = {
+    id: `ai${aiRegionSeq}`,
+    x: clamp((layerRect.width - w) / 2, 0, Math.max(0, layerRect.width - w)),
+    y: clamp((layerRect.height - h) / 2, 0, Math.max(0, layerRect.height - h)),
+    w, h,
+    order: aiRegions.length + 1,
+    type: 'unknown',
+    status: 'idle',
+  };
+  aiRegions.push(region);
+  aiMode = true;
+  aiRegionSelectedId = region.id;
+  renderAiRegionOverlay();
+  renderAiRegionList();
+  updateAiActionsUi();
+}
+
+/** AI解析モードを終え、通常の手動範囲選択画面へ戻る。captionOcrBuffer/captionThumbs
+ *  (読み取り済みの結果)自体はAI解析モード中でも手動フローでも共用のため、ここでは消さない。 */
+function exitAiMode() {
+  aiMode = false;
+  aiRegions = [];
+  aiRegionSelectedId = null;
+  clearAiRegionElements();
+  if (camEls.aiRegionListEl) camEls.aiRegionListEl.innerHTML = '';
+  updateAiActionsUi();
+}
+
+function resetAiRegionState() {
+  aiAnalyzing = false;
+  if (camEls.aiAnalyzingEl) camEls.aiAnalyzingEl.hidden = true;
+  exitAiMode();
+}
+
+/** AI解析モード中のアクションボタン(まとめて読み取る/手動で追加/手動選択に戻す)と、
+ *  通常モードの「全体を読み取る」ボタンの表示/非表示を切り替える。 */
+function updateAiActionsUi() {
+  if (!camEls.aiRunBtn) return;
+  camEls.selectRunBtn.hidden = aiMode;
+  camEls.aiRegionListEl.hidden = !aiMode || aiRegions.length === 0;
+  camEls.aiRunBtn.hidden = !aiMode;
+  camEls.aiAddBtn.hidden = !aiMode;
+  camEls.aiCancelBtn.hidden = !aiMode;
+  camEls.aiRunBtn.disabled = captionOcrBusy || aiRegions.length === 0;
+  camEls.aiAddBtn.disabled = captionOcrBusy;
+}
+
+/** AI解析で確定した1領域ぶんのOCR。runSelectionOcrInline()と役割は同じだが、
+ *  captionSelection/camEls.selectRect(単一選択の状態)には一切触れない独立した実装
+ *  (「現在の手動OCRを維持したまま」というユーザー指示により、意図的にコードを分離した)。 */
+async function runAiRegionOcr(region) {
+  const gen = captionSelectionGen;
+  region.status = 'pending';
+  renderAiRegionList();
+  let blob;
+  try {
+    blob = await cropCanvasToBlob(captionFreezeCanvas, camEls.freezeWrap, region, 0.92);
+  } catch (err) {
+    console.error(err);
+    camDebugLog('AI領域の切り出しに失敗: ' + err.message);
+    region.status = 'failed';
+    renderAiRegionList();
+    return;
+  }
+  const thumbUrl = URL.createObjectURL(blob);
+  const thumbEntry = addCaptionThumb(thumbUrl);
+  const controller = new AbortController();
+  captionInlineController = controller;
+  ocrActiveControllers.add(controller);
+  try {
+    const text = await ocrImage(blob, { signal: controller.signal });
+    if (gen !== captionSelectionGen) { URL.revokeObjectURL(thumbUrl); return; }
+    if (!text || text.includes('(テキストなし)')) {
+      region.status = 'empty';
+      setCaptionThumbStatus(thumbEntry, 'empty');
+    } else {
+      captionOcrBuffer.push(text);
+      region.status = 'done';
+      setCaptionThumbStatus(thumbEntry, 'done');
+    }
+  } catch (err) {
+    console.error(err);
+    if (gen === captionSelectionGen) {
+      region.status = err && err.cancelled ? 'cancelled' : 'failed';
+      setCaptionThumbStatus(thumbEntry, region.status);
+    } else {
+      URL.revokeObjectURL(thumbUrl);
+    }
+  } finally {
+    ocrActiveControllers.delete(controller);
+    if (captionInlineController === controller) captionInlineController = null;
+    if (gen === captionSelectionGen) renderAiRegionList();
+  }
+}
+
+/** 「この順番でまとめて読み取る」: 確定した領域を読み順どおり1つずつ(同時並列ではなく
+ *  逐次)OCRしていく。無料枠のRPM制限に配慮しつつ、進行状況を一覧上のステータスで追える
+ *  ようにするため、あえて並列化していない。既存の「✓ 読み取りを終える」ボタンで、ここまでに
+ *  読み取った分(captionOcrBuffer)を結合して確定できる(手動フローと共通の仕組み)。 */
+async function handleAiRunAll() {
+  if (captionOcrBusy || aiRegions.length === 0) return;
+  const gen = captionSelectionGen;
+  const targetCanvas = captionFreezeCanvas; // 下記ガード参照
+  captionOcrBusy = true;
+  updateSelectionOcrUi();
+  updateAiActionsUi();
+  const ordered = [...aiRegions].sort((a, b) => a.order - b.order);
+  for (const region of ordered) {
+    // captionSelectionGenは撮り直し/カメラを閉じる操作でのみ増える(ページ切り替えでは
+    // 増やさない、switchCaptionPage()のコメント参照)。AI領域の座標は特定ページの
+    // captionFreezeCanvasに紐づくため、ページ切り替え自体はこちらで別途検知して打ち切る
+    // (でないと、切り替わった後のページの画像から古いページ向けの座標で切り出してしまい、
+    // 無関係なテキストがcaptionOcrBufferへ混入しかねない)。
+    if (captionSelectionGen !== gen || captionFreezeCanvas !== targetCanvas) break;
+    await runAiRegionOcr(region);
+    if (captionSelectionGen === gen) updateSelectionOcrUi(); // 件数バッジ(読み取り済み: N件)をその都度更新する
+  }
+  captionOcrBusy = false;
+  updateSelectionOcrUi();
+  updateAiActionsUi();
+  updateSelectRunLabel();
+  if (gen === captionSelectionGen && typeof setStatus === 'function') {
+    setStatus(`${ordered.length}件の範囲を読み取りました。「✓ 読み取りを終える」で確定してください`);
+  }
 }
 
 /* ---------------- 続けて選択モードの範囲サムネイル一覧(2026年9月追加) ----------------
@@ -2238,6 +2652,11 @@ function clearCaptionThumbs() {
 function wireSelectionLayer() {
   const layer = camEls.selectLayer;
   layer.addEventListener('pointerdown', (e) => {
+    // AI解析モード中は、この従来の単一矩形ドラッグ選択を無効化する(2026年9月追加)。
+    // AI解析モードの矩形自体は.cam-ai-rect側で個別にpointerdownをstopPropagation()して
+    // いるため、ここに届くのは「矩形が無い空白部分」への操作のみ。手動で範囲を描き足す
+    // 手段は「＋ 手動で範囲を追加」ボタン(addManualAiRegion())に一本化している。
+    if (aiMode) return;
     // 診断用(2026年9月追加): 「範囲選択が出にくい」報告の原因切り分け。このpointerdown自体が
     // 期待通りの頻度で発火しているか、closest()判定で誤ってスキップされていないかを常時記録する。
     camDebugLog(
