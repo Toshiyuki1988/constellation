@@ -6013,6 +6013,7 @@ async function handleOpenCamera(mode) {
       blob: result.blob,
       filename: `${Date.now()}-photo.jpg`,
       mediaType: 'image',
+      memo: result.caption || '',
     });
   } else if (result.kind === 'text') {
     createTextCard(result.text);

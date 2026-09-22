@@ -1674,7 +1674,9 @@ async function capturePhoto() {
     const canvas = captureFrameToCanvas(camEls.videoPhoto, 3840, currentDigitalZoomForCapture());
     playShutter();
     const blob = await canvasToBlob(canvas, 0.88);
-    finishCamera({ kind: 'photo', blob });
+    // 解説カラムが表示中(=Professorの鑑定結果が出ている)状態で撮影した場合、その解説文を
+    // 写真カードのキャプションとして付属させる(2026年9月追加、ユーザー要望)。
+    finishCamera({ kind: 'photo', blob, caption: targetCurrentResultText });
   } catch (err) {
     console.error(err);
     showCameraError('撮影に失敗しました');
@@ -1686,10 +1688,11 @@ async function capturePhoto() {
  * 「美術版ジャーヴィスUI」というユーザー構想。十字の照準を指でドラッグして対象物の上へ載せ
  * (動かしている間は「ピッ」)、動かさずに再タップすると(「ピコッ」)、Professorが呼ばれ、
  * 照準を中心にクロップしたフレームを見て、建築様式・文様の意匠・衣服のスタイルなど対象の
- * 種類に応じた美術的要素を解説する。撮影・カード化は一切行わず、フレームは使い捨て。
- * 無料枠(1日250)を消費するため自動化はせず、必ず明示的な再タップでの手動トリガーのみ。
- * ペルソナは常にProfessor固定(座談会のような参加者選択は行わない、js/app.jsの
- * fetchArtTargetAnalysis()参照)。 */
+ * 種類に応じた美術的要素を解説する。無料枠(1日250)を消費するため自動化はせず、必ず
+ * 明示的な再タップでの手動トリガーのみ。ペルソナは常にProfessor固定(座談会のような
+ * 参加者選択は行わない、js/app.jsのfetchArtTargetAnalysis()参照)。
+ * 解説カラムは自動で消えず✕ボタンでのみ閉じる(2026年9月変更)。解説が表示されている間に
+ * 撮影すると、その解説文が写真カードのキャプションとして付属する(2026年9月追加)。 */
 const TARGET_TAP_MOVE_TOLERANCE_PX = 6; // Crews Constellationの写真カード(クリックorドラッグ判定)と同じ閾値
 const TARGET_MOVE_TICK_DISTANCE_PX = 26; // 「ピッ」を間引く距離(Star Pencilの描画tickと同じ考え方)
 const TARGET_RETICLE_HALF = 38; // .cam-target-reticleの半径(76pxの半分)、画面内クランプに使う
@@ -1698,6 +1701,10 @@ let targetScopeOpen = false;
 let targetDrag = null; // {pointerId, startClientX, startClientY, startLeft, startTop, moved, lastTickX, lastTickY}
 let targetResultHideTimer = null;
 let targetRequestInFlight = false;
+// 解説カラムが表示中(かつ有効な結果を持つ)場合だけ非nullになる。撮影(capturePhoto())の
+// 瞬間にこれが立っていれば、その解説文を写真カードのキャプションとして付属させる
+// (2026年9月追加、ユーザー要望: 「解説が出た状態で撮影すると写真にキャプション付属」)。
+let targetCurrentResultText = null;
 
 function openTargetScope() {
   if (!camEls.targetReticlePhoto || !camStream) return;
@@ -1727,9 +1734,13 @@ function showTargetThinking() {
   camEls.targetName.textContent = 'Professor';
   camEls.targetText.textContent = '鑑定中…';
   camEls.targetPanel.classList.add('show', 'thinking');
+  targetCurrentResultText = null;
   clearTimeout(targetResultHideTimer);
 }
 
+// 2026年9月変更: 数秒での自動消滅をやめ、✕ボタン(hideTargetPanel)でのみ閉じるようにした
+// (ユーザー要望: 読み切る前に消えてしまうため)。表示中はtargetCurrentResultTextを保持し、
+// この間に撮影されれば写真カードのキャプションとして付属させる。
 function showTargetResult(text) {
   if (!camEls.targetPanel) return;
   camEls.targetText.textContent = text;
@@ -1737,7 +1748,7 @@ function showTargetResult(text) {
   camEls.targetPanel.classList.add('show');
   if (typeof playChatReplySound === 'function') playChatReplySound(); // 座談会の自動返信と同じ「シュコッ」
   clearTimeout(targetResultHideTimer);
-  targetResultHideTimer = setTimeout(hideTargetPanel, 12000);
+  targetCurrentResultText = (text || '').trim() || null;
 }
 
 function showTargetError(message) {
@@ -1747,12 +1758,14 @@ function showTargetError(message) {
   camEls.targetText.textContent = message;
   camEls.targetPanel.classList.remove('thinking');
   camEls.targetPanel.classList.add('show');
+  targetCurrentResultText = null;
   clearTimeout(targetResultHideTimer);
   targetResultHideTimer = setTimeout(hideTargetPanel, 6000);
 }
 
 function hideTargetPanel() {
   clearTimeout(targetResultHideTimer);
+  targetCurrentResultText = null;
   if (camEls && camEls.targetPanel) camEls.targetPanel.classList.remove('show', 'thinking');
 }
 
