@@ -2262,7 +2262,10 @@ function aiBoxToCssRect(box, canvas, containerRect) {
   };
 }
 
-const AI_REGION_TYPE_LABELS = { body: '本文', heading: '見出し', caption: 'キャプション', footnote: '脚注', unknown: '不明' };
+// 「見出し」概念は不要というユーザー判断により削除(2026年9月)。プロンプト(js/gemini.js)
+// 側も既にtype候補からheadingを外しているが、過去の応答や未知の値が来た場合に備え
+// AI_REGION_TYPE_LABELS.unknownへフォールバックする。
+const AI_REGION_TYPE_LABELS = { body: '本文', caption: 'キャプション', footnote: '脚注', unknown: '不明' };
 
 function aiRegionTypeLabel(type) {
   return AI_REGION_TYPE_LABELS[type] || AI_REGION_TYPE_LABELS.unknown;

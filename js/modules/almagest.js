@@ -709,13 +709,21 @@
       .al-new-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
       /* 新規登録は「書庫に登録」ボタンの明示クリックをやめ、最低限の入力(タイトル+本文/画像、
          またはタイトル+URL)が揃った時点で自動保存する(2026年9月変更)。この行は保存状況の
-         表示と、自動作成された下書きを取り消すためのボタンだけを持つ。 */
-      .al-new-autosave-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 13px; }
+         表示、デバウンスを待たず即座に保存するボタン、自動作成された下書きを取り消す
+         ボタンを持つ(手動保存ボタンは同月中に「自動保存とは別に置いておいて」という
+         ユーザー要望を受けて追加した)。 */
+      .al-new-autosave-row { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 13px; }
       .al-new-autosave-status {
         font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.45);
         flex: 1; min-width: 0; line-height: 1.5;
       }
       .al-new-autosave-status--error { color: #ff8a70; }
+      .al-new-save-now-btn {
+        flex: none; padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(201, 162, 39, 0.55);
+        background: rgba(201, 162, 39, 0.16); color: #f1e4bd; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10.5px; font-weight: 700; cursor: pointer;
+      }
+      .al-new-save-now-btn:hover { background: rgba(201, 162, 39, 0.3); }
       .al-new-discard-btn {
         flex: none; padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2);
         background: transparent; color: rgba(255, 255, 255, 0.6); font-family: 'Zen Kaku Gothic New', sans-serif;
@@ -1049,6 +1057,7 @@
         </div>
         <div class="al-new-autosave-row">
           <span class="al-new-autosave-status">入力すると自動的に保存されます</span>
+          <button type="button" class="al-new-save-now-btn">💾 今すぐ保存</button>
           <button type="button" class="al-new-discard-btn" hidden>🗑 下書きを削除</button>
         </div>
       </div>
@@ -1077,6 +1086,7 @@
       newUrlInput: overlay.querySelector('.al-new-url-input'),
       newUrlTagsInput: overlay.querySelector('.al-new-url-tags-input'),
       newAutoSaveStatus: overlay.querySelector('.al-new-autosave-status'),
+      newSaveNowBtn: overlay.querySelector('.al-new-save-now-btn'),
       newDiscardBtn: overlay.querySelector('.al-new-discard-btn'),
       shelfItemsEl: overlay.querySelector('.al-shelf-items'),
       emptyEl: overlay.querySelector('.al-empty'),
@@ -1160,6 +1170,10 @@
       alEls.newTitleInput, alEls.newBodyInput, alEls.newCitationInput, alEls.newTagsInput,
       alEls.newUrlTitleInput, alEls.newUrlInput, alEls.newUrlTagsInput,
     ].forEach((input) => input.addEventListener('input', scheduleNewEntryAutoSave));
+
+    // 自動保存とは別に、デバウンス(900ms)を待たずその場で確定させたい場合向けの手動保存
+    // ボタン(2026年9月追加、ユーザー要望)。
+    alEls.newSaveNowBtn.addEventListener('click', handleManualSaveNewEntry);
 
     alEls.newDiscardBtn.addEventListener('click', async () => {
       const id = newEntryDraftId;
@@ -1528,6 +1542,21 @@
         syncNewEntryDraft();
       }
     }
+  }
+
+  /** 「💾 今すぐ保存」: 自動保存のデバウンス(900ms)を待たずその場で確定させたい場合向けの
+   *  明示的な保存ボタン(2026年9月追加、ユーザー要望: 「自動保存とは別に手動の保存ボタンも
+   *  置いておいて」)。保留中のデバウンスタイマーを解除してからsyncNewEntryDraft()を直接
+   *  呼ぶだけで、実際の保存処理系(newEntryAutoSaveInFlight等の排他制御込み)は自動保存と
+   *  完全に共用する。最低限の入力が無ければ、以前の明示保存ボタンと同じ文言で知らせる。 */
+  function handleManualSaveNewEntry() {
+    if (newEntryAutoSaveTimer) { clearTimeout(newEntryAutoSaveTimer); newEntryAutoSaveTimer = null; }
+    if (!newEntryDraftId && !currentNewEntryMeetsMinimum()) {
+      const msg = newEntryKind === 'book' ? 'タイトルと本文(または画像)を入力してください' : 'タイトルとURLを入力してください';
+      setStatus(msg, { important: true });
+      return;
+    }
+    syncNewEntryDraft();
   }
 
   /**

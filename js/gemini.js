@@ -160,7 +160,7 @@ async function analyzeCaptionLayout(blob) {
     '別のエンジンへ渡すための「読み取り単位の矩形」と「読む順番」を決めることだけです。' +
     '本文の文字を書き写す必要は一切ありません。\n\n' +
     '手順:\n' +
-    '1. OCRへ個別に渡すべき文字領域(段組みの各段、見出し、キャプション、脚注など)を検出する。\n' +
+    '1. OCRへ個別に渡すべき文字領域(段組みの各段、キャプション、脚注など)を検出する。\n' +
     '2. 日本語の縦書きでは、意味のある余白(ノド・段間)で区切られた1つの縦の段を1領域とする。' +
     '1つの段を行ごとに細分化しない。逆に、余白で明確に分かれた別々の段を1つにまとめない。\n' +
     '3. Kindle等のUI要素、ページ送りボタン、ステータスバー、装飾的な枠線、余白だけの領域、' +
@@ -172,7 +172,7 @@ async function analyzeCaptionLayout(blob) {
     '{\n' +
     '  "reading_direction": "vertical-rtl" または "horizontal-ltr" または "mixed" または "unknown",\n' +
     '  "regions": [\n' +
-    '    { "order": 読み順(1始まりの整数), "type": "body" または "heading" または "caption" または "footnote" または "unknown", ' +
+    '    { "order": 読み順(1始まりの整数), "type": "body" または "caption" または "footnote" または "unknown", ' +
     '"box_2d": [ymin, xmin, ymax, xmax] }\n' +
     '  ]\n' +
     '}\n' +

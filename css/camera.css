@@ -756,7 +756,10 @@
 /* AI解析ボタン(通常のcam-select-btnを継承しつつ、AI由来と分かるアクセント色を付ける)。 */
 .cam-select-ai { background: rgba(178, 133, 255, 0.22); color: #e4d8ff; border: 1px solid rgba(178, 133, 255, 0.55); }
 .cam-select-ai:hover { background: rgba(178, 133, 255, 0.34); }
-.cam-ai-run { background: #2e9e5b; color: #fff; border: none; }
+/* 「この順番でまとめて読み取る」はAI解析由来の操作と分かるよう、.cam-select-aiと同系統の
+   薄紫にする(2026年9月、以前の緑は既存の「読み取りを終える」ボタンと紛らわしいとの指摘)。 */
+.cam-ai-run { background: #b285ff; color: #241a3d; border: none; }
+.cam-ai-run:hover { background: #c6a3ff; }
 .cam-ai-add { background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px dashed rgba(255, 255, 255, 0.4); }
 .cam-ai-cancel { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.75); border: 1px solid rgba(255, 255, 255, 0.24); }
 
@@ -775,8 +778,11 @@
   font-family: inherit; font-size: 10px; font-weight: 700; line-height: 18px; text-align: center;
   pointer-events: none;
 }
+/* 削除ボタンは矩形の下端中央に置く(2026年9月、実機報告を受けて上端→下端へ変更。
+   四隅のリサイズハンドル(.cam-ai-rect-handle)と重ならない位置)。 */
 .cam-ai-rect-remove {
-  position: absolute; right: -9px; top: -9px; width: 22px; height: 22px; border-radius: 50%;
+  position: absolute; left: 50%; bottom: -11px; top: auto; transform: translateX(-50%);
+  width: 22px; height: 22px; border-radius: 50%;
   border: none; background: rgba(0, 0, 0, 0.68); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
 }
 .cam-ai-rect-remove:hover { background: rgba(217, 83, 79, 0.85); }
