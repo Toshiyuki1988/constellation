@@ -142,32 +142,40 @@ function initCanvas(viewportElArg, contentElArg) {
   // ブラウザ標準の dblclick はスマホでの二本指操作やinteract.jsの介在で確実に発火しない
   // ことがあるため、長押し検知(上記)と同様に自前でpointerup同士の間隔/距離を見て判定する。
   viewportEl.addEventListener('pointerup', (event) => {
-    if (editGuideCard) return;
+    // 2026年9月追加: 「ダブルクリックで俯瞰ズームが動く時と動かない時がある」という実機報告を
+    // 受け、まず事実で原因を絞り込むための無条件ログ(?debugでのみ表示、通常時は無害)。
+    // CLAUDE.mdの開発方針(仮説を検証してから対策する)に従い、しきい値を勘で緩める前に、
+    // どの分岐で弾かれているかをまず記録する。
+    if (editGuideCard) { debugLog('俯瞰dbltap: 却下(editGuideCard表示中)'); return; }
     // Flight Engineer起動中は背景ドラッグが矩形選択に置き換わっているため、
     // 空振りの矩形選択(=タップ)を俯瞰ズームのダブルタップとして誤検知しないようにする。
-    if (window.isFlightEngineerActive && window.isFlightEngineerActive()) return;
+    if (window.isFlightEngineerActive && window.isFlightEngineerActive()) { debugLog('俯瞰dbltap: 却下(FlightEngineer起動中)'); return; }
     // Star Pencil起動中は背景ドラッグ/タップがドローに置き換わっているため、同じ理由で無視する。
-    if (window.isStarPencilActive && window.isStarPencilActive()) return;
-    if (event.target !== viewportEl) return;
-    if (!viewportPressStart) return;
+    if (window.isStarPencilActive && window.isStarPencilActive()) { debugLog('俯瞰dbltap: 却下(StarPencil起動中)'); return; }
+    if (event.target !== viewportEl) { debugLog(`俯瞰dbltap: 却下(target不一致 tag=${event.target && event.target.tagName} cls=${event.target && event.target.className}) `); return; }
+    if (!viewportPressStart) { debugLog('俯瞰dbltap: 却下(pressStart無し、pointerdownが別要素で発生?)'); return; }
     const moved = Math.hypot(event.clientX - viewportPressStart.x, event.clientY - viewportPressStart.y);
     viewportPressStart = null;
-    if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) return; // パン操作の指離しはタップとみなさない
+    if (moved > DOUBLE_TAP_MOVE_TOLERANCE_PX) { debugLog(`俯瞰dbltap: 却下(移動量${moved.toFixed(1)}px > ${DOUBLE_TAP_MOVE_TOLERANCE_PX}px、パン扱い)`); return; }
 
     const now = Date.now();
     const pos = { x: event.clientX, y: event.clientY };
-    if (
-      lastViewportTapPos &&
-      now - lastViewportTapAt < DOUBLE_TAP_MS &&
-      Math.hypot(pos.x - lastViewportTapPos.x, pos.y - lastViewportTapPos.y) < DOUBLE_TAP_DISTANCE_TOLERANCE_PX
-    ) {
-      lastViewportTapAt = 0;
-      lastViewportTapPos = null;
-      fitAllCardsToScreen();
+    if (lastViewportTapPos) {
+      const gapMs = now - lastViewportTapAt;
+      const dist = Math.hypot(pos.x - lastViewportTapPos.x, pos.y - lastViewportTapPos.y);
+      if (gapMs < DOUBLE_TAP_MS && dist < DOUBLE_TAP_DISTANCE_TOLERANCE_PX) {
+        debugLog(`俯瞰dbltap: 発火(gap=${gapMs}ms dist=${dist.toFixed(1)}px)`);
+        lastViewportTapAt = 0;
+        lastViewportTapPos = null;
+        fitAllCardsToScreen();
+        return;
+      }
+      debugLog(`俯瞰dbltap: 却下(2回目タップ扱いだが gap=${gapMs}ms(閾値${DOUBLE_TAP_MS}) dist=${dist.toFixed(1)}px(閾値${DOUBLE_TAP_DISTANCE_TOLERANCE_PX}) で不一致、1回目として記録し直す)`);
     } else {
-      lastViewportTapAt = now;
-      lastViewportTapPos = pos;
+      debugLog('俯瞰dbltap: 1回目のタップとして記録');
     }
+    lastViewportTapAt = now;
+    lastViewportTapPos = pos;
   });
 }
 
