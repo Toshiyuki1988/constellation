@@ -675,13 +675,20 @@
     const style = document.createElement('style');
     style.textContent = `
       /* ==================== 小窓(スケジュール管理) ==================== */
+      /* 以前は常にwidth:min(86vw,290px)固定で、PC(横幅の余裕がある画面)でも290pxまでしか
+         広がらず、時刻+内容+画像ギャラリーの入力行が窮屈だった(実機報告、2026年9月)。
+         モバイルは元の挙動(画面幅の86%を上限に290px)をほぼ維持しつつ、PC相当の画面幅
+         (700px以上)では大きく広げる2段階のブレークポイントにした。 */
       .eph-window {
         position: fixed; top: 18px; right: 18px; z-index: 115;
-        width: min(86vw, 290px); max-height: calc(100vh - 36px); overflow-y: auto;
+        width: min(90vw, 320px); max-height: calc(100vh - 36px); overflow-y: auto;
         background: rgba(9, 13, 10, 0.95); border: 1px solid rgba(150, 240, 178, 0.4);
         border-radius: 14px; padding: 13px 13px 15px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
         display: none; opacity: 0; transform: scale(0.92) translateY(-6px);
         transition: opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+      }
+      @media (min-width: 700px) {
+        .eph-window { width: min(46vw, 480px); max-height: calc(100vh - 48px); }
       }
       .eph-window.open { display: block; opacity: 1; transform: scale(1) translateY(0); }
       .eph-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; cursor: grab; }
@@ -781,6 +788,10 @@
         border: none; background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 9px; line-height: 1; cursor: pointer; padding: 0;
       }
       .eph-tt-row-img-remove:hover { background: rgba(0, 0, 0, 0.85); }
+      @media (min-width: 700px) {
+        .eph-tt-row-time { width: 110px; }
+        .eph-tt-row-img-item { width: 64px; height: 64px; }
+      }
       .eph-tt-add-btn {
         width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px dashed rgba(255, 255, 255, 0.22);
         background: none; color: rgba(255, 255, 255, 0.7); font-family: 'Zen Kaku Gothic New', sans-serif;

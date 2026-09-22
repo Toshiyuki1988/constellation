@@ -100,6 +100,13 @@
   // OCRでテキスト化せず、切り抜いた画像そのものをentry.bodyImagesとして保持する。
   let newEntryBodyImages = []; // 新規登録フォーム用
   let editBodyImages = []; // 読書ビューの編集フォーム用
+  // 新規登録フォームの自動保存(2026年9月、「書庫に登録」ボタンの明示クリックを廃止)。
+  // 最低限の入力(タイトル+本文/画像、またはタイトル+URL)が揃った時点で自動的にエントリを
+  // 作成し、以降の入力はこのidを指すエントリへ追記していく。syncNewEntryDraft()参照。
+  let newEntryDraftId = null;
+  let newEntryAutoSaveTimer = null;
+  let newEntryAutoSaveInFlight = false;
+  let newEntryAutoSavePending = false;
   let almagestUpdatedAt = 0; // 最後に確定した(Driveへ送った、またはDriveから読んだ)書庫データの時刻
   // 書庫データの読み込み状況(2026年9月追加)。詳細はensureAlmagestDataLoaded()参照。
   let almagestDataLoaded = false;
@@ -696,17 +703,29 @@
         border: 1px dashed rgba(255, 255, 255, 0.2); display: flex; align-items: center; justify-content: center;
         color: rgba(255, 255, 255, 0.35); cursor: pointer; overflow: hidden;
       }
+      /* サムネイル欄への画像ドラッグ&ドロップ中(2026年9月追加、wireThumbDrop()参照)。 */
+      .al-new-thumb-box.al-thumb-dragover { border-color: rgba(201, 162, 39, 0.9); background: rgba(201, 162, 39, 0.14); }
       .al-new-thumb-hint { font-size: 10.5px; line-height: 1.5; text-align: center; }
       .al-new-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .al-new-save-btn {
-        width: 100%; margin-top: 13px; padding: 9px 14px; border-radius: 8px; border: none;
-        background: #c9a227; color: #241c05; font-family: 'Zen Kaku Gothic New', sans-serif; font-weight: 700; font-size: 12.5px;
-        cursor: pointer;
+      /* 新規登録は「書庫に登録」ボタンの明示クリックをやめ、最低限の入力(タイトル+本文/画像、
+         またはタイトル+URL)が揃った時点で自動保存する(2026年9月変更)。この行は保存状況の
+         表示と、自動作成された下書きを取り消すためのボタンだけを持つ。 */
+      .al-new-autosave-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 13px; }
+      .al-new-autosave-status {
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: rgba(255, 255, 255, 0.45);
+        flex: 1; min-width: 0; line-height: 1.5;
       }
-      .al-new-save-btn:hover { background: #ddb843; }
+      .al-new-autosave-status--error { color: #ff8a70; }
+      .al-new-discard-btn {
+        flex: none; padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2);
+        background: transparent; color: rgba(255, 255, 255, 0.6); font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 10.5px; cursor: pointer;
+      }
+      .al-new-discard-btn:hover { border-color: #b3402b; color: #ff8a70; }
 
       /* 本文欄へドロップした画像(entry.bodyImages)の小さいギャラリー(2026年9月追加)。
-         新規登録フォーム・編集フォームの両方で共通のクラスを使う(renderBodyImagesGallery()参照)。 */
+         新規登録フォーム・編集フォームの両方で共通のクラスを使う(renderBodyImagesGallery()参照)。
+         ◀▶ボタンで並べ替えられる(2026年9月追加、挿絵の順番変更対応)。 */
       .al-body-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
       .al-body-image-item {
         position: relative; width: 76px; height: 76px; border-radius: 6px; overflow: hidden;
@@ -718,6 +737,13 @@
         border: none; background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
       }
       .al-body-image-remove:hover { background: rgba(0, 0, 0, 0.85); }
+      .al-body-image-move {
+        position: absolute; bottom: 2px; width: 18px; height: 18px; border-radius: 50%;
+        border: none; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 9px; line-height: 1; cursor: pointer; padding: 0;
+      }
+      .al-body-image-move--prev { left: 2px; }
+      .al-body-image-move--next { right: 2px; }
+      .al-body-image-move:hover { background: rgba(0, 0, 0, 0.8); }
 
       .al-shelf { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 24px; }
       .al-empty {
@@ -1021,7 +1047,10 @@
             <input type="text" class="al-new-url-tags-input" placeholder="例: 展覧会情報">
           </div>
         </div>
-        <button type="button" class="al-new-save-btn">書庫に登録</button>
+        <div class="al-new-autosave-row">
+          <span class="al-new-autosave-status">入力すると自動的に保存されます</span>
+          <button type="button" class="al-new-discard-btn" hidden>🗑 下書きを削除</button>
+        </div>
       </div>
       <div class="al-shelf">
         <div class="al-shelf-items"></div>
@@ -1047,7 +1076,8 @@
       newUrlTitleInput: overlay.querySelector('.al-new-url-title-input'),
       newUrlInput: overlay.querySelector('.al-new-url-input'),
       newUrlTagsInput: overlay.querySelector('.al-new-url-tags-input'),
-      newSaveBtn: overlay.querySelector('.al-new-save-btn'),
+      newAutoSaveStatus: overlay.querySelector('.al-new-autosave-status'),
+      newDiscardBtn: overlay.querySelector('.al-new-discard-btn'),
       shelfItemsEl: overlay.querySelector('.al-shelf-items'),
       emptyEl: overlay.querySelector('.al-empty'),
     };
@@ -1084,9 +1114,14 @@
 
     overlay.querySelectorAll('.al-new-kind-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
+        if (tab.dataset.kind === newEntryKind) return;
         newEntryKind = tab.dataset.kind;
         overlay.querySelectorAll('.al-new-kind-tab').forEach((t) => t.classList.toggle('active', t === tab));
         overlay.querySelectorAll('[data-kind-panel]').forEach((p) => { p.hidden = p.dataset.kindPanel !== newEntryKind; });
+        // 種別(本/しおり)を切り替えたら、既に自動保存済みの下書きはそのまま確定させ、
+        // 新しい種別の入力はゼロから始める(book/urlでデータの形が大きく異なるため)。
+        clearNewEntryDraftFields();
+        resetNewEntryDraftState();
       });
     });
 
@@ -1096,6 +1131,8 @@
       alEls.newThumbFile.value = '';
       if (file) await applyDraftThumbBlob(file);
     });
+    // サムネイル欄への画像ドラッグ&ドロップ(2026年9月追加、PCでの編集作業向け)。
+    wireThumbDrop(alEls.newThumbBox, applyDraftThumbBlob);
     // クリップボードからの画像ペースト(book欄が開いている時だけ、Crews Constellationの
     // 写真カードと同じパターン)。画像アイテムが無ければ通常のテキスト貼り付けに譲る。
     overlay.addEventListener('paste', async (e) => {
@@ -1110,10 +1147,29 @@
     });
     // 本文欄への画像ドラッグ&ドロップ(2026年9月追加、PCでの編集作業向け)。OCRでテキスト化
     // せず、切り抜いた画像をそのままnewEntryBodyImagesへ追加する(下記wireBodyImageDrop()参照)。
-    wireBodyImageDrop(alEls.newBodyInput, (files) => handleBodyImageEmbed(files, newEntryBodyImages, renderNewBodyImagesGallery));
+    wireBodyImageDrop(alEls.newBodyInput, (files) => handleBodyImageEmbed(files, newEntryBodyImages, () => {
+      renderNewBodyImagesGallery();
+      scheduleNewEntryAutoSave();
+    }));
 
     alEls.newOcrBtn.addEventListener('click', () => handleOcrIntoDraft(alEls.newOcrBtn));
-    alEls.newSaveBtn.addEventListener('click', handleSaveNewEntry);
+
+    // 新規登録は「書庫に登録」ボタンの明示クリックをやめ、最低限の入力が揃った時点で
+    // 自動保存する(2026年9月変更)。テキスト系の入力欄は全てここで一括配線する。
+    [
+      alEls.newTitleInput, alEls.newBodyInput, alEls.newCitationInput, alEls.newTagsInput,
+      alEls.newUrlTitleInput, alEls.newUrlInput, alEls.newUrlTagsInput,
+    ].forEach((input) => input.addEventListener('input', scheduleNewEntryAutoSave));
+
+    alEls.newDiscardBtn.addEventListener('click', async () => {
+      const id = newEntryDraftId;
+      if (!id) return;
+      await deleteEntry(id); // 確認ダイアログ込みの既存関数を再利用する
+      if (!getAlmagestEntryById(id)) {
+        clearNewEntryDraftFields();
+        resetNewEntryDraftState();
+      }
+    });
 
     // 本(タップで読書ビュー)・しおり(タップで新規タブ、📌/✎/🗑は常設のフッターアイコン)は
     // 再描画のたびに要素が差し替わるため、個別バインドではなくコンテナへのイベント委譲にする。
@@ -1143,8 +1199,10 @@
     });
   }
 
-  function resetNewPanel() {
-    newEntryKind = 'book';
+  /** フォームの入力値(サムネイル・本文添付画像含む)だけを空へ戻す。下書きエントリ自体の
+   *  作成状況(newEntryDraftId)には触れない、resetNewPanel()/種別タブ切り替えの共通処理
+   *  (2026年9月追加)。 */
+  function clearNewEntryDraftFields() {
     newEntryUsedOcr = false;
     newEntryThumbDataUrl = null;
     newEntryBodyImages = [];
@@ -1157,39 +1215,75 @@
     alEls.newUrlTagsInput.value = '';
     renderDraftThumbBox();
     renderNewBodyImagesGallery();
+  }
+
+  /** 自動保存の進行状況(下書きid・保留中のタイマー・状態表示)をリセットする
+   *  (2026年9月追加)。 */
+  function resetNewEntryDraftState() {
+    if (newEntryAutoSaveTimer) { clearTimeout(newEntryAutoSaveTimer); newEntryAutoSaveTimer = null; }
+    newEntryDraftId = null;
+    if (alEls.newDiscardBtn) alEls.newDiscardBtn.hidden = true;
+    setNewEntryAutoSaveStatus('empty');
+  }
+
+  function resetNewPanel() {
+    newEntryKind = 'book';
+    clearNewEntryDraftFields();
+    resetNewEntryDraftState();
     alEls.overlay.querySelectorAll('.al-new-kind-tab').forEach((t) => t.classList.toggle('active', t.dataset.kind === 'book'));
     alEls.overlay.querySelectorAll('[data-kind-panel]').forEach((p) => { p.hidden = p.dataset.kindPanel !== 'book'; });
   }
 
   /** 本文欄に貼り付けた画像(entry.bodyImages)の小さいギャラリー表示。新規登録フォーム・
-   *  編集フォームの両方で使い回す共通描画関数(2026年9月追加)。✕で1枚ずつ削除できる。 */
-  function renderBodyImagesGallery(containerEl, images, onRemove) {
+   *  編集フォームの両方で使い回す共通描画関数(2026年9月追加)。✕で1枚ずつ削除、◀▶で
+   *  並べ替えできる(並べ替えは2026年9月追加、挿絵の順番変更対応)。 */
+  function renderBodyImagesGallery(containerEl, images, onRemove, onMove) {
     if (!containerEl) return;
     containerEl.hidden = images.length === 0;
     containerEl.innerHTML = images.map((dataUrl, i) => (
       `<div class="al-body-image-item">` +
       `<img src="${escapeAttrLocal(dataUrl)}" alt="">` +
+      (i > 0 ? `<button type="button" class="al-body-image-move al-body-image-move--prev" data-move-index="${i}" data-move-dir="-1" title="前へ移動">◀</button>` : '') +
+      (i < images.length - 1 ? `<button type="button" class="al-body-image-move al-body-image-move--next" data-move-index="${i}" data-move-dir="1" title="次へ移動">▶</button>` : '') +
       `<button type="button" class="al-body-image-remove" data-remove-index="${i}" title="この画像を削除">✕</button>` +
       '</div>'
     )).join('');
     // innerHTMLで作り直すたびに配線し直すだけで済むよう、addEventListenerの積み重ねを避けて
     // onclickプロパティの上書きにしている(再描画のたびリスナーが増え続けない)。
     containerEl.onclick = (e) => {
+      const moveBtn = e.target.closest('[data-move-index]');
+      if (moveBtn) { if (onMove) onMove(Number(moveBtn.dataset.moveIndex), Number(moveBtn.dataset.moveDir)); return; }
       const btn = e.target.closest('[data-remove-index]');
       if (btn) onRemove(Number(btn.dataset.removeIndex));
     };
+  }
+
+  /** images配列内でindex番目の要素をdir(-1/+1)方向へ1つ動かす(2026年9月追加)。 */
+  function moveBodyImage(images, index, dir) {
+    const target = index + dir;
+    if (target < 0 || target >= images.length) return;
+    const [item] = images.splice(index, 1);
+    images.splice(target, 0, item);
   }
 
   function renderNewBodyImagesGallery() {
     renderBodyImagesGallery(alEls.newBodyImages, newEntryBodyImages, (i) => {
       newEntryBodyImages.splice(i, 1);
       renderNewBodyImagesGallery();
+      scheduleNewEntryAutoSave();
+    }, (i, dir) => {
+      moveBodyImage(newEntryBodyImages, i, dir);
+      renderNewBodyImagesGallery();
+      scheduleNewEntryAutoSave();
     });
   }
 
   function renderEditBodyImagesGallery() {
     renderBodyImagesGallery(rdEls.editBodyImages, editBodyImages, (i) => {
       editBodyImages.splice(i, 1);
+      renderEditBodyImagesGallery();
+    }, (i, dir) => {
+      moveBodyImage(editBodyImages, i, dir);
       renderEditBodyImagesGallery();
     });
   }
@@ -1228,6 +1322,7 @@
       newEntryUsedOcr = true;
       const existing = alEls.newBodyInput.value.trim();
       alEls.newBodyInput.value = existing ? `${existing}\n${result.text.trim()}` : result.text.trim();
+      scheduleNewEntryAutoSave(); // textarea.valueの直接書き換えはinputイベントを発火しないため明示的に呼ぶ
     } finally {
       if (btnEl) btnEl.disabled = false;
     }
@@ -1288,6 +1383,34 @@
     });
   }
 
+  /** サムネイル欄への画像ドラッグ&ドロップ配線(2026年9月追加、PCでの編集作業向け)。
+   *  wireBodyImageDrop()と同じ考え方だが、こちらは1枚だけを受け取ってonFileへ渡す。 */
+  function wireThumbDrop(boxEl, onFile) {
+    let dragDepth = 0;
+    boxEl.addEventListener('dragover', (e) => {
+      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    boxEl.addEventListener('dragenter', (e) => {
+      if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      dragDepth++;
+      boxEl.classList.add('al-thumb-dragover');
+    });
+    boxEl.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) boxEl.classList.remove('al-thumb-dragover');
+    });
+    boxEl.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      boxEl.classList.remove('al-thumb-dragover');
+      const file = Array.from(e.dataTransfer.files || []).find((f) => f.type.startsWith('image/'));
+      if (file) await onFile(file);
+    });
+  }
+
   /** ドロップされた画像ファイル(複数可)を、OCRでテキスト化せず**切り抜いた画像そのまま**
    *  entry.bodyImagesへ追加する(2026年9月、ユーザー指示により以前のOCR経由の実装から変更)。
    *  generateThumbnail()(js/app.js、グローバル関数)で長辺1400px・quality0.85まで縮小した
@@ -1301,62 +1424,110 @@
     onChange();
   }
 
-  async function handleSaveNewEntry() {
-    let entry;
+  /* ---------------- 新規登録フォームの自動保存(2026年9月、「書庫に登録」ボタン廃止) ----------------
+   * 最低限の入力(book: タイトル+本文/画像、url: タイトル+URL)が揃った時点で、その場で
+   * getEntries()へエントリを追加して自動保存する。以降の入力はnewEntryDraftIdが指す
+   * エントリへ追記していく。下書き自体を取り消したい場合は「🗑 下書きを削除」から
+   * 既存のdeleteEntry()(確認ダイアログ込み)を呼ぶ。 */
+
+  function currentNewEntryMeetsMinimum() {
     if (newEntryKind === 'book') {
       const title = alEls.newTitleInput.value.trim();
       const bodyText = alEls.newBodyInput.value.trim();
-      // 本文が空でも、切り抜き画像(newEntryBodyImages)だけで構成された本を認める
-      // (2026年9月追加、画像をそのまま貼るだけの登録に対応)。
-      if (!title || (!bodyText && newEntryBodyImages.length === 0)) {
-        setStatus('タイトルと本文(または画像)を入力してください', { important: true });
-        return;
-      }
-      entry = {
-        id: crypto.randomUUID(),
-        kind: newEntryUsedOcr ? 'ocr' : 'paste',
-        title,
-        sourceLabel: newEntryUsedOcr ? 'OCR' : '貼り付け',
-        bodyText,
-        bodyImages: newEntryBodyImages.slice(),
-        url: null,
-        citation: alEls.newCitationInput.value.trim() || null,
-        thumbDataUrl: newEntryThumbDataUrl || null,
-        tags: parseTags(alEls.newTagsInput.value),
-        summaries: { easy: null, academic: null },
-        createdAt: new Date().toISOString(),
-      };
-    } else {
-      const title = alEls.newUrlTitleInput.value.trim();
-      const url = alEls.newUrlInput.value.trim();
-      if (!title || !url) {
-        setStatus('タイトルとURLを入力してください', { important: true });
-        return;
-      }
-      entry = {
-        id: crypto.randomUUID(),
-        kind: 'url',
-        title,
-        sourceLabel: hostnameOf(url),
-        bodyText: null,
-        url,
-        citation: null,
-        thumbDataUrl: null,
-        tags: parseTags(alEls.newUrlTagsInput.value),
-        summaries: { easy: null, academic: null },
-        createdAt: new Date().toISOString(),
-      };
+      return Boolean(title && (bodyText || newEntryBodyImages.length > 0));
     }
-    entry.contentLoaded = true; // 作った直後なのでメモリ上に既に本文がある
-    getEntries().push(entry);
-    alEls.newPanel.hidden = true;
-    renderShelf();
-    setStatus('書庫に登録中…', { busy: true });
-    // 本文を持つ種別(book)は専用ファイルへ、索引はどちらの種別でも保存する(2026年9月変更)。
-    const contentOk = entry.kind === 'url' ? true : await saveAlmagestBookContentNow(entry);
-    const indexOk = await saveAlmagestDataNow();
-    const ok = contentOk && indexOk;
-    setStatus(ok ? '書庫に登録しました' : '書庫に登録しました(Driveへの送信は保留中、後で自動的に再試行します)', { important: !ok });
+    const title = alEls.newUrlTitleInput.value.trim();
+    const url = alEls.newUrlInput.value.trim();
+    return Boolean(title && url);
+  }
+
+  /** 現在のフォーム入力値をentryへ書き込む(新規作成・既存下書きの更新どちらでも使う)。
+   *  id/createdAt/summaries/contentLoadedなど、フォームが持たない項目には触れない。 */
+  function applyNewEntryFieldsTo(entry) {
+    if (newEntryKind === 'book') {
+      entry.kind = newEntryUsedOcr ? 'ocr' : 'paste';
+      entry.title = alEls.newTitleInput.value.trim();
+      entry.sourceLabel = newEntryUsedOcr ? 'OCR' : '貼り付け';
+      entry.bodyText = alEls.newBodyInput.value.trim();
+      entry.bodyImages = newEntryBodyImages.slice();
+      entry.url = null;
+      entry.citation = alEls.newCitationInput.value.trim() || null;
+      entry.thumbDataUrl = newEntryThumbDataUrl || null;
+      entry.tags = parseTags(alEls.newTagsInput.value);
+    } else {
+      const url = alEls.newUrlInput.value.trim();
+      entry.kind = 'url';
+      entry.title = alEls.newUrlTitleInput.value.trim();
+      entry.url = url;
+      entry.sourceLabel = hostnameOf(url);
+      entry.bodyText = null;
+      entry.citation = null;
+      entry.thumbDataUrl = null;
+      entry.tags = parseTags(alEls.newUrlTagsInput.value);
+    }
+  }
+
+  function setNewEntryAutoSaveStatus(mode) {
+    if (!alEls || !alEls.newAutoSaveStatus) return;
+    const label = {
+      empty: '入力すると自動的に保存されます',
+      editing: '編集中…',
+      saving: '保存中…',
+      saved: '✓ 自動保存しました',
+      error: '⚠ 保存に失敗しました(後で自動的に再試行します)',
+    }[mode] || '';
+    alEls.newAutoSaveStatus.textContent = label;
+    alEls.newAutoSaveStatus.classList.toggle('al-new-autosave-status--error', mode === 'error');
+  }
+
+  /** 入力のたびに呼ぶ。タイピング中に毎回保存しないよう、一定時間操作が止まってから
+   *  syncNewEntryDraft()を実行するデバウンス(既存の全体オートセーブと同じ考え方)。 */
+  function scheduleNewEntryAutoSave() {
+    if (newEntryAutoSaveTimer) clearTimeout(newEntryAutoSaveTimer);
+    setNewEntryAutoSaveStatus('editing');
+    newEntryAutoSaveTimer = setTimeout(() => {
+      newEntryAutoSaveTimer = null;
+      syncNewEntryDraft();
+    }, 900);
+  }
+
+  async function syncNewEntryDraft() {
+    if (newEntryAutoSaveInFlight) { newEntryAutoSavePending = true; return; }
+    if (!newEntryDraftId && !currentNewEntryMeetsMinimum()) {
+      setNewEntryAutoSaveStatus('empty');
+      return;
+    }
+    newEntryAutoSaveInFlight = true;
+    setNewEntryAutoSaveStatus('saving');
+    try {
+      let entry = newEntryDraftId ? getAlmagestEntryById(newEntryDraftId) : null;
+      const isNew = !entry;
+      if (isNew) {
+        entry = {
+          id: crypto.randomUUID(),
+          contentLoaded: true, // 作った直後なのでメモリ上に既に本文がある
+          summaries: { easy: null, academic: null },
+          createdAt: new Date().toISOString(),
+        };
+      }
+      applyNewEntryFieldsTo(entry);
+      if (isNew) {
+        getEntries().push(entry);
+        newEntryDraftId = entry.id;
+        if (alEls.newDiscardBtn) alEls.newDiscardBtn.hidden = false;
+      }
+      renderShelf();
+      // 本文を持つ種別(book)は専用ファイルへ、索引はどちらの種別でも保存する。
+      const contentOk = entry.kind === 'url' ? true : await saveAlmagestBookContentNow(entry);
+      const indexOk = await saveAlmagestDataNow();
+      setNewEntryAutoSaveStatus(contentOk && indexOk ? 'saved' : 'error');
+    } finally {
+      newEntryAutoSaveInFlight = false;
+      if (newEntryAutoSavePending) {
+        newEntryAutoSavePending = false;
+        syncNewEntryDraft();
+      }
+    }
   }
 
   /**
@@ -1692,6 +1863,8 @@
       rdEls.editThumbFile.value = '';
       if (file) await applyEditThumbBlob(file);
     });
+    // サムネイル欄への画像ドラッグ&ドロップ(2026年9月追加、上記新規登録パネルと同じ理由)。
+    wireThumbDrop(rdEls.editThumbBox, applyEditThumbBlob);
     overlay.addEventListener('paste', async (e) => {
       if (!editingEntry || rdEls.editThumbField.hidden) return;
       const items = e.clipboardData && e.clipboardData.items;
@@ -1950,7 +2123,7 @@
     } else {
       const bodyText = rdEls.editBodyInput.value.trim();
       // 本文が空でも、切り抜き画像(editBodyImages)だけで構成された本を認める
-      // (2026年9月追加、上記handleSaveNewEntry()と同じ理由)。
+      // (2026年9月追加、新規登録フォームのcurrentNewEntryMeetsMinimum()と同じ理由)。
       if (!bodyText && editBodyImages.length === 0) {
         setStatus('本文(または画像)を入力してください', { important: true });
         return;
