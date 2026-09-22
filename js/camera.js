@@ -280,11 +280,10 @@ function ensureCameraDom() {
     selectProgressEl: document.getElementById('caption-select-progress'),
     selectProgressCancelBtn: document.getElementById('caption-select-progress-cancel'),
     selectThumbsEl: document.getElementById('caption-select-thumbs'),
+    gridColumnsInput: document.getElementById('caption-grid-columns'),
     selectAiBtn: document.getElementById('caption-select-ai'),
-    aiAnalyzingEl: document.getElementById('caption-ai-analyzing'),
     aiRegionListEl: document.getElementById('caption-ai-region-list'),
     aiRunBtn: document.getElementById('caption-ai-run'),
-    aiAddBtn: document.getElementById('caption-ai-add'),
     aiCancelBtn: document.getElementById('caption-ai-cancel'),
 
     videoScreen: document.getElementById('camera-screen-video'),
@@ -327,12 +326,14 @@ function wireCameraEvents() {
   camEls.selectFinishBtn.addEventListener('click', handleSelectionFinish);
   camEls.selectProgressCancelBtn.addEventListener('click', handleSelectionOcrCancel);
   wireSelectionLayer();
-  // 「AI解析」モード(2026年9月追加、手動の範囲選択とは独立した並存機能)。
-  camEls.selectAiBtn.addEventListener('click', handleAiAnalyzeClick);
+  // 「段組みで一括作成」モード(2026年9月、手動の範囲選択とは独立した並存機能。
+  // 旧Gemini解析ボタンをローカル計算のgenerateColumnGridRegions()へ全面置き換え済み)。
+  camEls.selectAiBtn.addEventListener('click', handleCreateColumnGrid);
   camEls.aiRunBtn.addEventListener('click', handleAiRunAll);
-  camEls.aiAddBtn.addEventListener('click', addManualAiRegion);
   camEls.aiCancelBtn.addEventListener('click', exitAiMode);
   camEls.aiRegionListEl.addEventListener('click', (e) => {
+    // 一覧先頭の「＋ 矩形を追加」行(2026年9月、旧#caption-ai-addボタンをここへ統合)。
+    if (e.target.closest('[data-add-region]')) { addManualAiRegion(); return; }
     const row = e.target.closest('.cam-ai-region-row');
     if (!row) return;
     const id = row.dataset.regionId;
@@ -1963,17 +1964,17 @@ let captionThumbs = [];
 let captionPages = [];
 let captionPageIndex = -1;
 
-/* ---------------- 「AI解析」モード(2026年9月追加) ----------------
- * 手動の範囲選択(captionSelection、上記)とは独立した並存機能。Geminiに1回だけ問い合わせ、
- * 矩形+読み順を自動検出してから、既存のocrImage()を矩形ごとに順番どおり呼ぶ。
+/* ---------------- 「段組みで一括作成」モード(2026年9月、Gemini解析(旧AI解析)から全面置き換え) ----------------
+ * 手動の範囲選択(captionSelection、上記)とは独立した並存機能。当初はGeminiに1回問い合わせて
+ * 矩形+読み順を自動検出していたが、「無駄な解析が多すぎる」というユーザー判断により、
+ * 段数を指定してその場で均等割りするローカル計算(generateColumnGridRegions())へ全面置き換えた。
  * 「現在の手動OCRを維持したまま」というユーザー指示により、上記の単一選択の状態
  * (captionSelection/camEls.selectRect)には一切触れない別の状態として持つ。
  * aiRegions各要素の x/y/w/h は captionSelection と同じ座標系(camEls.selectLayer/
  * camEls.freezeWrapのCSSピクセル、letterbox込み)で持つ。これによりcropCanvasToBlob()を
- * そのまま流用でき、新しい切り出しロジックを増やさずに済む。 */
-let aiMode = false; // AI解析結果を表示・編集中か
-let aiAnalyzing = false; // レイアウト解析(Gemini呼び出し)自体が進行中か
-let aiRegions = []; // [{id, x, y, w, h, order, type, status}]
+ * そのまま流用でき、新しい切り出しロジックを増やさずに済む。変数名(ai*)は当時の名残。 */
+let aiMode = false; // このモードで矩形を表示・編集中か
+let aiRegions = []; // [{id, x, y, w, h, order, status}]
 let aiRegionSelectedId = null;
 let aiRegionSeq = 0;
 
@@ -2212,63 +2213,54 @@ function updateSelectRunLabel() {
 function updateSelectionOcrUi() {
   camEls.selectProgressEl.hidden = !captionOcrBusy;
   camEls.selectRunBtn.disabled = captionOcrBusy;
-  camEls.selectRetakeBtn.disabled = captionOcrBusy || aiAnalyzing;
+  camEls.selectRetakeBtn.disabled = captionOcrBusy;
   camEls.selectFinishBtn.hidden = captionOcrBuffer.length === 0;
   camEls.selectFinishBtn.disabled = captionOcrBusy;
   camEls.selectCountEl.hidden = captionOcrBuffer.length === 0;
   camEls.selectCountEl.textContent = `読み取り済み: ${captionOcrBuffer.length}件`;
-  // AI解析ボタン自体は、OCR実行中・解析中はどちらも押せないようにする(2026年9月追加)。
-  camEls.selectAiBtn.disabled = captionOcrBusy || aiAnalyzing;
+  // 「段組みで一括作成」ボタン自体は、OCR実行中は押せないようにする(2026年9月追加。
+  // 実行中に矩形一式を作り直すと、既に走っているhandleAiRunAll()のループが古い矩形の
+  // スナップショットを使い続けたまま新しいaiRegionsと食い違う恐れがあるため)。
+  camEls.selectAiBtn.disabled = captionOcrBusy;
 }
 
-/* ---------------- 「AI解析」モードのUI(2026年9月追加) ----------------
- * 手動の範囲選択フロー(runSelectionOcrInline()等)には一切手を入れず、独立した並存機能
- * として実装する。Geminiのレイアウト解析結果(矩形+読み順)を.cam-select-layer上へ直接
- * 重ねて表示し、画面左側の一覧(camEls.aiRegionListEl)で順番の入れ替え・削除ができる。
- * 最終的なOCR自体はrunAiRegionOcr()が矩形ごとに既存のocrImage()を呼ぶだけで、OCR結果は
- * 手動フローと同じcaptionOcrBuffer/captionThumbsへ積む(「✓ 読み取りを終える」ボタンも
- * そのまま共用できる)。 */
+/* ---------------- 「段組みで一括作成」モードのUI(2026年9月、Gemini解析(旧AI解析)から全面置き換え) ----------------
+ * 「無駄な解析が多すぎる」というユーザー判断を受け、Geminiへ画像を送って矩形を検出する方式は
+ * 撤去した(js/gemini.jsのanalyzeCaptionLayout()ごと削除済み)。書籍・雑誌ページはほぼ常に
+ * 等幅の縦の段組みという前提のもと、指定した段数ぶんの矩形をgenerateColumnGridRegions()が
+ * その場で均等割りするだけの完全ローカル計算(通信なし)に置き換えた。手動の範囲選択フロー
+ * (runSelectionOcrInline()等)には一切手を入れず、独立した並存機能のまま。
+ * 作成した矩形+読み順を.cam-select-layer上へ直接重ねて表示し、画面左側の一覧
+ * (camEls.aiRegionListEl)で順番の入れ替え・削除・追加ができる。最終的なOCR自体は
+ * runAiRegionOcr()が矩形ごとに既存のocrImage()を呼ぶだけで、OCR結果は手動フローと同じ
+ * captionOcrBuffer/captionThumbsへ積む(「✓ 読み取りを終える」ボタンもそのまま共用できる)。
+ * 内部の変数・関数・CSSクラス名(aiRegions/aiMode/.cam-ai-rect等)は元がGemini解析だった頃の
+ * 命名を引き継いでいる(=「AIが検出した領域」の意味ではなく「この編集用オーバーレイの領域」
+ * という意味へ用途が変わっただけ)。ユーザーの目に触れるボタン文言・アイコンは
+ * 「段組みで一括作成」に統一済み。 */
 
-/** 与えられたcanvasを長辺maxEdge以下に縮小したJPEG Blobにする(レイアウト解析専用。
- *  実際のOCRは元解像度のまま矩形ごとに切り出すため、このダウンスケールは解析呼び出し
- *  1回だけに閉じている)。 */
-function resizeCanvasToBlob(canvas, maxEdge, quality) {
-  const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
-  if (scale >= 1) return canvasToBlob(canvas, quality);
-  const out = document.createElement('canvas');
-  out.width = Math.max(1, Math.round(canvas.width * scale));
-  out.height = Math.max(1, Math.round(canvas.height * scale));
-  out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
-  return canvasToBlob(out, quality).finally(() => { out.width = 0; out.height = 0; });
-}
+/** デフォルトの段数(1ページ4段×見開き2ページ相当、ユーザー指定の典型例)。 */
+const AI_GRID_DEFAULT_COLUMNS = 8;
+const AI_GRID_MAX_COLUMNS = 16;
 
-/** Geminiのbox_2d([ymin,xmin,ymax,xmax]、0〜1000正規化・画像基準)を、captionSelectionと
- *  同じCSSピクセル座標(camEls.selectLayer/camEls.freezeWrap基準、letterbox込み)へ変換する。
- *  computeContainRect()の逆変換にあたる。これにより、AI解析で得た矩形もcropCanvasToBlob()を
- *  そのまま使って切り出せる(新しい切り出しロジックを増やさない)。 */
-function aiBoxToCssRect(box, canvas, containerRect) {
-  const { offsetX, offsetY, renderW } = computeContainRect(containerRect.width, containerRect.height, canvas.width, canvas.height);
-  const scale = renderW / canvas.width; // canvas px → CSS px
-  const [ymin, xmin, ymax, xmax] = box;
-  const px0 = (xmin / 1000) * canvas.width;
-  const py0 = (ymin / 1000) * canvas.height;
-  const px1 = (xmax / 1000) * canvas.width;
-  const py1 = (ymax / 1000) * canvas.height;
-  return {
-    x: offsetX + px0 * scale,
-    y: offsetY + py0 * scale,
-    w: Math.max(4, (px1 - px0) * scale),
-    h: Math.max(4, (py1 - py0) * scale),
-  };
-}
-
-// 「見出し」概念は不要というユーザー判断により削除(2026年9月)。プロンプト(js/gemini.js)
-// 側も既にtype候補からheadingを外しているが、過去の応答や未知の値が来た場合に備え
-// AI_REGION_TYPE_LABELS.unknownへフォールバックする。
-const AI_REGION_TYPE_LABELS = { body: '本文', caption: 'キャプション', footnote: '脚注', unknown: '不明' };
-
-function aiRegionTypeLabel(type) {
-  return AI_REGION_TYPE_LABELS[type] || AI_REGION_TYPE_LABELS.unknown;
+/** 現在のページ画像を、日本語縦書きの読み順(右→左)で等幅に分割したcolumnCount個の矩形へ
+ *  一括変換する(Gemini呼び出し無し、同期処理)。返す各矩形はcaptionSelectionと同じCSS
+ *  ピクセル座標(letterbox込み)のため、cropCanvasToBlob()をそのまま使って切り出せる。 */
+function generateColumnGridRegions(columnCount) {
+  if (!captionFreezeCanvas) return [];
+  const containerRect = camEls.freezeWrap.getBoundingClientRect();
+  const { offsetX, offsetY, renderW, renderH } = computeContainRect(
+    containerRect.width, containerRect.height, captionFreezeCanvas.width, captionFreezeCanvas.height
+  );
+  const colWidth = renderW / columnCount;
+  const regions = [];
+  for (let i = 0; i < columnCount; i++) {
+    // i=0が最も右の段(order=1、縦書きの読み始め)になるよう、右端から左へ向かって並べる。
+    const x = offsetX + renderW - colWidth * (i + 1);
+    aiRegionSeq += 1;
+    regions.push({ id: `ai${aiRegionSeq}`, x, y: offsetY, w: colWidth, h: renderH, order: i + 1, status: 'idle' });
+  }
+  return regions;
 }
 
 function aiRegionStatusBadge(status) {
@@ -2279,39 +2271,24 @@ function aiRegionStatusBadge(status) {
   return '';
 }
 
-/** 「🤖 AI解析」ボタン。現在のページの静止画をGeminiへ1回送り、矩形+読み順を取得する。
- *  手動フロー(handleSelectionRun()等)は一切呼ばない、完全に独立した経路。 */
-async function handleAiAnalyzeClick() {
-  if (!captionFreezeCanvas || captionOcrBusy || captionRunGuardActive || aiAnalyzing) return;
-  aiAnalyzing = true;
-  camEls.aiAnalyzingEl.hidden = false;
-  updateSelectionOcrUi();
-  try {
-    const blob = await resizeCanvasToBlob(captionFreezeCanvas, 1024, 0.82);
-    const result = await analyzeCaptionLayout(blob);
-    const containerRect = camEls.freezeWrap.getBoundingClientRect();
-    aiRegions = result.regions.map((r) => {
-      const rect = aiBoxToCssRect(r.box, captionFreezeCanvas, containerRect);
-      aiRegionSeq += 1;
-      return { id: `ai${aiRegionSeq}`, x: rect.x, y: rect.y, w: rect.w, h: rect.h, order: r.order, type: r.type, status: 'idle' };
-    });
-    aiMode = true;
-    captionSelection = null; // 手動選択と混在させない
-    camEls.selectRect.hidden = true;
-    aiRegionSelectedId = aiRegions[0] ? aiRegions[0].id : null;
-    renderAiRegionOverlay();
-    renderAiRegionList();
-    updateAiActionsUi();
-    if (typeof setStatus === 'function') setStatus(`${aiRegions.length}件の範囲を検出しました。確認・修正してから読み取ってください`);
-  } catch (err) {
-    console.error(err);
-    camDebugLog('AI解析エラー: ' + err.message);
-    showCameraError(`AI解析に失敗しました: ${err.message}`);
-  } finally {
-    aiAnalyzing = false;
-    camEls.aiAnalyzingEl.hidden = true;
-    updateSelectionOcrUi();
-  }
+/** 「📐 段組みで一括作成」ボタン。#caption-grid-columnsで指定された段数ぶんの矩形を
+ *  その場で均等割りする(通信なし、瞬時に完了)。手動フロー(handleSelectionRun()等)は
+ *  一切呼ばない、完全に独立した経路。既に作成済みの矩形があっても、押すたびに現在の
+ *  段数指定で作り直す(確認ダイアログは挟まない、以前のGemini解析ボタンと同じ挙動)。 */
+function handleCreateColumnGrid() {
+  if (!captionFreezeCanvas || captionOcrBusy) return;
+  const requested = Math.round(Number(camEls.gridColumnsInput.value)) || AI_GRID_DEFAULT_COLUMNS;
+  const count = clamp(requested, 1, AI_GRID_MAX_COLUMNS);
+  camEls.gridColumnsInput.value = count;
+  aiRegions = generateColumnGridRegions(count);
+  aiMode = true;
+  captionSelection = null; // 手動選択と混在させない
+  camEls.selectRect.hidden = true;
+  aiRegionSelectedId = aiRegions[0] ? aiRegions[0].id : null;
+  renderAiRegionOverlay();
+  renderAiRegionList();
+  updateAiActionsUi();
+  if (typeof setStatus === 'function') setStatus(`${count}段の矩形を作成しました。位置を確認・修正してから読み取ってください`);
 }
 
 function clearAiRegionElements() {
@@ -2416,13 +2393,18 @@ function selectAiRegion(id) {
   renderAiRegionList();
 }
 
+/** 「＋ 矩形を追加」行(2026年9月追加、旧#caption-ai-addボタンをこの一覧の先頭へ統合)。
+ *  リストの中身は毎回丸ごと作り直すため、この行のHTML自体も他の行と同じく
+ *  renderAiRegionList()の中で毎回組み立てる。クリック処理はcamEls.aiRegionListElへの
+ *  イベント委譲側(wireCameraEvents())で[data-add-region]を見て振り分ける。 */
+const AI_REGION_LIST_ADD_ROW_HTML = '<button type="button" class="cam-ai-region-list-add" data-add-region title="矩形を1つ追加">＋ 矩形を追加</button>';
+
 function renderAiRegionList() {
   if (!camEls.aiRegionListEl) return;
   const ordered = [...aiRegions].sort((a, b) => a.order - b.order);
-  camEls.aiRegionListEl.innerHTML = ordered.map((region, i) => (
+  camEls.aiRegionListEl.innerHTML = AI_REGION_LIST_ADD_ROW_HTML + ordered.map((region, i) => (
     `<div class="cam-ai-region-row${region.id === aiRegionSelectedId ? ' selected' : ''}" data-region-id="${region.id}">` +
     `<span class="cam-ai-region-row-num">${region.order}</span>` +
-    `<span class="cam-ai-region-row-type">${aiRegionTypeLabel(region.type)}</span>` +
     `<span class="cam-ai-region-row-status">${aiRegionStatusBadge(region.status)}</span>` +
     '<span class="cam-ai-region-row-actions">' +
     `<button type="button" class="cam-ai-region-row-up" ${i === 0 ? 'disabled' : ''} title="順番を上げる">▲</button>` +
@@ -2459,8 +2441,9 @@ function removeAiRegion(id) {
   updateAiActionsUi();
 }
 
-/** 「＋ 手動で範囲を追加」: AIが見落とした範囲を人間が補うための入口。画面中央付近に
- *  既定サイズの矩形を追加するだけで、実際の位置・大きさはハンドルドラッグで合わせてもらう。 */
+/** 「＋ 矩形を追加」(左の一覧の先頭行、2026年9月): 段組み一括作成で足りない/ずれた範囲を
+ *  人間が手で補うための入口。画面中央付近に既定サイズの矩形を追加するだけで、実際の
+ *  位置・大きさはハンドルドラッグで合わせてもらう。 */
 function addManualAiRegion() {
   if (!captionFreezeCanvas) return;
   const layerRect = camEls.selectLayer.getBoundingClientRect();
@@ -2473,7 +2456,6 @@ function addManualAiRegion() {
     y: clamp((layerRect.height - h) / 2, 0, Math.max(0, layerRect.height - h)),
     w, h,
     order: aiRegions.length + 1,
-    type: 'unknown',
     status: 'idle',
   };
   aiRegions.push(region);
@@ -2484,8 +2466,8 @@ function addManualAiRegion() {
   updateAiActionsUi();
 }
 
-/** AI解析モードを終え、通常の手動範囲選択画面へ戻る。captionOcrBuffer/captionThumbs
- *  (読み取り済みの結果)自体はAI解析モード中でも手動フローでも共用のため、ここでは消さない。 */
+/** 段組み一括作成モードを終え、通常の手動範囲選択画面へ戻る。captionOcrBuffer/captionThumbs
+ *  (読み取り済みの結果)自体はこのモード中でも手動フローでも共用のため、ここでは消さない。 */
 function exitAiMode() {
   aiMode = false;
   aiRegions = [];
@@ -2496,25 +2478,23 @@ function exitAiMode() {
 }
 
 function resetAiRegionState() {
-  aiAnalyzing = false;
-  if (camEls.aiAnalyzingEl) camEls.aiAnalyzingEl.hidden = true;
   exitAiMode();
 }
 
-/** AI解析モード中のアクションボタン(まとめて読み取る/手動で追加/手動選択に戻す)と、
+/** 段組み一括作成モード中のアクションボタン(まとめて読み取る/手動選択に戻す)と、
  *  通常モードの「全体を読み取る」ボタンの表示/非表示を切り替える。 */
 function updateAiActionsUi() {
   if (!camEls.aiRunBtn) return;
   camEls.selectRunBtn.hidden = aiMode;
-  camEls.aiRegionListEl.hidden = !aiMode || aiRegions.length === 0;
+  // regions.length===0でも一覧自体は隠さない(2026年9月変更): 先頭の「＋ 矩形を追加」行が
+  // ここにあるため、全部削除した後も再度そこから追加できる必要がある。
+  camEls.aiRegionListEl.hidden = !aiMode;
   camEls.aiRunBtn.hidden = !aiMode;
-  camEls.aiAddBtn.hidden = !aiMode;
   camEls.aiCancelBtn.hidden = !aiMode;
   camEls.aiRunBtn.disabled = captionOcrBusy || aiRegions.length === 0;
-  camEls.aiAddBtn.disabled = captionOcrBusy;
 }
 
-/** AI解析で確定した1領域ぶんのOCR。runSelectionOcrInline()と役割は同じだが、
+/** 段組み一括作成で確定した1領域ぶんのOCR。runSelectionOcrInline()と役割は同じだが、
  *  captionSelection/camEls.selectRect(単一選択の状態)には一切触れない独立した実装
  *  (「現在の手動OCRを維持したまま」というユーザー指示により、意図的にコードを分離した)。 */
 async function runAiRegionOcr(region) {

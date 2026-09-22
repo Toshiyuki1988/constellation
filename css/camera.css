@@ -738,34 +738,39 @@
   font-size: 18px; color: #fff; background: rgba(0, 0, 0, 0.55);
 }
 
-/* ---------- 「AI解析」モード(2026年9月追加) ----------
-   手動の範囲選択(上記.cam-select-rect等)は一切変更せず、並存する独立機能として追加した。
-   Geminiが検出した複数の矩形+読み順を .cam-select-layer 上へ直接重ねて表示し(.cam-ai-rect)、
-   画面左側の一覧(.cam-ai-region-list)で順番の入れ替え・削除ができる。 */
+/* ---------- 「段組みで一括作成」モード(2026年9月、Gemini解析(旧AI解析)から全面置き換え) ----------
+   「無駄な解析が多すぎる」というユーザー判断により、Geminiへ画像を送って矩形を検出する方式は
+   撤去した(js/gemini.jsのanalyzeCaptionLayout()ごと削除済み)。書籍・雑誌ページはほぼ常に
+   等幅の縦の段組みという前提のもと、指定した段数ぶんの矩形をその場で均等割りするだけの
+   ローカル計算(通信なし、無料枠を一切消費しない)に置き換えた。手動の範囲選択
+   (上記.cam-select-rect等)は一切変更せず、並存する独立機能のまま。作成した複数の矩形+読み順を
+   .cam-select-layer 上へ直接重ねて表示し(.cam-ai-rect)、画面左側の一覧(.cam-ai-region-list)で
+   順番の入れ替え・削除・追加ができる(内部の変数・クラス名は旧称"ai"のまま引き継いでいるが、
+   実体はもうGemini呼び出しではない)。 */
 
-/* 解析中のインライン表示(OCR自体の進捗.cam-select-progressとは別、矩形検出の呼び出し中)。 */
-.cam-ai-analyzing {
-  position: absolute; top: calc(96px + env(safe-area-inset-top, 0px)); left: 50%; z-index: 8;
-  transform: translateX(-50%); pointer-events: none;
-  display: none; align-items: center; gap: 8px;
-  font-family: inherit; font-size: 10.5px; color: #fff;
-  background: rgba(0, 0, 0, 0.6); border-radius: 20px; padding: 6px 14px;
+/* 段数の指定欄(2026年9月追加)。既定8(1ページ4段×見開き2ページ相当)。 */
+.cam-grid-columns-label {
+  pointer-events: none; font-family: inherit; font-size: 10px; color: rgba(255, 255, 255, 0.6);
+  align-self: center;
 }
-.cam-ai-analyzing:not([hidden]) { display: inline-flex; }
+.cam-grid-columns-input {
+  width: 46px; padding: 8px 4px; border-radius: 8px; border: 1px solid rgba(178, 133, 255, 0.45);
+  background: rgba(178, 133, 255, 0.14); color: #e4d8ff; font-family: inherit; font-size: 12px;
+  text-align: center; pointer-events: auto;
+}
 
-/* AI解析ボタン(通常のcam-select-btnを継承しつつ、AI由来と分かるアクセント色を付ける)。 */
+/* 「段組みで一括作成」ボタン(通常のcam-select-btnを継承しつつ、薄紫のアクセント色を付ける)。 */
 .cam-select-ai { background: rgba(178, 133, 255, 0.22); color: #e4d8ff; border: 1px solid rgba(178, 133, 255, 0.55); }
 .cam-select-ai:hover { background: rgba(178, 133, 255, 0.34); }
-/* 「この順番でまとめて読み取る」はAI解析由来の操作と分かるよう、.cam-select-aiと同系統の
-   薄紫にする(2026年9月、以前の緑は既存の「読み取りを終える」ボタンと紛らわしいとの指摘)。 */
+/* 「この順番でまとめて読み取る」も同じ薄紫系にする(2026年9月、以前の緑は既存の
+   「読み取りを終える」ボタンと紛らわしいとの指摘)。 */
 .cam-ai-run { background: #b285ff; color: #241a3d; border: none; }
 .cam-ai-run:hover { background: #c6a3ff; }
-.cam-ai-add { background: rgba(255, 255, 255, 0.12); color: #fff; border: 1px dashed rgba(255, 255, 255, 0.4); }
 .cam-ai-cancel { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.75); border: 1px solid rgba(255, 255, 255, 0.24); }
 
-/* Gemini検出/手動追加した矩形そのもの(.cam-select-layerの子として動的に追加・削除する、
+/* 作成/手動追加した矩形そのもの(.cam-select-layerの子として動的に追加・削除する、
    js/camera.jsのrenderAiRegionOverlay()参照)。手動選択の.cam-select-rect(白の破線)とは
-   意図的に色を変え、AI解析モードだと見た目で区別できるようにしている。 */
+   意図的に色を変え、このモードだと見た目で区別できるようにしている。 */
 .cam-ai-rect {
   position: absolute; box-sizing: border-box;
   border: 2px solid rgba(178, 133, 255, 0.75); background: rgba(178, 133, 255, 0.14);
@@ -778,10 +783,12 @@
   font-family: inherit; font-size: 10px; font-weight: 700; line-height: 18px; text-align: center;
   pointer-events: none;
 }
-/* 削除ボタンは矩形の下端中央に置く(2026年9月、実機報告を受けて上端→下端へ変更。
-   四隅のリサイズハンドル(.cam-ai-rect-handle)と重ならない位置)。 */
+/* 削除ボタンは矩形の右端中央に置く(2026年9月、実機報告を受けて2回目の調整)。縦書きの段は
+   画面の縦幅いっぱいに近い背の高い矩形になりやすく、上端は四隅ハンドル・下端は
+   .cam-select-actions/.cam-ai-region-listと競合して押せない/見えないことがあったため、
+   常に開けている左右の中央(右端)へ移した。 */
 .cam-ai-rect-remove {
-  position: absolute; left: 50%; bottom: -11px; top: auto; transform: translateX(-50%);
+  position: absolute; right: -11px; top: 50%; left: auto; bottom: auto; transform: translateY(-50%);
   width: 22px; height: 22px; border-radius: 50%;
   border: none; background: rgba(0, 0, 0, 0.68); color: #fff; font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
 }
@@ -799,14 +806,22 @@
 .cam-ai-rect-handle--sw { left: 0; bottom: 0; top: auto; cursor: nesw-resize; }
 .cam-ai-rect-handle--se { right: 0; bottom: 0; left: auto; top: auto; cursor: nwse-resize; }
 
-/* AI解析結果の一覧(画面左側の縦カラム、.cam-select-thumbsの左右対称の位置)。
-   タップで対応する矩形を選択・ハイライトし、▲▼で読み順を、✕で削除できる。ここだけは
-   行そのものが常時操作対象のため.cam-select-thumbsと違いpointer-events:autoのままにしている。 */
+/* 作成結果の一覧(画面左側の縦カラム、.cam-select-thumbsの左右対称の位置)。
+   タップで対応する矩形を選択・ハイライトし、▲▼で読み順を、✕で削除できる。先頭の
+   .cam-ai-region-list-add(旧#caption-ai-addボタン、2026年9月にここへ統合)から矩形を
+   追加できる。ここだけは行そのものが常時操作対象のため.cam-select-thumbsと違い
+   pointer-events:autoのままにしている。 */
 .cam-ai-region-list {
   position: absolute; top: 60px; bottom: 112px; left: 8px; z-index: 7;
   width: 150px; display: none; flex-direction: column; gap: 5px; overflow-y: auto; padding: 2px;
 }
 .cam-ai-region-list:not([hidden]) { display: flex; }
+.cam-ai-region-list-add {
+  flex-shrink: 0; padding: 6px; border-radius: 7px; border: 1px dashed rgba(178, 133, 255, 0.55);
+  background: rgba(178, 133, 255, 0.1); color: #e4d8ff; font-family: inherit; font-size: 10.5px;
+  font-weight: 700; cursor: pointer;
+}
+.cam-ai-region-list-add:hover { background: rgba(178, 133, 255, 0.22); }
 .cam-ai-region-row {
   flex-shrink: 0; display: flex; align-items: center; gap: 5px; padding: 4px 6px;
   border-radius: 7px; background: rgba(20, 14, 30, 0.72); border: 1px solid rgba(178, 133, 255, 0.35);
@@ -817,11 +832,7 @@
   flex-shrink: 0; min-width: 16px; height: 16px; border-radius: 8px; background: rgba(178, 133, 255, 0.9);
   color: #201430; font-family: inherit; font-size: 9px; font-weight: 700; line-height: 16px; text-align: center;
 }
-.cam-ai-region-row-type {
-  flex: 1; min-width: 0; font-family: inherit; font-size: 9.5px; color: rgba(255, 255, 255, 0.8);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.cam-ai-region-row-status { flex-shrink: 0; font-size: 10px; line-height: 1; }
+.cam-ai-region-row-status { flex: 1; font-size: 10px; line-height: 1; }
 .cam-ai-region-row-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
 .cam-ai-region-row-up, .cam-ai-region-row-down, .cam-ai-region-row-del {
   width: 16px; height: 14px; font-size: 8px; line-height: 1; border: none; border-radius: 3px;
