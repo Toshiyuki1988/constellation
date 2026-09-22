@@ -192,6 +192,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // armAutoSignInOnFirstGesture()は呼ばない(誤タップ防止)。
     });
   } else if (isConfigured()) {
+    // Ephemerisの施行日でない通常の日は、サインイン待ちの間ただの空白(白+ドット背景のみ)に
+    // なっていたため、軽量な星座線ループアニメを重ねる(2026年9月追加、ユーザー要望)。
+    const preLoginConstellation = document.getElementById('pre-login-constellation');
+    if (preLoginConstellation) preLoginConstellation.hidden = false;
     els.signInBtn.disabled = false;
     els.signInBtn.hidden = true;
     whenGisReady(() => {
@@ -905,6 +909,8 @@ async function onSignedIn() {
   // Ephemerisの丸時計フラッシュ(表示中だった場合)を閉じ、通常の画面へ引き継ぐ
   // (js/modules/ephemeris.js参照)。表示していなければ何もしない。
   if (typeof hideEphemerisFlash === 'function') hideEphemerisFlash();
+  const preLoginConstellation = document.getElementById('pre-login-constellation');
+  if (preLoginConstellation) preLoginConstellation.hidden = true;
   setStatus('Google Driveと同期中…', { busy: true });
   try {
     state.folderId = await findOrCreateAppFolder();
@@ -1367,7 +1373,7 @@ function renderSessionsMap() {
   const highlightId = (state.lastKnownBreadcrumb || [])[state.lastKnownBreadcrumb.length - 1] || null;
   const yearNodes = state.sessions.filter((s) => s.type === 'year').sort((a, b) => a.year - b.year);
   const treeHtml = yearNodes.length > 0
-    ? `<ul class="sm-tree">${yearNodes.map((y) => `<li>${smNodeHtml(y, y.id === highlightId)}${smBuildTree(y.id, highlightId)}</li>`).join('')}</ul>`
+    ? `<ul class="sm-tree">${yearNodes.map((y) => `<li>${smNodeHtml(y, y.id === highlightId)}${smBuildTree(y.id, highlightId)}<div class="sm-add-session" data-year-id="${y.id}">＋ 新規セッション</div></li>`).join('')}</ul>`
     : '<div class="sessions-map-empty">まだセッションがありません。ボトムツールバーの「セッション」から作成できます。</div>';
 
   els.sessionsMap.innerHTML = `
@@ -1457,10 +1463,44 @@ function renderSessionsMap() {
     });
   });
 
+  els.sessionsMap.querySelectorAll('.sm-add-session').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await handleCreateSessionUnderYear(btn.dataset.yearId);
+    });
+  });
+
   const almagestTile = document.getElementById('sm-open-almagest');
   if (almagestTile) {
     almagestTile.addEventListener('click', () => { if (window.openAlmagest) window.openAlmagest(); });
   }
+}
+
+/** 全体マップの年ノード最下の「＋新規セッション」ボタンから呼ばれる(2026年9月追加)。
+ *  handleCreateSession()と同じ名前入力の作法(OCR/手入力の二択)を踏襲しつつ、その場では
+ *  中へ入らずマップ上に留まる(セッションを量産して並べたい、という使い方を想定)。 */
+async function handleCreateSessionUnderYear(yearId) {
+  const choice = await showChoiceDialog({
+    title: 'セッション名の入力方法',
+    options: [
+      { label: 'OCRで読み取る', value: 'ocr' },
+      { label: '手入力する', value: 'manual', secondary: true },
+    ],
+  });
+  if (!choice) return;
+  let name;
+  if (choice === 'ocr') {
+    const result = await openCamera('caption');
+    if (!result || result.kind !== 'text' || !result.text.trim()) return;
+    name = result.text.trim();
+  } else {
+    name = window.prompt('新規セッションの名前(展覧会名や作品名など)');
+    if (!name) return;
+    name = name.trim();
+  }
+  try { await ensureSessionLoaded(yearId); } catch (err) { return; }
+  createChildSessionCard(name, yearId);
+  renderSessionsMap();
 }
 
 /**
@@ -1822,13 +1862,15 @@ function newCardSpawnPos() {
   return { x: center.x + (Math.random() * 80 - 40), y: center.y + (Math.random() * 80 - 40) };
 }
 
-/** 【現在アクティブなセッション】の直下に新規セッション+セッションカードを作る共通処理
- *  (2026年9月、handleCreateSession()・クイックセッション/クイックカメラのフォールバック
- *  経路の重複を解消するため切り出した)。作った側で「中へ入る」かどうかは呼び出し元に委ねる
+/** 指定した親セッション(省略時は【現在アクティブなセッション】)の直下に新規セッション+
+ *  セッションカードを作る共通処理(2026年9月、handleCreateSession()・クイックセッション/
+ *  クイックカメラのフォールバック経路の重複を解消するため切り出した。全体マップの「+新規
+ *  セッション」ボタンからも、breadcrumbが空(=activeSessionIdが無い)ためparentIdを明示的に
+ *  渡す形で流用する)。作った側で「中へ入る」かどうかは呼び出し元に委ねる
  *  (handleCreateSession()は今まで通り入らない、クイック系は作った直後にenterSession()する)。
  *  @returns {object} 作成したセッションオブジェクト */
-function createChildSessionCard(name) {
-  const parentId = activeSessionId();
+function createChildSessionCard(name, parentId) {
+  parentId = parentId || activeSessionId();
   const session = {
     id: crypto.randomUUID(),
     type: 'session',
@@ -1860,7 +1902,10 @@ function createChildSessionCard(name) {
   renderCard(card);
   redrawAsterismLines();
   setStatus(`「${session.name}」セッションを作成しました`);
-  scheduleAutoSave();
+  // parentIdを明示的に渡す: 全体マップ(breadcrumbが空)から呼ばれた場合、既定の
+  // activeSessionId()はnullになり、このカード自体を含む親セッションの変更が
+  // 保存対象としてマークされなくなってしまうため。
+  scheduleAutoSave(parentId);
   return session;
 }
 

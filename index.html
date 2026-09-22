@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
-<link rel="stylesheet" href="css/style.css?v=20260921c">
+<link rel="stylesheet" href="css/style.css?v=20260922a">
 <link rel="stylesheet" href="css/camera.css?v=20260918c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -117,6 +117,29 @@
 
   <main id="canvas-viewport" class="canvas-viewport">
     <div id="canvas-content" class="canvas-content"></div>
+    <!-- ログイン前フラッシュ(2026年9月追加): Ephemerisのスケジュールが無い日、サインイン
+         待ちの間は空の白+ドット背景だけになっていたため、その上に軽量な星座線ループ
+         アニメーション(CSSのみ、JS側の毎フレーム処理なし)を重ねる。js/app.jsの
+         DOMContentLoadedハンドラで表示/onSignedIn()で非表示にする。 -->
+    <div id="pre-login-constellation" class="plc-overlay" hidden aria-hidden="true">
+      <svg viewBox="0 0 400 300" preserveAspectRatio="xMidYMid slice">
+        <line class="plc-line" x1="60" y1="80" x2="140" y2="40" style="animation-delay:0s"/>
+        <line class="plc-line" x1="140" y1="40" x2="220" y2="90" style="animation-delay:0.9s"/>
+        <line class="plc-line" x1="220" y1="90" x2="300" y2="60" style="animation-delay:1.8s"/>
+        <line class="plc-line" x1="140" y1="40" x2="160" y2="150" style="animation-delay:2.7s"/>
+        <line class="plc-line" x1="160" y1="150" x2="260" y2="190" style="animation-delay:3.6s"/>
+        <line class="plc-line" x1="60" y1="80" x2="90" y2="200" style="animation-delay:4.5s"/>
+        <line class="plc-line" x1="260" y1="190" x2="330" y2="220" style="animation-delay:5.4s"/>
+        <circle class="plc-dot" cx="60" cy="80" r="3" style="animation-delay:0s"/>
+        <circle class="plc-dot" cx="140" cy="40" r="3.4" style="animation-delay:0.9s"/>
+        <circle class="plc-dot" cx="220" cy="90" r="2.6" style="animation-delay:1.8s"/>
+        <circle class="plc-dot" cx="300" cy="60" r="3" style="animation-delay:2.7s"/>
+        <circle class="plc-dot" cx="160" cy="150" r="2.8" style="animation-delay:3.6s"/>
+        <circle class="plc-dot" cx="260" cy="190" r="3.2" style="animation-delay:4.5s"/>
+        <circle class="plc-dot" cx="90" cy="200" r="2.4" style="animation-delay:5.4s"/>
+        <circle class="plc-dot" cx="330" cy="220" r="3" style="animation-delay:6.3s"/>
+      </svg>
+    </div>
   </main>
 
   <!-- 全体マップ(2026年9月追加、旧スタートメニュー/クイックメニューの置き換え)。
@@ -499,7 +522,7 @@
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260914d"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>
-  <script src="js/app.js?v=20260922a"></script>
+  <script src="js/app.js?v=20260922b"></script>
 
   <!-- モジュール共通の起動基盤(コア機能)。els等が揃うapp.jsの後、モジュール本体より前に置く -->
   <script src="js/module-launcher.js?v=20260921a"></script>
