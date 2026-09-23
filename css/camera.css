@@ -820,7 +820,7 @@
 .cam-ai-rect-handle--se { right: 0; bottom: 0; left: auto; top: auto; cursor: nwse-resize; }
 
 /* 作成結果の一覧(画面左側の縦カラム、.cam-select-thumbsの左右対称の位置)。
-   タップで対応する矩形を選択・ハイライトし、▲▼で読み順を、✕で削除できる。先頭の
+   タップで対応する矩形を選択・ハイライトし、長押しドラッグで読み順を、✕で削除できる。先頭の
    .cam-ai-region-list-add(旧#caption-ai-addボタン、2026年9月にここへ統合)から矩形を
    追加できる。ここだけは行そのものが常時操作対象のため.cam-select-thumbsと違い
    pointer-events:autoのままにしている。 */
@@ -849,14 +849,23 @@
   color: #201430; font-family: inherit; font-size: 9px; font-weight: 700; line-height: 16px; text-align: center;
 }
 .cam-ai-region-row-status { flex: 1; font-size: 10px; line-height: 1; }
-.cam-ai-region-row-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
-.cam-ai-region-row-up, .cam-ai-region-row-down, .cam-ai-region-row-del {
-  width: 16px; height: 14px; font-size: 8px; line-height: 1; border: none; border-radius: 3px;
-  background: rgba(255, 255, 255, 0.14); color: #fff; padding: 0; cursor: pointer;
+/* 長押しドラッグで並べ替え(2026年9月、旧▲▼ボタンを置き換え)。長押し中のテキスト選択・
+   iOSの長押しメニューを抑止する。 */
+.cam-ai-region-row {
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  transition: transform 0.12s, box-shadow 0.12s;
 }
-.cam-ai-region-row-del { background: rgba(217, 83, 79, 0.35); }
+.cam-ai-region-row-grip { flex-shrink: 0; font-size: 12px; line-height: 1; color: rgba(228, 216, 255, 0.55); }
+.cam-ai-region-row.dragging {
+  transform: scale(1.04); border-color: #e4d8ff; background: rgba(178, 133, 255, 0.45);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5); position: relative; z-index: 1;
+}
+.cam-ai-region-list.reordering .cam-ai-region-row:not(.dragging) { opacity: 0.75; }
+.cam-ai-region-row-del {
+  flex-shrink: 0; width: 18px; height: 18px; font-size: 9px; line-height: 1; border: none; border-radius: 4px;
+  background: rgba(217, 83, 79, 0.35); color: #fff; padding: 0; cursor: pointer;
+}
 .cam-ai-region-row-del:hover { background: rgba(217, 83, 79, 0.7); }
-.cam-ai-region-row-up:disabled, .cam-ai-region-row-down:disabled { opacity: 0.3; cursor: default; }
 
 /* 複数ページ取り込み(2026年9月追加、上記.cam-select-thumbsセクションとは別の「ページ」概念)。
    #camera-close(右上)・.cam-upload-ocr-btn(左上)の下、画面上部中央に横一列で並べる。

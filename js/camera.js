@@ -337,15 +337,14 @@ function wireCameraEvents() {
     if (e.target.closest('[data-add-region]')) { addManualAiRegion(); return; }
     const row = e.target.closest('.cam-ai-region-row');
     if (!row) return;
+    // 長押しドラッグで並べ替えた直後に発火するclickは、選択操作として扱わない。
+    if (aiRegionDragSuppressClick) { aiRegionDragSuppressClick = false; return; }
     const id = row.dataset.regionId;
-    const upBtn = e.target.closest('.cam-ai-region-row-up');
-    const downBtn = e.target.closest('.cam-ai-region-row-down');
     const delBtn = e.target.closest('.cam-ai-region-row-del');
-    if (upBtn) { moveAiRegionOrder(id, -1); return; }
-    if (downBtn) { moveAiRegionOrder(id, 1); return; }
     if (delBtn) { removeAiRegion(id); return; }
     selectAiRegion(id);
   });
+  wireAiRegionListDragReorder();
 
   camEls.videoRecBtn.addEventListener('click', () => {
     if (isRecording()) {
@@ -2417,33 +2416,122 @@ const AI_REGION_LIST_ADD_ROW_HTML = '<button type="button" class="cam-ai-region-
 function renderAiRegionList() {
   if (!camEls.aiRegionListEl) return;
   const ordered = [...aiRegions].sort((a, b) => a.order - b.order);
-  camEls.aiRegionListEl.innerHTML = AI_REGION_LIST_ADD_ROW_HTML + ordered.map((region, i) => (
+  camEls.aiRegionListEl.innerHTML = AI_REGION_LIST_ADD_ROW_HTML + ordered.map((region) => (
     `<div class="cam-ai-region-row${region.id === aiRegionSelectedId ? ' selected' : ''}" data-region-id="${region.id}">` +
     `<span class="cam-ai-region-row-num">${region.order}</span>` +
     `<span class="cam-ai-region-row-status">${aiRegionStatusBadge(region.status)}</span>` +
-    '<span class="cam-ai-region-row-actions">' +
-    `<button type="button" class="cam-ai-region-row-up" ${i === 0 ? 'disabled' : ''} title="順番を上げる">▲</button>` +
-    `<button type="button" class="cam-ai-region-row-down" ${i === ordered.length - 1 ? 'disabled' : ''} title="順番を下げる">▼</button>` +
+    '<span class="cam-ai-region-row-grip" aria-hidden="true">⠿</span>' +
     '<button type="button" class="cam-ai-region-row-del" title="この範囲を削除">✕</button>' +
-    '</span>' +
     '</div>'
   )).join('');
 }
 
-/** 指定した領域の読み順を1つ上下へ入れ替える(隣接する領域とorderを交換するだけの
- *  シンプルな実装、Almagestの挿絵並べ替えmoveBodyImage()と同じ考え方)。 */
-function moveAiRegionOrder(id, dir) {
-  const ordered = [...aiRegions].sort((a, b) => a.order - b.order);
-  const idx = ordered.findIndex((r) => r.id === id);
-  const targetIdx = idx + dir;
-  if (idx < 0 || targetIdx < 0 || targetIdx >= ordered.length) return;
-  const a = ordered[idx];
-  const b = ordered[targetIdx];
-  const tmp = a.order;
-  a.order = b.order;
-  b.order = tmp;
-  renderAiRegionOverlay();
-  renderAiRegionList();
+/** 左の一覧の長押しドラッグによる並べ替え(2026年9月、旧▲▼ボタンを置き換え)。
+ *  行を AI_REGION_DRAG_LONG_PRESS_MS 押さえ続けると掴んだ状態になり、そのまま上下へ
+ *  動かすと一覧内のDOM順をその場で入れ替えていく。指を離した時点のDOM順で order を
+ *  1始まりの連番に振り直す(例: 6番を一番上へ運ぶと6番が1番になり、元の1〜5番は
+ *  1つずつ繰り下がる)。長押し成立前に指が動いた場合は、一覧の通常スクロールに譲る。 */
+const AI_REGION_DRAG_LONG_PRESS_MS = 300;
+const AI_REGION_DRAG_MOVE_TOLERANCE_PX = 8;
+let aiRegionDrag = null;
+let aiRegionDragSuppressClick = false;
+
+function wireAiRegionListDragReorder() {
+  const listEl = camEls.aiRegionListEl;
+
+  const cleanup = () => {
+    if (!aiRegionDrag) return;
+    clearTimeout(aiRegionDrag.timer);
+    if (aiRegionDrag.rowEl) aiRegionDrag.rowEl.classList.remove('dragging');
+    listEl.classList.remove('reordering');
+    try { listEl.releasePointerCapture(aiRegionDrag.pointerId); } catch (_) { /* 既に解放済み */ }
+    aiRegionDrag = null;
+  };
+
+  listEl.addEventListener('pointerdown', (e) => {
+    if (aiRegionDrag) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const row = e.target.closest('.cam-ai-region-row');
+    if (!row || e.target.closest('.cam-ai-region-row-del')) return;
+    aiRegionDrag = {
+      pointerId: e.pointerId, rowEl: row, startX: e.clientX, startY: e.clientY,
+      active: false, moved: false, timer: null,
+    };
+    aiRegionDrag.timer = setTimeout(() => {
+      if (!aiRegionDrag) return;
+      aiRegionDrag.active = true;
+      row.classList.add('dragging');
+      listEl.classList.add('reordering');
+      try { listEl.setPointerCapture(aiRegionDrag.pointerId); } catch (_) { /* 非対応環境 */ }
+      if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) { /* 無視 */ } }
+    }, AI_REGION_DRAG_LONG_PRESS_MS);
+  });
+
+  listEl.addEventListener('pointermove', (e) => {
+    if (!aiRegionDrag || e.pointerId !== aiRegionDrag.pointerId) return;
+    if (!aiRegionDrag.active) {
+      // 長押し成立前に動いたらスクロール/通常タップ扱いにして並べ替えは始めない。
+      if (Math.hypot(e.clientX - aiRegionDrag.startX, e.clientY - aiRegionDrag.startY) > AI_REGION_DRAG_MOVE_TOLERANCE_PX) cleanup();
+      return;
+    }
+    e.preventDefault();
+    const dragged = aiRegionDrag.rowEl;
+    const rows = [...listEl.querySelectorAll('.cam-ai-region-row')].filter((r) => r !== dragged);
+    // ポインタより下にある最初の行(中央線基準)の直前へ挿入、無ければ末尾へ。
+    let before = null;
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect();
+      if (e.clientY < rect.top + rect.height / 2) { before = r; break; }
+    }
+    if (before) {
+      if (dragged.nextElementSibling !== before) { listEl.insertBefore(dragged, before); aiRegionDrag.moved = true; }
+    } else if (listEl.lastElementChild !== dragged) {
+      listEl.appendChild(dragged);
+      aiRegionDrag.moved = true;
+    }
+    // 一覧の上下端付近では自動スクロールし、長い一覧でも端まで運べるようにする。
+    const listRect = listEl.getBoundingClientRect();
+    if (e.clientY < listRect.top + 24) listEl.scrollTop -= 8;
+    else if (e.clientY > listRect.bottom - 24) listEl.scrollTop += 8;
+  });
+
+  const finish = (e) => {
+    if (!aiRegionDrag || e.pointerId !== aiRegionDrag.pointerId) return;
+    const wasActive = aiRegionDrag.active;
+    const moved = aiRegionDrag.moved;
+    const draggedId = aiRegionDrag.rowEl.dataset.regionId;
+    cleanup();
+    if (!wasActive) return;
+    // 長押しが成立した時点で「選択のタップ」ではないため、続くclickは握りつぶす。
+    aiRegionDragSuppressClick = true;
+    setTimeout(() => { aiRegionDragSuppressClick = false; }, 400);
+    if (moved) {
+      const idsInDomOrder = [...listEl.querySelectorAll('.cam-ai-region-row')].map((r) => r.dataset.regionId);
+      idsInDomOrder.forEach((id, i) => {
+        const region = aiRegions.find((r) => r.id === id);
+        if (region) region.order = i + 1;
+      });
+    }
+    aiRegionSelectedId = draggedId;
+    renderAiRegionOverlay();
+    camEls.selectLayer.querySelectorAll('.cam-ai-rect').forEach((el) => {
+      el.classList.toggle('selected', el.dataset.regionId === draggedId);
+    });
+    renderAiRegionList();
+  };
+  listEl.addEventListener('pointerup', finish);
+  listEl.addEventListener('pointercancel', (e) => {
+    if (!aiRegionDrag || e.pointerId !== aiRegionDrag.pointerId) return;
+    if (aiRegionDrag.active) { finish(e); return; }
+    cleanup();
+  });
+  // iOS Safari等: 掴んでいる間だけタッチスクロールを止める(passive:falseでないとpreventDefaultが効かない)。
+  listEl.addEventListener('touchmove', (e) => {
+    if (aiRegionDrag && aiRegionDrag.active) e.preventDefault();
+  }, { passive: false });
+  listEl.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.cam-ai-region-row')) e.preventDefault();
+  });
 }
 
 function removeAiRegion(id) {
