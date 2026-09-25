@@ -584,16 +584,11 @@
 /* 画面共有からの取り込み(PC版Chrome向け・試験実装)。📁アップロードの右隣に置く。 */
 .cam-screen-ocr-btn { left: 104px; }
 .cam-screen-ocr-btn[hidden] { display: none; }
-/* 共有中だけ出る小さいプレビュー+取り込みボタン。当初は画面下中央に置いていたが、紙面の
-   中央下部にかかる矩形を調整する際に邪魔という実機報告を受け、左下隅へ移した(PC版Chrome
-   専用の機能のため、画面幅が広く下部中央のボタン列とは重ならない前提)。 */
+/* 共有中だけ出る小さいプレビュー+取り込みボタン。フローティングメニュー(.cam-float-dock)の
+   中に入る(配置・背景はdock側が持つ)。 */
 .cam-screenshare-panel {
-  position: absolute; left: 8px;
-  bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 10;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 8px; border-radius: 12px;
-  background: rgba(0, 0, 0, 0.72); border: 1px solid rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  pointer-events: auto;
 }
 .cam-screenshare-panel[hidden] { display: none; }
 /* .cam-screen video(カメラ映像を画面いっぱいに敷くためのposition:absolute; inset:0)が
@@ -601,11 +596,11 @@
    (実機報告)。通常のフロー配置に戻す。 */
 .cam-screenshare-panel video {
   position: static; inset: auto; transform: none; transition: none;
-  width: 220px; height: 130px; object-fit: contain; background: #000; border-radius: 6px; display: block;
+  width: 180px; height: 104px; object-fit: contain; background: #000; border-radius: 6px; display: block;
 }
 .cam-screenshare-actions { display: flex; gap: 8px; }
 .cam-screenshare-grab, .cam-screenshare-stop {
-  font-family: inherit; font-size: 11px; border-radius: 16px; padding: 8px 14px; cursor: pointer;
+  font-family: inherit; font-size: 10px; border-radius: 16px; padding: 7px 12px; cursor: pointer;
 }
 .cam-screenshare-grab { background: #55e6f7; color: #06232a; border: none; font-weight: 700; }
 .cam-screenshare-stop { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, 0.4); }
@@ -697,10 +692,40 @@
 .cam-select-finish { background: #2e9e5b; color: #fff; border: none; }
 .cam-select-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* フローティングメニュー(2026年9月): 下部のボタン群(.cam-select-actions)と画面共有プレビューを
+   まとめた小さめのパネル。つまみ(⠿)のドラッグで自由に動かせる(js/camera.jsのwireFloatDock())。
+   既定位置は従来のボタン列と同じ画面下中央。ドラッグ後はJSがleft/topを直接指定する。
+   中身(ボタン列/プレビュー)がどちらも出ていない間は、dock自体を表示しない。 */
+.cam-float-dock {
+  position: absolute; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%); z-index: 10;
+  display: none; flex-direction: column; align-items: center; gap: 6px;
+  max-width: calc(100% - 24px); padding: 4px 8px 8px; border-radius: 14px;
+  background: rgba(14, 14, 20, 0.62); border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+}
+.cam-float-dock:has(.cam-select-actions.show),
+.cam-float-dock:has(.cam-screenshare-panel:not([hidden])) { display: flex; }
+.cam-float-dock-grip {
+  width: 100%; text-align: center; color: rgba(255, 255, 255, 0.7); font-size: 13px; line-height: 1;
+  padding: 3px 0; cursor: grab; user-select: none; touch-action: none;
+}
+.cam-float-dock-grip.dragging { cursor: grabbing; }
+/* dock内に入ったボタン列は画面幅いっぱいの絶対配置をやめ、小さめに詰める */
+.cam-float-dock .cam-select-actions {
+  position: static; left: auto; right: auto; bottom: auto;
+  gap: 6px; padding: 0; max-width: 560px;
+}
+.cam-float-dock .cam-select-btn { font-size: 9.5px; padding: 8px 12px; }
+.cam-float-dock .cam-grid-columns-input { width: 34px; padding: 6px 3px; font-size: 11px; }
+
 /* 範囲選択OCRの進捗・件数表示(2026年9月追加、上記.cam-select-actionsセクション参照)。
    選択レイヤー・アクションボタンより上、常に視界に入る位置に置く。 */
+/* 2026年9月: 下部のボタン列をフローティングメニュー(.cam-float-dock)へまとめた際、dockの
+   背後に隠れないよう下部から画面上部(ページ一覧の下)へ移した。 */
 .cam-select-status {
-  position: absolute; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; z-index: 8;
+  position: absolute; top: calc(100px + env(safe-area-inset-top, 0px)); left: 0; right: 0; z-index: 8;
   display: flex; justify-content: center; align-items: center; gap: 10px; padding: 0 16px; pointer-events: none;
 }
 .cam-select-count {

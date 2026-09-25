@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260922a">
-<link rel="stylesheet" href="css/camera.css?v=20260925c">
+<link rel="stylesheet" href="css/camera.css?v=20260925d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -343,13 +343,6 @@
       <!-- 画面共有からの取り込み(PC版Chrome向け・試験実装、js/camera.jsのwireScreenShareCapture()参照)。
            Kindle for PC等のウィンドウを共有し、押した瞬間の画面を1ページとして取り込む。 -->
       <button class="cam-upload-ocr-btn cam-screen-ocr-btn" id="caption-screen-btn" type="button" title="画面共有でほかのアプリのウィンドウから取り込む(PC版Chrome)" hidden>🖥 画面から取り込む</button>
-      <div class="cam-screenshare-panel" id="caption-screenshare-panel" hidden>
-        <video id="caption-screenshare-video" autoplay playsinline muted></video>
-        <div class="cam-screenshare-actions">
-          <button type="button" class="cam-screenshare-grab" id="caption-screenshare-grab">📸 取り込む</button>
-          <button type="button" class="cam-screenshare-stop" id="caption-screenshare-stop">共有を停止</button>
-        </div>
-      </div>
       <button class="cam-cap-btn" id="camera-cap-btn">タップして読み取る</button>
       <!-- 撮影直後の静止フレーム(選択モード中だけ表示、実体のcanvasはJSから注入する) -->
       <div class="cam-freeze-wrap" id="caption-freeze-wrap"></div>
@@ -387,28 +380,41 @@
            ため、通常の範囲選択(.cam-select-thumbs等)には一切手を入れていない
            (js/camera.jsのhandleCreateColumnGrid()参照)。 -->
       <div class="cam-ai-region-list" id="caption-ai-region-list" hidden></div>
-      <div class="cam-select-actions" id="caption-select-actions">
-        <button class="cam-select-btn cam-select-retake" id="caption-select-retake">撮り直す</button>
-        <!-- 「段組みで一括作成」(2026年9月、Gemini解析(旧AI解析)から全面置き換え): 書籍・雑誌の
-             ページはほぼ常に等幅の格子状の段組みのため、Geminiへ問い合わせず、指定した
-             列数×段数ぶんの矩形をその場で均等割りして作るだけにした(「無駄な解析が多すぎる」
-             というユーザー判断による、通信不要・無料枠を一切消費しない方式への変更)。
-             当初は横一列に並ぶ矩形(列数のみ指定)だったが、実機で「見開き2ページを横に
-             ８列でなく２列×４段にしたい」との指摘を受け、列(横方向の分割数)×段(縦方向の
-             分割数)を独立指定できるようにした(2026年9月)。既存の手動OCR(全体を読み取る/
-             この範囲を読み取る)は一切変更しない、並存する独立の入口。 -->
-        <label class="cam-grid-columns-label" for="caption-grid-cols">列</label>
-        <input type="number" class="cam-grid-columns-input" id="caption-grid-cols" min="1" max="8" value="2" inputmode="numeric">
-        <label class="cam-grid-columns-label" for="caption-grid-rows">段</label>
-        <input type="number" class="cam-grid-columns-input" id="caption-grid-rows" min="1" max="8" value="4" inputmode="numeric">
-        <button class="cam-select-btn cam-select-ai" id="caption-select-ai">📐 一括作成</button>
-        <button class="cam-select-btn cam-select-run" id="caption-select-run">全体を読み取る</button>
-        <!-- 範囲を1回でも読み取ると現れる(=複数段組みの続けて読み取りモード)。押すまで
-             カメラは閉じず、同じ画像のまま次の範囲を選び続けられる。 -->
-        <button class="cam-select-btn cam-select-finish" id="caption-select-finish" hidden>✓ 読み取りを終える</button>
-        <!-- 段組み一括作成モード専用のボタン(2026年9月)。既定は非表示、handleCreateColumnGrid()実行時に現れる。 -->
-        <button class="cam-select-btn cam-ai-run" id="caption-ai-run" hidden>この順番でまとめて読み取る</button>
-        <button class="cam-select-btn cam-ai-cancel" id="caption-ai-cancel" hidden>手動選択に戻す</button>
+      <!-- フローティングメニュー(2026年9月): 下部のボタン群(.cam-select-actions)と画面共有の
+           プレビュー(.cam-screenshare-panel)をひとまとめにし、つまみ(⠿)のドラッグで自由に動かせる
+           ようにした(紙面の文章と重なりがち、という実機報告への対応。js/camera.jsのwireFloatDock()参照)。 -->
+      <div class="cam-float-dock" id="caption-float-dock">
+        <div class="cam-float-dock-grip" id="caption-float-dock-grip" title="ドラッグで移動">⠿</div>
+        <div class="cam-screenshare-panel" id="caption-screenshare-panel" hidden>
+          <video id="caption-screenshare-video" autoplay playsinline muted></video>
+          <div class="cam-screenshare-actions">
+            <button type="button" class="cam-screenshare-grab" id="caption-screenshare-grab">📸 取り込む</button>
+            <button type="button" class="cam-screenshare-stop" id="caption-screenshare-stop">共有を停止</button>
+          </div>
+        </div>
+        <div class="cam-select-actions" id="caption-select-actions">
+          <button class="cam-select-btn cam-select-retake" id="caption-select-retake">撮り直す</button>
+          <!-- 「段組みで一括作成」(2026年9月、Gemini解析(旧AI解析)から全面置き換え): 書籍・雑誌の
+               ページはほぼ常に等幅の格子状の段組みのため、Geminiへ問い合わせず、指定した
+               列数×段数ぶんの矩形をその場で均等割りして作るだけにした(「無駄な解析が多すぎる」
+               というユーザー判断による、通信不要・無料枠を一切消費しない方式への変更)。
+               当初は横一列に並ぶ矩形(列数のみ指定)だったが、実機で「見開き2ページを横に
+               ８列でなく２列×４段にしたい」との指摘を受け、列(横方向の分割数)×段(縦方向の
+               分割数)を独立指定できるようにした(2026年9月)。既存の手動OCR(全体を読み取る/
+               この範囲を読み取る)は一切変更しない、並存する独立の入口。 -->
+          <label class="cam-grid-columns-label" for="caption-grid-cols">列</label>
+          <input type="number" class="cam-grid-columns-input" id="caption-grid-cols" min="1" max="8" value="2" inputmode="numeric">
+          <label class="cam-grid-columns-label" for="caption-grid-rows">段</label>
+          <input type="number" class="cam-grid-columns-input" id="caption-grid-rows" min="1" max="8" value="4" inputmode="numeric">
+          <button class="cam-select-btn cam-select-ai" id="caption-select-ai">📐 一括作成</button>
+          <button class="cam-select-btn cam-select-run" id="caption-select-run">全体を読み取る</button>
+          <!-- 範囲を1回でも読み取ると現れる(=複数段組みの続けて読み取りモード)。押すまで
+               カメラは閉じず、同じ画像のまま次の範囲を選び続けられる。 -->
+          <button class="cam-select-btn cam-select-finish" id="caption-select-finish" hidden>✓ 読み取りを終える</button>
+          <!-- 段組み一括作成モード専用のボタン(2026年9月)。既定は非表示、handleCreateColumnGrid()実行時に現れる。 -->
+          <button class="cam-select-btn cam-ai-run" id="caption-ai-run" hidden>この順番でまとめて読み取る</button>
+          <button class="cam-select-btn cam-ai-cancel" id="caption-ai-cancel" hidden>手動選択に戻す</button>
+        </div>
       </div>
     </div>
 
@@ -551,7 +557,7 @@
   <script src="js/upload-queue.js?v=20260921a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260923c"></script>
-  <script src="js/camera.js?v=20260925a"></script>
+  <script src="js/camera.js?v=20260925b"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260922a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>

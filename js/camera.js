@@ -317,6 +317,7 @@ function wireCameraEvents() {
   });
   wireCaptionDragDrop();
   wireScreenShareCapture();
+  wireFloatDock();
   if (camEls.pageStrip) {
     camEls.pageStrip.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-page-index]');
@@ -2165,6 +2166,51 @@ function grabScreenShareFrame() {
   if (dark && typeof setStatus === 'function') {
     setStatus('取り込んだ画面がほぼ真っ黒です。共有先のアプリが画面キャプチャを禁止している可能性があります');
   }
+}
+
+/** フローティングメニュー(下部のボタン群+画面共有プレビュー、2026年9月)をつまみのドラッグで
+ *  動かせるようにする。一度動かした位置はページを開いている間は保持する(カメラを閉じても
+ *  次に開いた時同じ位置)。画面外へはみ出さないよう、ドラッグ中は画面内にクランプする。 */
+function wireFloatDock() {
+  const dock = document.getElementById('caption-float-dock');
+  const grip = document.getElementById('caption-float-dock-grip');
+  if (!dock || !grip) return;
+  let drag = null;
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const screenRect = camEls.captionScreen.getBoundingClientRect();
+    const dockRect = dock.getBoundingClientRect();
+    drag = {
+      id: e.pointerId,
+      offX: e.clientX - dockRect.left,
+      offY: e.clientY - dockRect.top,
+      screenRect,
+      w: dockRect.width,
+      h: dockRect.height,
+    };
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add('dragging');
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const { screenRect, w, h } = drag;
+    const x = Math.min(Math.max(0, e.clientX - screenRect.left - drag.offX), Math.max(0, screenRect.width - w));
+    const y = Math.min(Math.max(0, e.clientY - screenRect.top - drag.offY), Math.max(0, screenRect.height - h));
+    dock.style.left = `${x}px`;
+    dock.style.top = `${y}px`;
+    dock.style.bottom = 'auto';
+    dock.style.transform = 'none';
+  });
+  const end = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag = null;
+    grip.classList.remove('dragging');
+  };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+  // dock内(ボタンの隙間など)のタップが下の選択レイヤーへ抜けて範囲選択が始まらないようにする
+  dock.addEventListener('pointerdown', (e) => e.stopPropagation());
 }
 
 /** DRMによる黒塗りを検知するための簡易判定(32x32に縮小して平均輝度を見るだけ)。 */
