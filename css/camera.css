@@ -584,11 +584,12 @@
 /* 画面共有からの取り込み(PC版Chrome向け・試験実装)。📁アップロードの右隣に置く。 */
 .cam-screen-ocr-btn { left: 104px; }
 .cam-screen-ocr-btn[hidden] { display: none; }
-/* 共有中だけ出る小さいプレビュー+取り込みボタン。下部のボタン列(.cam-select-actions)の
-   すぐ上、画面中央に浮かべる(左の段組み一覧・右の範囲サムネイル一覧と重ならない位置)。 */
+/* 共有中だけ出る小さいプレビュー+取り込みボタン。当初は画面下中央に置いていたが、紙面の
+   中央下部にかかる矩形を調整する際に邪魔という実機報告を受け、左下隅へ移した(PC版Chrome
+   専用の機能のため、画面幅が広く下部中央のボタン列とは重ならない前提)。 */
 .cam-screenshare-panel {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 10;
+  position: absolute; left: 8px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 10;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 8px; border-radius: 12px;
   background: rgba(0, 0, 0, 0.72); border: 1px solid rgba(255, 255, 255, 0.25);
