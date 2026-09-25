@@ -595,7 +595,11 @@
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 .cam-screenshare-panel[hidden] { display: none; }
+/* .cam-screen video(カメラ映像を画面いっぱいに敷くためのposition:absolute; inset:0)が
+   このプレビューにも効いてしまい、パネル全体を覆って下の取り込みボタンを隠していた
+   (実機報告)。通常のフロー配置に戻す。 */
 .cam-screenshare-panel video {
+  position: static; inset: auto; transform: none; transition: none;
   width: 220px; height: 130px; object-fit: contain; background: #000; border-radius: 6px; display: block;
 }
 .cam-screenshare-actions { display: flex; gap: 8px; }
