@@ -701,6 +701,12 @@ Almagestでの本のOCR取り込み(複数ページ・段組みを範囲選択�
 - `.al-book-bookmark-title`という新しいクラスをしおり(URL)専用に用意し、縦書き(`writing-mode: vertical-rl`)のまま残した。`max-height: 140px`で高さの上限を決め、そこに達したら`white-space: normal`により**複数列に折り返す**(=文字を省略せず、カードが横に広がる形で全文を収める)。合わせて`.al-book--url`の幅を`width: 56px`固定から`width: auto; min-width: 56px;`へ変更し、複数列になった分だけ横に伸びられるようにした。
 - 背表紙の外側要素(`bookSpineHtml()`/`bookmarkSpineHtml()`)に付けた`title`属性(PCでのホバーで全文表示)は、折り返し後も一目で分かる補助として残してある。
 
+### 画面共有からのOCR取り込み(PC版Chrome向け・試験実装、2026年9月)
+
+「Kindle for PCのページをスクショ→ドラッグの手間なく取り込みたい」という要望への試験実装。OCR画面(`openCamera('caption')`、Almagest以外の呼び出し元にも共通)の左上、📁アップロードの隣に「🖥 画面から取り込む」ボタンを追加した(`js/camera.js`の`wireScreenShareCapture()`以下のブロック)。`getDisplayMedia()`で選んだウィンドウを小さいプレビューパネルに映し、「📸 取り込む」を押すたびにその瞬間のフレームを1ページとして`addCanvasesAsCaptionPages()`(ファイル取り込みと共通化した関数)へ渡す。以降の範囲選択・段組み一括作成・OCRは既存フローそのまま。取り込み自体は端末内処理のみでGeminiは呼ばない。`getDisplayMedia`非対応(iOS Safari等)ではボタン自体を出さない。カメラを閉じる/モードを切り替える/Chrome側の「共有を停止」で必ず共有を止める。
+
+- **目的は「Kindle等のDRMで画面キャプチャが黒塗りにならないか」の実機確認**。取り込んだ画面がほぼ真っ黒なら`isCanvasNearlyBlack()`が警告を出す。**ユーザー方針: うまくいかなければ丸ごと削除する**(削除時は`js/camera.js`の該当ブロック・`wireScreenShareCapture()`呼び出し・`teardownModeExtras()`/`teardownCamera()`内の`stopScreenShare()`、`index.html`の`#caption-screen-btn`/`#caption-screenshare-panel`、`css/camera.css`の`.cam-screen-ocr-btn`/`.cam-screenshare-*`を撤去する。`addCanvasesAsCaptionPages()`はファイル取り込みも使うので残す)
+
 ### オフライン可否の可視化(電車の中でKindleのように読みたい、2026年9月)
 
 「電車の中で通信量を抑えながらAlmagestを使いたい、各本がオフラインで読めるか本棚で一目で分かるようにしたい(Kindleのダウンロード状態のような使い方)」というユーザー要望に対応した。

@@ -316,6 +316,7 @@ function wireCameraEvents() {
     if (files.length) handleFilesForSelection(files);
   });
   wireCaptionDragDrop();
+  wireScreenShareCapture();
   if (camEls.pageStrip) {
     camEls.pageStrip.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-page-index]');
@@ -803,6 +804,7 @@ function teardownModeExtras() {
   if (camTorchOn) setTorch(false);
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
   closeTargetScope(); // モードを抜ける/カメラを閉じるたび、照準・結果パネルも片付ける(2026年9月追加)
+  stopScreenShare(); // 画面共有取り込み(テクストモード専用)も必ず止める
 }
 
 function updateScreenVisibility() {
@@ -2060,19 +2062,124 @@ async function handleFilesForSelection(files) {
       showCameraError('画像の読み込みに失敗しました');
       return;
     }
-    const wasInSession = camEls.freezeWrap.classList.contains('show');
-    const newFirstIndex = wasInSession ? captionPages.length : 0;
-    if (!wasInSession) {
-      captionPages = [];
-      beginCaptionSelectionUi();
-    }
-    captionPages.push(...canvases.map((canvas) => ({ canvas, thumbUrl: canvasThumbDataUrl(canvas) })));
-    switchCaptionPage(newFirstIndex);
-    if (wasInSession && typeof setStatus === 'function') {
-      setStatus(`${canvases.length}ページ追加しました(全${captionPages.length}ページ)`);
-    }
+    addCanvasesAsCaptionPages(canvases);
   } finally {
     camEls.uploadBtn.disabled = false;
+  }
+}
+
+/** canvas群を複数ページとして取り込む(ファイル取り込み・画面共有取り込みの共通処理)。
+ *  既に続けて選択セッション中なら末尾に積み増し、新規なら1ページ目として開始する。 */
+function addCanvasesAsCaptionPages(canvases) {
+  const wasInSession = camEls.freezeWrap.classList.contains('show');
+  const newFirstIndex = wasInSession ? captionPages.length : 0;
+  if (!wasInSession) {
+    captionPages = [];
+    beginCaptionSelectionUi();
+  }
+  captionPages.push(...canvases.map((canvas) => ({ canvas, thumbUrl: canvasThumbDataUrl(canvas) })));
+  switchCaptionPage(newFirstIndex);
+  if (wasInSession && typeof setStatus === 'function') {
+    setStatus(`${canvases.length}ページ追加しました(全${captionPages.length}ページ)`);
+  }
+}
+
+/* ---------------- 画面共有からの取り込み(PC版Chrome向け、2026年9月・試験実装) ----------------
+ * Kindle for PC等のウィンドウをgetDisplayMedia()で共有し、「📸 取り込む」を押した瞬間の
+ * フレームを1ページとしてaddCanvasesAsCaptionPages()へ渡す。以降の範囲選択→OCRは
+ * ファイル取り込みと全く同じ。取り込み自体は端末内の処理のみで、Geminiは呼ばない。
+ * iOS Safari等getDisplayMedia非対応の環境ではボタン自体を出さない。
+ * DRMでキャプチャが黒塗りになるアプリがあるか確かめるための試験実装で、うまくいかなければ
+ * このブロックと index.html / css/camera.css の対応箇所ごと削除する。 */
+let screenShareStream = null;
+let screenShareEls = null;
+
+function isScreenShareSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+
+function wireScreenShareCapture() {
+  const btn = document.getElementById('caption-screen-btn');
+  const panel = document.getElementById('caption-screenshare-panel');
+  if (!btn || !panel) return;
+  screenShareEls = {
+    btn,
+    panel,
+    video: document.getElementById('caption-screenshare-video'),
+    grabBtn: document.getElementById('caption-screenshare-grab'),
+    stopBtn: document.getElementById('caption-screenshare-stop'),
+  };
+  btn.hidden = !isScreenShareSupported();
+  btn.addEventListener('click', startScreenShare);
+  screenShareEls.grabBtn.addEventListener('click', grabScreenShareFrame);
+  screenShareEls.stopBtn.addEventListener('click', stopScreenShare);
+}
+
+async function startScreenShare() {
+  if (screenShareStream || !isScreenShareSupported()) return;
+  try {
+    screenShareStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (err) {
+    // ユーザーが共有ダイアログをキャンセルした場合もここに来る(NotAllowedError)。黙って戻る。
+    console.warn('画面共有を開始できませんでした', err);
+    screenShareStream = null;
+    return;
+  }
+  const track = screenShareStream.getVideoTracks()[0];
+  // Chrome側の「共有を停止」バーから止められた場合も片付ける
+  if (track) track.addEventListener('ended', stopScreenShare);
+  screenShareEls.video.srcObject = screenShareStream;
+  screenShareEls.video.play().catch(() => {});
+  screenShareEls.panel.hidden = false;
+  screenShareEls.btn.hidden = true;
+  camDebugLog(`screenshare start: ${track ? JSON.stringify(track.getSettings()) : 'no track'}`);
+}
+
+function stopScreenShare() {
+  if (screenShareStream) {
+    screenShareStream.getTracks().forEach((t) => t.stop());
+    screenShareStream = null;
+  }
+  if (!screenShareEls) return;
+  screenShareEls.video.srcObject = null;
+  screenShareEls.panel.hidden = true;
+  screenShareEls.btn.hidden = !isScreenShareSupported();
+}
+
+function grabScreenShareFrame() {
+  const video = screenShareEls && screenShareEls.video;
+  if (!screenShareStream || !video || !video.videoWidth) {
+    if (typeof setStatus === 'function') setStatus('画面の映像がまだ届いていません。少し待ってからもう一度押してください');
+    return;
+  }
+  // スクリーンショットと同じく元々シャープな画像のため、ファイル取り込みと同じ3840pxまで許容する
+  const scale = Math.min(1, 3840 / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  playShutter();
+  const dark = isCanvasNearlyBlack(canvas);
+  camDebugLog(`screenshare grab: ${canvas.width}x${canvas.height} nearlyBlack=${dark}`);
+  addCanvasesAsCaptionPages([canvas]);
+  if (dark && typeof setStatus === 'function') {
+    setStatus('取り込んだ画面がほぼ真っ黒です。共有先のアプリが画面キャプチャを禁止している可能性があります');
+  }
+}
+
+/** DRMによる黒塗りを検知するための簡易判定(32x32に縮小して平均輝度を見るだけ)。 */
+function isCanvasNearlyBlack(canvas) {
+  try {
+    const s = document.createElement('canvas');
+    s.width = 32; s.height = 32;
+    const ctx = s.getContext('2d');
+    ctx.drawImage(canvas, 0, 0, 32, 32);
+    const d = ctx.getImageData(0, 0, 32, 32).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+    return sum / (32 * 32 * 3) < 8;
+  } catch (err) {
+    return false;
   }
 }
 
@@ -3316,6 +3423,7 @@ function teardownCamera() {
   resolveCamera = null;
   captionForceContinuous = false; // 次のopenCamera()呼び出し元(既定は単発扱い)へ引き継がない
   stopCameraStream(); // track.stop()がハードウェアを解放するため、トーチも自動的に消える
+  stopScreenShare();
   camTorchOn = false;
   if (camEls && camEls.eclipseGuidePhoto) camEls.eclipseGuidePhoto.classList.remove('heating', 'torch-on');
   teardownWaveform();

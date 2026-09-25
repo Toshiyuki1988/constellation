@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>CONSTELLATION</title>
 <link rel="stylesheet" href="css/style.css?v=20260922a">
-<link rel="stylesheet" href="css/camera.css?v=20260924a">
+<link rel="stylesheet" href="css/camera.css?v=20260925a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <script>
@@ -340,6 +340,16 @@
            合流するため、自由範囲選択も同様に使える。 -->
       <button class="cam-upload-ocr-btn" id="caption-upload-btn" type="button" title="画像ファイルから読み取る(複数選択可)">📁 アップロード</button>
       <input type="file" accept="image/*" id="caption-upload-file" multiple hidden>
+      <!-- 画面共有からの取り込み(PC版Chrome向け・試験実装、js/camera.jsのwireScreenShareCapture()参照)。
+           Kindle for PC等のウィンドウを共有し、押した瞬間の画面を1ページとして取り込む。 -->
+      <button class="cam-upload-ocr-btn cam-screen-ocr-btn" id="caption-screen-btn" type="button" title="画面共有でほかのアプリのウィンドウから取り込む(PC版Chrome)" hidden>🖥 画面から取り込む</button>
+      <div class="cam-screenshare-panel" id="caption-screenshare-panel" hidden>
+        <video id="caption-screenshare-video" autoplay playsinline muted></video>
+        <div class="cam-screenshare-actions">
+          <button type="button" class="cam-screenshare-grab" id="caption-screenshare-grab">📸 取り込む</button>
+          <button type="button" class="cam-screenshare-stop" id="caption-screenshare-stop">共有を停止</button>
+        </div>
+      </div>
       <button class="cam-cap-btn" id="camera-cap-btn">タップして読み取る</button>
       <!-- 撮影直後の静止フレーム(選択モード中だけ表示、実体のcanvasはJSから注入する) -->
       <div class="cam-freeze-wrap" id="caption-freeze-wrap"></div>
@@ -541,7 +551,7 @@
   <script src="js/upload-queue.js?v=20260921a"></script>
   <script src="js/calendar.js?v=20260905f"></script>
   <script src="js/gemini.js?v=20260923c"></script>
-  <script src="js/camera.js?v=20260924a"></script>
+  <script src="js/camera.js?v=20260925a"></script>
   <script src="js/sound.js?v=20260914a"></script>
   <script src="js/canvas.js?v=20260922a"></script>
   <script src="js/pie-menu.js?v=20260905f"></script>

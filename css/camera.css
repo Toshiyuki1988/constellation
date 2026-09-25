@@ -581,6 +581,29 @@
   font-family: inherit; font-size: 10px; padding: 7px 10px; border-radius: 14px; cursor: pointer;
 }
 .cam-upload-ocr-btn:disabled { opacity: 0.5; cursor: default; }
+/* 画面共有からの取り込み(PC版Chrome向け・試験実装)。📁アップロードの右隣に置く。 */
+.cam-screen-ocr-btn { left: 104px; }
+.cam-screen-ocr-btn[hidden] { display: none; }
+/* 共有中だけ出る小さいプレビュー+取り込みボタン。下部のボタン列(.cam-select-actions)の
+   すぐ上、画面中央に浮かべる(左の段組み一覧・右の範囲サムネイル一覧と重ならない位置)。 */
+.cam-screenshare-panel {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 10;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px; border-radius: 12px;
+  background: rgba(0, 0, 0, 0.72); border: 1px solid rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.cam-screenshare-panel[hidden] { display: none; }
+.cam-screenshare-panel video {
+  width: 220px; height: 130px; object-fit: contain; background: #000; border-radius: 6px; display: block;
+}
+.cam-screenshare-actions { display: flex; gap: 8px; }
+.cam-screenshare-grab, .cam-screenshare-stop {
+  font-family: inherit; font-size: 11px; border-radius: 16px; padding: 8px 14px; cursor: pointer;
+}
+.cam-screenshare-grab { background: #55e6f7; color: #06232a; border: none; font-weight: 700; }
+.cam-screenshare-stop { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, 0.4); }
 
 /* ドラッグ&ドロップでも画像ファイルを渡せる(2026年9月追加)。ドラッグ中は画面全体を
    薄くハイライトして、ここへ落とせることを示す。 */
