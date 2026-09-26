@@ -545,7 +545,7 @@
    *   3. 1つの段落が長すぎる場合は、句点(。/！/？)の後で読みやすい長さに区切り直す。
    */
   function reflowBodyTextHtml(raw) {
-    // 「■ 」で始まる部分は見出し(2026年9月追加、OCRのmarkHeadings・添削欄の見出し推定が付ける)。
+    // 「■ 」で始まる部分は見出し(2026年9月追加、OCRのbookMode・添削欄の見出し推定が付ける)。
     // 行途中に■が来ても見出しの開始とみなし、その行の終わりまでを見出しとして独立させる。
     const text = (raw || '').replace(/\r\n?/g, '\n').replace(/[ \t　]*■[ \t　]*/g, '\n■');
     if (!text.trim()) return '';
@@ -1374,7 +1374,7 @@
       // 読み取る運用が中心のため、範囲を選ばない1回目の読み取りも「単発ですぐ閉じる」旧来の
       // 経路には流さず、常にサムネイル付きの続けて選択フローに固定する(呼ぶたびに単発/連続の
       // 挙動が変わって分かりにくい、という実機報告への対応)。
-      const result = await openCamera('caption', { continuous: true, markHeadings: true });
+      const result = await openCamera('caption', { continuous: true, bookMode: true });
       if (!result || result.kind !== 'text' || !result.text.trim()) return;
       if (!alEls.newBodyInput.isConnected || alEls.newPanel.hidden) {
         createTextCard(result.text.trim());
@@ -1400,7 +1400,7 @@
     const targetEntryId = readingEntryId;
     if (btnEl) btnEl.disabled = true;
     try {
-      const result = await openCamera('caption', { continuous: true, markHeadings: true }); // 上記handleOcrIntoDraft()と同じ理由
+      const result = await openCamera('caption', { continuous: true, bookMode: true }); // 上記handleOcrIntoDraft()と同じ理由
       if (!result || result.kind !== 'text' || !result.text.trim()) return;
       const stillEditingSame =
         editingEntry && readingEntryId === targetEntryId &&
