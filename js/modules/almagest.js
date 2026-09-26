@@ -958,9 +958,9 @@
       .al-read-text p { margin: 0 0 0.9em; }
       .al-read-text p:last-child { margin-bottom: 0; }
       .al-read-text .al-read-heading {
-        /* 本文パネルは明るい紙色(#f7f1e0)なので、見出しは本文より濃い焦げ茶で締める */
+        /* 本文パネルは明るい紙色(#f7f1e0)なので、見出しは黒の太字にする(ユーザー指定) */
         margin: 1.4em 0 0.6em; padding-left: 8px; border-left: 3px solid #9a7412;
-        font-size: 1.15em; font-weight: 700; line-height: 1.5; color: #1a1203;
+        font-size: 1.15em; font-weight: 900; line-height: 1.5; color: #000;
       }
       .al-read-text .al-read-heading:first-child { margin-top: 0; }
       /* 本文に貼り付けた画像(entry.bodyImages)の閲覧用ギャラリー(2026年9月追加)。
