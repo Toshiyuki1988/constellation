@@ -2401,6 +2401,8 @@ function updateSelectionOcrUi() {
 const AI_GRID_DEFAULT_COLS = 2;
 const AI_GRID_DEFAULT_ROWS = 4;
 const AI_GRID_MAX = 8;
+/** 格子の各セルに対して、自動配置する矩形が占める割合(縦横それぞれ)。 */
+const AI_GRID_CELL_FILL = 0.84;
 
 /** 現在のページ画像を、cols列×rows段の格子状に均等分割した矩形へ一括変換する(Gemini呼び出し
  *  無し、同期処理)。**実機報告(2026年9月)を受けた変更**: 当初は列数だけを指定して画像全体を
@@ -2425,9 +2427,14 @@ function generateGridRegions(cols, rows) {
     for (let r = 0; r < rows; r++) {
       order += 1;
       aiRegionSeq += 1;
-      const x = offsetX + c * cellW;
-      const y = offsetY + r * cellH;
-      regions.push({ id: `ai${aiRegionSeq}`, x, y, w: cellW, h: cellH, order, status: 'idle' });
+      // 各矩形はセルぴったりではなく一回り小さく(セル中央に寄せて)置く(2026年9月、実機報告:
+      // 隣同士が隙間なく接して画面いっぱいにひしめき合い、四隅のハンドルが重なってリサイズ
+      // しにくかった)。隙間ができるぶん、ハンドルを掴む余地と「どの矩形か」の見分けが付く。
+      const w = cellW * AI_GRID_CELL_FILL;
+      const h = cellH * AI_GRID_CELL_FILL;
+      const x = offsetX + c * cellW + (cellW - w) / 2;
+      const y = offsetY + r * cellH + (cellH - h) / 2;
+      regions.push({ id: `ai${aiRegionSeq}`, x, y, w, h, order, status: 'idle' });
     }
   }
   return regions;
