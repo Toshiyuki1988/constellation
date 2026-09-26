@@ -1838,6 +1838,7 @@
             <textarea class="al-edit-proofread-input" rows="2" placeholder="例: 「美術館」が「美術舘」になっている誤字を直して / 3段落目の改行の乱れを直して"></textarea>
             <div class="al-edit-proofread-btns">
               <button type="button" class="al-edit-proofread-btn">✍ 添削する</button>
+              <button type="button" class="al-edit-proofread-btn al-edit-autofix-btn" title="OCRの誤字・崩れた文だけを自動で直す(言い回しは変えない、API1回)">🪄 自動添削</button>
               <button type="button" class="al-edit-proofread-btn al-edit-heading-btn" title="OCR済みの文章から見出しを推定して「■ 」を付ける(API1回)">■ 見出しを推定</button>
             </div>
             <div class="al-edit-proofread-result" hidden></div>
@@ -1898,6 +1899,7 @@
       editProofreadInput: overlay.querySelector('.al-edit-proofread-input'),
       editProofreadBtn: overlay.querySelector('.al-edit-proofread-btn'),
       editHeadingBtn: overlay.querySelector('.al-edit-heading-btn'),
+      editAutofixBtn: overlay.querySelector('.al-edit-autofix-btn'),
       editProofreadResult: overlay.querySelector('.al-edit-proofread-result'),
       editCitationField: overlay.querySelector('.al-edit-citation-field'),
       editCitationInput: overlay.querySelector('.al-edit-citation-input'),
@@ -1981,6 +1983,7 @@
     rdEls.editOcrBtn.addEventListener('click', () => handleOcrIntoEdit(rdEls.editOcrBtn));
     rdEls.editProofreadBtn.addEventListener('click', () => handleProofread());
     rdEls.editHeadingBtn.addEventListener('click', () => handleProofread(HEADING_GUESS_INSTRUCTION));
+    rdEls.editAutofixBtn.addEventListener('click', () => handleProofread(AUTOFIX_INSTRUCTION));
     rdEls.editSaveBtn.addEventListener('click', handleSaveEdit);
     rdEls.editCancelBtn.addEventListener('click', handleCancelEdit);
 
@@ -2211,6 +2214,18 @@
     '行頭に「■ 」を付けたもの)を返してください。見出しの文言自体は変えないこと。本文の文には■を付けないこと。' +
     '既に行頭に「■」が付いている見出しは対象外です。確信の持てないものは含めないでください。';
 
+  // 「🪄 自動添削」ボタン用の固定指示(2026年9月追加)。自由指示で「変な文章を直して」と頼むのと
+  // 同じ使い方を1タップにしたもの。大まかな指示だとGeminiが筆者の意図的な言い回しまで直して
+  // しまう恐れがあるため、直してよい範囲(OCR由来の崩れ)と直してはいけない範囲を明示している。
+  const AUTOFIX_INSTRUCTION =
+    'この本文はOCRで読み取ったもので、読み取りミスによる不自然な箇所が含まれています。次のような「OCR由来の崩れ」だけを直してください: ' +
+    '誤字・似た形の文字の取り違え(例: 「舘」と「館」、「ロ」と「口」)、脱字・余計な文字の混入、' +
+    '段組み・改行の乱れで途中に割り込んだ文字や途切れた文、ルビ・ノンブル(ページ番号)・柱(欄外の見出し)が本文に混ざったもの、' +
+    '意味の通らない文字化け。' +
+    '一方で、筆者が意図して使っている言い回し・難解な表現・専門用語・独特の文体・句読点の打ち方・表記の揺れは、' +
+    '読みにくくても誤りではないので変えないでください。文の意味を変える書き換えや、より分かりやすくするための言い換えもしないでください。' +
+    '確信の持てない箇所は含めないでください。';
+
   async function handleProofread(fixedInstruction) {
     const instruction = fixedInstruction || rdEls.editProofreadInput.value.trim();
     const text = rdEls.editBodyInput.value;
@@ -2219,7 +2234,8 @@
     const targetEntryId = readingEntryId;
     rdEls.editProofreadBtn.disabled = true;
     rdEls.editHeadingBtn.disabled = true;
-    setStatus(fixedInstruction ? '見出しを推定中…' : '添削中…', { busy: true });
+    rdEls.editAutofixBtn.disabled = true;
+    setStatus(fixedInstruction === HEADING_GUESS_INSTRUCTION ? '見出しを推定中…' : '添削中…', { busy: true });
     try {
       const edits = await proofreadAlmagestText({ text, instruction });
       // 待っている間に編集を終えた/別の本を開いた場合は反映しない
@@ -2251,6 +2267,7 @@
     } finally {
       rdEls.editProofreadBtn.disabled = false;
       rdEls.editHeadingBtn.disabled = false;
+      rdEls.editAutofixBtn.disabled = false;
     }
   }
 
