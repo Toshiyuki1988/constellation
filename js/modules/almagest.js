@@ -545,7 +545,30 @@
    *   3. 1つの段落が長すぎる場合は、句点(。/！/？)の後で読みやすい長さに区切り直す。
    */
   function reflowBodyTextHtml(raw) {
-    const text = (raw || '').replace(/\r\n?/g, '\n');
+    // 「■ 」で始まる部分は見出し(2026年9月追加、OCRのmarkHeadings・添削欄の見出し推定が付ける)。
+    // 行途中に■が来ても見出しの開始とみなし、その行の終わりまでを見出しとして独立させる。
+    const text = (raw || '').replace(/\r\n?/g, '\n').replace(/[ \t　]*■[ \t　]*/g, '\n■');
+    if (!text.trim()) return '';
+    const out = [];
+    let chunk = [];
+    const flush = () => {
+      if (chunk.length) out.push(reflowParagraphsHtml(chunk.join('\n')));
+      chunk = [];
+    };
+    text.split('\n').forEach((line) => {
+      if (line.startsWith('■')) {
+        flush();
+        const heading = line.slice(1).trim();
+        if (heading) out.push(`<h4 class="al-read-heading">${escapeHtml(heading)}</h4>`);
+      } else {
+        chunk.push(line);
+      }
+    });
+    flush();
+    return out.join('');
+  }
+
+  function reflowParagraphsHtml(text) {
     if (!text.trim()) return '';
     const rawParagraphs = text.split(/\n{2,}/);
     const paragraphs = [];
@@ -934,6 +957,11 @@
       }
       .al-read-text p { margin: 0 0 0.9em; }
       .al-read-text p:last-child { margin-bottom: 0; }
+      .al-read-text .al-read-heading {
+        margin: 1.4em 0 0.6em; padding-left: 8px; border-left: 3px solid #c9a227;
+        font-size: 1.15em; font-weight: 700; line-height: 1.5; color: #f1e4bd;
+      }
+      .al-read-text .al-read-heading:first-child { margin-top: 0; }
       /* 本文に貼り付けた画像(entry.bodyImages)の閲覧用ギャラリー(2026年9月追加)。
          スクラップブックのように、切り抜き画像をそのまま縦に並べて表示する。 */
       .al-read-body-images { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
@@ -975,8 +1003,9 @@
         color: rgba(255, 255, 255, 0.6); font-family: 'IBM Plex Mono', monospace; font-size: 11px; cursor: pointer;
       }
       .al-edit-cancel-btn:hover { border-color: #c9a227; color: #f1e4bd; }
+      .al-edit-proofread-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
       .al-edit-proofread-btn {
-        margin-top: 6px; padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(201, 162, 39, 0.4);
+        padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(201, 162, 39, 0.4);
         background: rgba(201, 162, 39, 0.14); color: #f1e4bd; font-family: 'Zen Kaku Gothic New', sans-serif;
         font-weight: 700; font-size: 12px; cursor: pointer;
       }
@@ -1344,7 +1373,7 @@
       // 読み取る運用が中心のため、範囲を選ばない1回目の読み取りも「単発ですぐ閉じる」旧来の
       // 経路には流さず、常にサムネイル付きの続けて選択フローに固定する(呼ぶたびに単発/連続の
       // 挙動が変わって分かりにくい、という実機報告への対応)。
-      const result = await openCamera('caption', { continuous: true });
+      const result = await openCamera('caption', { continuous: true, markHeadings: true });
       if (!result || result.kind !== 'text' || !result.text.trim()) return;
       if (!alEls.newBodyInput.isConnected || alEls.newPanel.hidden) {
         createTextCard(result.text.trim());
@@ -1370,7 +1399,7 @@
     const targetEntryId = readingEntryId;
     if (btnEl) btnEl.disabled = true;
     try {
-      const result = await openCamera('caption', { continuous: true }); // 上記handleOcrIntoDraft()と同じ理由
+      const result = await openCamera('caption', { continuous: true, markHeadings: true }); // 上記handleOcrIntoDraft()と同じ理由
       if (!result || result.kind !== 'text' || !result.text.trim()) return;
       const stillEditingSame =
         editingEntry && readingEntryId === targetEntryId &&
@@ -1806,7 +1835,10 @@
           <div class="al-field al-edit-proofread-field">
             <label>添削(Geminiに指示して本文の特定箇所を直す)</label>
             <textarea class="al-edit-proofread-input" rows="2" placeholder="例: 「美術館」が「美術舘」になっている誤字を直して / 3段落目の改行の乱れを直して"></textarea>
-            <button type="button" class="al-edit-proofread-btn">✍ 添削する</button>
+            <div class="al-edit-proofread-btns">
+              <button type="button" class="al-edit-proofread-btn">✍ 添削する</button>
+              <button type="button" class="al-edit-proofread-btn al-edit-heading-btn" title="OCR済みの文章から見出しを推定して「■ 」を付ける(API1回)">■ 見出しを推定</button>
+            </div>
             <div class="al-edit-proofread-result" hidden></div>
           </div>
           <div class="al-field al-edit-citation-field">
@@ -1864,6 +1896,7 @@
       editProofreadField: overlay.querySelector('.al-edit-proofread-field'),
       editProofreadInput: overlay.querySelector('.al-edit-proofread-input'),
       editProofreadBtn: overlay.querySelector('.al-edit-proofread-btn'),
+      editHeadingBtn: overlay.querySelector('.al-edit-heading-btn'),
       editProofreadResult: overlay.querySelector('.al-edit-proofread-result'),
       editCitationField: overlay.querySelector('.al-edit-citation-field'),
       editCitationInput: overlay.querySelector('.al-edit-citation-input'),
@@ -1945,7 +1978,8 @@
     });
 
     rdEls.editOcrBtn.addEventListener('click', () => handleOcrIntoEdit(rdEls.editOcrBtn));
-    rdEls.editProofreadBtn.addEventListener('click', handleProofread);
+    rdEls.editProofreadBtn.addEventListener('click', () => handleProofread());
+    rdEls.editHeadingBtn.addEventListener('click', () => handleProofread(HEADING_GUESS_INSTRUCTION));
     rdEls.editSaveBtn.addEventListener('click', handleSaveEdit);
     rdEls.editCancelBtn.addEventListener('click', handleCancelEdit);
 
@@ -2167,14 +2201,24 @@
    * ペアを編集フォームの本文欄へローカルで置換する。保存はしない(内容を確認して「保存」を押すまで
    * 本自体は変わらない、キャンセルすれば元に戻る)。本文に一致しなかった修正案は適用せず一覧に示す。
    */
-  async function handleProofread() {
-    const instruction = rdEls.editProofreadInput.value.trim();
+  // 「■ 見出しを推定」ボタン用の固定指示(2026年9月追加)。画像はもう手元に無いため、文字だけ
+  // (句点で終わらない短い行、章番号、前後の文脈)から推定させる。見た目で判断できるOCR時より精度は落ちる。
+  const HEADING_GUESS_INSTRUCTION =
+    'この本文はOCRで読み取ったもので、見出しと本文の区別が失われています。文字の並びや文脈(句点で終わらない短い一文、' +
+    '章・節の番号、その後に続く本文の内容のまとめになっている語句など)から、見出し・小見出しと考えられる部分を推定してください。' +
+    '各見出しについて、beforeにはその見出しの文字列を、afterには「\\n■ 見出しの文字列\\n」(JSON上の改行\\nで見出しの前後を区切り、' +
+    '行頭に「■ 」を付けたもの)を返してください。見出しの文言自体は変えないこと。本文の文には■を付けないこと。' +
+    '既に行頭に「■」が付いている見出しは対象外です。確信の持てないものは含めないでください。';
+
+  async function handleProofread(fixedInstruction) {
+    const instruction = fixedInstruction || rdEls.editProofreadInput.value.trim();
     const text = rdEls.editBodyInput.value;
     if (!instruction) { setStatus('添削の指示を入力してください', { important: true }); return; }
     if (!text.trim()) { setStatus('本文が空です', { important: true }); return; }
     const targetEntryId = readingEntryId;
     rdEls.editProofreadBtn.disabled = true;
-    setStatus('添削中…', { busy: true });
+    rdEls.editHeadingBtn.disabled = true;
+    setStatus(fixedInstruction ? '見出しを推定中…' : '添削中…', { busy: true });
     try {
       const edits = await proofreadAlmagestText({ text, instruction });
       // 待っている間に編集を終えた/別の本を開いた場合は反映しない
@@ -2205,6 +2249,7 @@
       setStatus(`添削に失敗しました: ${err.message}`, { important: true });
     } finally {
       rdEls.editProofreadBtn.disabled = false;
+      rdEls.editHeadingBtn.disabled = false;
     }
   }
 

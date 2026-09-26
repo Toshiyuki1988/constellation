@@ -117,8 +117,14 @@ async function askGemini({ prompt, imageBase64, mimeType, images, tools, signal,
  * カバーできるようにした。あわせて、長文でも応答が途中で切れないようmaxOutputTokensを
  * 明示的に大きく確保している。
  */
-async function ocrImage(blob, { signal } = {}) {
+async function ocrImage(blob, { signal, markHeadings } = {}) {
   const imageBase64 = await blobToBase64(blob);
+  // Almagest(書籍・記事の取り込み)から呼ばれた時だけ、見た目(文字の大きさ・太さ・余白)から
+  // 見出しと判断できる行に「■ 」を付けさせる(2026年9月追加)。読書ビュー側で見出し表示になる。
+  const headingInstruction = markHeadings
+    ? '見出し・小見出し(本文より文字が大きい・太い・前後に余白がある等、見た目から見出しと判断できる行)は、' +
+      '独立した1行にし、行頭に「■ 」を付けてください。本文の行には付けないでください。'
+    : '';
   const raw = await askGemini({
     prompt:
       'この画像に写っている文字を、一字一句省略せず、書かれている通りに全て書き写してください。' +
@@ -126,6 +132,7 @@ async function ocrImage(blob, { signal } = {}) {
       '書籍・記事のページのような長い文章のこともあります。どちらの場合も、要約したり' +
       '重要そうな部分だけを選んで抜き出したりせず、視認できる文字を最初から最後まで漏れなく' +
       '書き写してください。' +
+      headingInstruction +
       '前置き・説明・「以下の通りです」のような一言も一切付けず、書き写した文字だけをそのまま返してください。' +
       'テキストが見当たらない場合は「(テキストなし)」とだけ返してください。',
     imageBase64,

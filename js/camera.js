@@ -110,6 +110,7 @@ function openCamera(initialMode, opts) {
   ensureCameraDom();
   bindCameraViewportSync();
   captionForceContinuous = Boolean(opts && opts.continuous);
+  captionMarkHeadings = Boolean(opts && opts.markHeadings);
   return new Promise((resolve) => {
     resolveCamera = resolve;
     camEls.overlay.classList.add('open');
@@ -1932,6 +1933,9 @@ let captionSelection = null; // 選択レイヤー内のCSSピクセル座標 {x
 // (resetCaptionState())を挟んでも同じopenCamera()セッション中は維持したいため、
 // resetCaptionState()ではリセットしない(teardownCamera()でセッション終了時にのみ戻す)。
 let captionForceContinuous = false;
+// Almagestから呼ばれた時だけ、OCRに見出し行へ「■ 」を付けさせる(2026年9月追加)。
+// キャプション撮影など他の呼び出し元では付けない。
+let captionMarkHeadings = false;
 let selectPointerActive = false;
 let selectPointerId = null;
 let selectStartX = 0;
@@ -2773,7 +2777,7 @@ async function runAiRegionOcr(region) {
   captionInlineController = controller;
   ocrActiveControllers.add(controller);
   try {
-    const text = await ocrImage(blob, { signal: controller.signal });
+    const text = await ocrImage(blob, { signal: controller.signal, markHeadings: captionMarkHeadings });
     if (gen !== captionSelectionGen) { URL.revokeObjectURL(thumbUrl); return; }
     if (!text || text.includes('(テキストなし)')) {
       region.status = 'empty';
@@ -3151,7 +3155,7 @@ async function runSelectionOcrInline(blob) {
   captionInlineController = controller;
   ocrActiveControllers.add(controller); // PiPの✕(全件中止)にも相乗りできるよう、共有Setにも登録しておく
   try {
-    const text = await ocrImage(blob, { signal: controller.signal });
+    const text = await ocrImage(blob, { signal: controller.signal, markHeadings: captionMarkHeadings });
     if (gen !== captionSelectionGen) {
       // テキスト自体は取得できているが、その間に撮り直し/クローズ等でセッションが無効になった
       // ため、サムネイルへは反映しない(このケースが疑われる場合は?debugパネルで確認できる
@@ -3274,7 +3278,7 @@ function runOcrInBackground(blob, resolve) {
   const controller = new AbortController();
   ocrActiveControllers.add(controller);
   updateOcrPip();
-  ocrImage(blob, { signal: controller.signal })
+  ocrImage(blob, { signal: controller.signal, markHeadings: captionMarkHeadings })
     .then((text) => {
       camDebugLog(`OCR結果: ${JSON.stringify(text)}`);
       if (!text || text.includes('(テキストなし)')) {
@@ -3467,6 +3471,7 @@ function closeCamera() {
 
 function teardownCamera() {
   resolveCamera = null;
+  captionMarkHeadings = false;
   captionForceContinuous = false; // 次のopenCamera()呼び出し元(既定は単発扱い)へ引き継がない
   stopCameraStream(); // track.stop()がハードウェアを解放するため、トーチも自動的に消える
   stopScreenShare();
