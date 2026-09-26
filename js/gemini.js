@@ -304,6 +304,33 @@ async function summarizeAlmagestText({ text, mode }) {
   return raw.trim();
 }
 
+/**
+ * Almagestの編集フォーム「添削欄」用(2026年9月追加): ユーザーの指示に沿って、本文のうち
+ * 直すべき箇所だけを「元の文字列→直した文字列」のペアで返させる(API呼び出し1回)。
+ * 全文を書き直させない理由: 長文だとLiteモデルが途中で省略・要約してしまったり、指示と無関係な
+ * 箇所まで勝手に言い回しを変えたりする恐れがあるため。置換自体は呼び出し側がローカルで行う。
+ * @param {{text: string, instruction: string}} params
+ * @returns {Promise<{before: string, after: string, reason?: string}[]>}
+ */
+async function proofreadAlmagestText({ text, instruction }) {
+  const prompt =
+    '以下は書物・記事などの本文です(OCRで読み取ったものが多く、誤字や改行の乱れを含むことがあります)。\n' +
+    'ユーザーの指示に従って、本文の中で修正が必要な箇所だけを特定してください。\n\n' +
+    `【ユーザーの指示】\n${instruction}\n\n` +
+    `【本文】\n${text}\n\n` +
+    '次のJSON形式だけで答えてください(前置き・コードフェンス不要):\n' +
+    '{"edits":[{"before":"本文中の修正前の文字列","after":"修正後の文字列","reason":"修正理由(短く)"}]}\n' +
+    '注意:\n' +
+    '- beforeは本文から一字一句そのまま(空白・改行・句読点も含めて)コピーした文字列にすること。本文に存在しない文字列を書かないこと。\n' +
+    '- beforeは本文中で1箇所に特定できる程度の長さにすること(短すぎて複数箇所に一致しないよう、前後の文字を少し含めてよい)。\n' +
+    '- 指示と関係の無い箇所は変更しないこと。修正箇所が無ければ{"edits":[]}を返すこと。';
+  const raw = await askGemini({ prompt, maxOutputTokens: 8192 });
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const jsonText = cleaned.slice(cleaned.indexOf('{'), cleaned.lastIndexOf('}') + 1);
+  const parsed = JSON.parse(jsonText);
+  return (parsed.edits || []).filter((e) => e && typeof e.before === 'string' && e.before && typeof e.after === 'string');
+}
+
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

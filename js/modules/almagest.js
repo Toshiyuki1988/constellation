@@ -975,6 +975,24 @@
         color: rgba(255, 255, 255, 0.6); font-family: 'IBM Plex Mono', monospace; font-size: 11px; cursor: pointer;
       }
       .al-edit-cancel-btn:hover { border-color: #c9a227; color: #f1e4bd; }
+      .al-edit-proofread-btn {
+        margin-top: 6px; padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(201, 162, 39, 0.4);
+        background: rgba(201, 162, 39, 0.14); color: #f1e4bd; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-weight: 700; font-size: 12px; cursor: pointer;
+      }
+      .al-edit-proofread-btn:hover { background: rgba(201, 162, 39, 0.28); }
+      .al-edit-proofread-btn:disabled { opacity: 0.5; cursor: default; }
+      .al-edit-proofread-result {
+        margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.05);
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11.5px; line-height: 1.6; color: rgba(255, 255, 255, 0.85);
+        max-height: 180px; overflow-y: auto;
+      }
+      .al-proofread-row + .al-proofread-row { margin-top: 4px; }
+      .al-proofread-row del { color: rgba(255, 140, 140, 0.9); }
+      .al-proofread-row ins { color: #b8f0c4; text-decoration: none; }
+      .al-proofread-row--miss { opacity: 0.55; }
+      .al-proofread-mark { color: #c9a227; margin-right: 4px; }
+      .al-proofread-reason { display: block; font-size: 10.5px; color: rgba(255, 255, 255, 0.5); }
 
       .al-read-actions {
         display: flex; gap: 8px; padding: 11px 16px; flex: none;
@@ -1785,6 +1803,12 @@
             <textarea class="al-edit-body-input al-new-body-input" placeholder="画像をドロップすると切り抜き画像をそのまま追加できます"></textarea>
             <div class="al-body-images al-edit-body-images" hidden></div>
           </div>
+          <div class="al-field al-edit-proofread-field">
+            <label>添削(Geminiに指示して本文の特定箇所を直す)</label>
+            <textarea class="al-edit-proofread-input" rows="2" placeholder="例: 「美術館」が「美術舘」になっている誤字を直して / 3段落目の改行の乱れを直して"></textarea>
+            <button type="button" class="al-edit-proofread-btn">✍ 添削する</button>
+            <div class="al-edit-proofread-result" hidden></div>
+          </div>
           <div class="al-field al-edit-citation-field">
             <label>出典元(任意)</label>
             <input type="text" class="al-edit-citation-input">
@@ -1837,6 +1861,10 @@
       editBodyInput: overlay.querySelector('.al-edit-body-input'),
       editBodyImages: overlay.querySelector('.al-edit-body-images'),
       editOcrBtn: overlay.querySelector('.al-edit-ocr-btn'),
+      editProofreadField: overlay.querySelector('.al-edit-proofread-field'),
+      editProofreadInput: overlay.querySelector('.al-edit-proofread-input'),
+      editProofreadBtn: overlay.querySelector('.al-edit-proofread-btn'),
+      editProofreadResult: overlay.querySelector('.al-edit-proofread-result'),
       editCitationField: overlay.querySelector('.al-edit-citation-field'),
       editCitationInput: overlay.querySelector('.al-edit-citation-input'),
       editUrlField: overlay.querySelector('.al-edit-url-field'),
@@ -1917,6 +1945,7 @@
     });
 
     rdEls.editOcrBtn.addEventListener('click', () => handleOcrIntoEdit(rdEls.editOcrBtn));
+    rdEls.editProofreadBtn.addEventListener('click', handleProofread);
     rdEls.editSaveBtn.addEventListener('click', handleSaveEdit);
     rdEls.editCancelBtn.addEventListener('click', handleCancelEdit);
 
@@ -1974,6 +2003,9 @@
       rdEls.editBodyField.hidden = isUrl;
       rdEls.editThumbField.hidden = isUrl;
       rdEls.editCitationField.hidden = isUrl;
+      rdEls.editProofreadField.hidden = isUrl;
+      rdEls.editProofreadResult.hidden = true;
+      rdEls.editProofreadResult.innerHTML = '';
       rdEls.editUrlField.hidden = !isUrl;
       if (isUrl) {
         rdEls.editUrlInput.value = entry.url || '';
@@ -2127,6 +2159,52 @@
       setStatus(`要約に失敗しました: ${err.message}`, { important: true });
     } finally {
       if (btnEl) btnEl.disabled = false;
+    }
+  }
+
+  /**
+   * 添削欄(2026年9月追加): 指示+編集中の本文をGeminiへ1回だけ送り、返ってきた「修正前→修正後」の
+   * ペアを編集フォームの本文欄へローカルで置換する。保存はしない(内容を確認して「保存」を押すまで
+   * 本自体は変わらない、キャンセルすれば元に戻る)。本文に一致しなかった修正案は適用せず一覧に示す。
+   */
+  async function handleProofread() {
+    const instruction = rdEls.editProofreadInput.value.trim();
+    const text = rdEls.editBodyInput.value;
+    if (!instruction) { setStatus('添削の指示を入力してください', { important: true }); return; }
+    if (!text.trim()) { setStatus('本文が空です', { important: true }); return; }
+    const targetEntryId = readingEntryId;
+    rdEls.editProofreadBtn.disabled = true;
+    setStatus('添削中…', { busy: true });
+    try {
+      const edits = await proofreadAlmagestText({ text, instruction });
+      // 待っている間に編集を終えた/別の本を開いた場合は反映しない
+      if (!editingEntry || readingEntryId !== targetEntryId) return;
+      let body = rdEls.editBodyInput.value;
+      const rows = edits.map((ed) => {
+        const idx = body.indexOf(ed.before);
+        if (idx < 0) return { ed, ok: false };
+        body = body.slice(0, idx) + ed.after + body.slice(idx + ed.before.length);
+        return { ed, ok: true };
+      });
+      rdEls.editBodyInput.value = body;
+      const applied = rows.filter((r) => r.ok).length;
+      rdEls.editProofreadResult.hidden = false;
+      rdEls.editProofreadResult.innerHTML = rows.length === 0
+        ? '<div class="al-proofread-row">修正箇所は見つかりませんでした</div>'
+        : rows.map((r) => `
+            <div class="al-proofread-row${r.ok ? '' : ' al-proofread-row--miss'}">
+              <span class="al-proofread-mark">${r.ok ? '✓' : '✗'}</span>
+              <del>${escapeHtml(r.ed.before)}</del> → <ins>${escapeHtml(r.ed.after)}</ins>
+              ${r.ed.reason ? `<span class="al-proofread-reason">${escapeHtml(r.ed.reason)}</span>` : ''}
+              ${r.ok ? '' : '<span class="al-proofread-reason">本文に一致せず未適用</span>'}
+            </div>`).join('');
+      setStatus(rows.length === 0 ? '修正箇所はありませんでした'
+        : `${applied}/${rows.length}件を本文欄に反映しました(「保存」で確定)`);
+    } catch (err) {
+      console.error(err);
+      setStatus(`添削に失敗しました: ${err.message}`, { important: true });
+    } finally {
+      rdEls.editProofreadBtn.disabled = false;
     }
   }
 
