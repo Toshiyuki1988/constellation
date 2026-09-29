@@ -2227,6 +2227,29 @@ html, body {
 }
 .star-card-book-title { font-family: var(--sans); font-weight: 700; font-size: 12px; line-height: 1.4; }
 .star-card-book-missing { font-family: var(--mono); font-size: 10px; color: var(--muted); font-style: italic; }
+/* 本カード下部のアクション列(2026年9月追加): 👦Boy/🎓Professor(かざすと要約ポップアップ)、
+   📖(Almagestへ移動)。要約がまだ無い人物アイコンは薄く表示する。 */
+.star-card-book-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.star-card-book-act {
+  width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(201, 162, 39, 0.55);
+  background: rgba(201, 162, 39, 0.1); font-size: 14px; line-height: 1; padding: 0;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.star-card-book-act:hover { background: rgba(201, 162, 39, 0.25); }
+.star-card-book-act.empty { opacity: 0.4; }
+.star-card-book-act--open { margin-left: auto; }
+.star-card-book-summary-popup {
+  position: fixed; z-index: 150; max-width: min(340px, calc(100vw - 16px)); max-height: 45vh; overflow-y: auto;
+  padding: 10px 12px; border-radius: 10px;
+  background: rgba(20, 16, 6, 0.88); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(201, 162, 39, 0.55); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  color: #f5ecd0;
+}
+.star-card-book-summary-label {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; color: #e0c465; margin-bottom: 5px;
+}
+.star-card-book-summary-text { font-family: var(--sans); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; }
+.star-card-book-summary-text.muted { color: rgba(245, 236, 208, 0.55); font-size: 11.5px; }
 
 /* WormGateのジャンプ着地演出と同じ視覚言語(緑のリング)を、こちらは基本機能側で独自に持つ */
 .star-card--landed {

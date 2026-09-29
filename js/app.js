@@ -2679,6 +2679,9 @@ function renderCard(card) {
   if (isChatCard) {
     wireChatCard(card, el);
   }
+  if (isBookCard && window.wireAlmagestBookCard) {
+    window.wireAlmagestBookCard(card, el);
+  }
 
   // uploadQueuedもここに含める(2026年9月追加): 動画・音声カードはthumbDataUrlを持たないため、
   // 以前の条件(imageFileId || thumbDataUrl)だと、Drive送信前は本体自体をobserveMediaForLazyLoad()

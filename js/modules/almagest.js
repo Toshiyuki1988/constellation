@@ -2560,13 +2560,127 @@
       );
     }
     const coverHtml = entry.thumbDataUrl ? `<img class="star-card-book-cover" src="${escapeAttrLocal(entry.thumbDataUrl)}" alt="">` : '';
+    // カード下部のアクション列(2026年9月追加): 👦Boy/🎓Professorにかざす(PCはホバー、
+    // スマホはタップ)と、その本の要約(あれば)がポップアップする。📖をタップすると
+    // Almagestの読書ビューへ移動する(しおりは🔖で外部URLを開く、本棚と同じ挙動)。
+    const hasEasy = Boolean(entry.summaries && entry.summaries.easy);
+    const hasAcademic = Boolean(entry.summaries && entry.summaries.academic);
+    const personaBtns = entry.kind === 'url' ? '' : (
+      `<button type="button" class="star-card-book-act star-card-book-act--persona${hasEasy ? '' : ' empty'}" data-book-summary="easy" title="Boyの要約">👦</button>` +
+      `<button type="button" class="star-card-book-act star-card-book-act--persona${hasAcademic ? '' : ' empty'}" data-book-summary="academic" title="Professorの要約">🎓</button>`
+    );
     return (
       `<div class="star-card-book-head"><span class="star-card-book-icon">${entry.kind === 'url' ? '🔖' : '📖'}</span><span class="star-card-book-label">Almagest</span></div>` +
       coverHtml +
       `<div class="star-card-book-title">${escapeHtml(entry.title || '(無題)')}</div>` +
+      `<div class="star-card-book-actions">${personaBtns}` +
+      `<button type="button" class="star-card-book-act star-card-book-act--open" data-book-open title="${entry.kind === 'url' ? 'リンクを開く' : 'Almagestで開く'}">${entry.kind === 'url' ? '🔖' : '📖'}</button></div>` +
       EDIT_GUIDE_HANDLES_HTML + editGuideHexHtml('book')
     );
   }
+
+  /* ---------------- 本カードの要約ポップアップ(2026年9月追加) ---------------- */
+
+  let bookSummaryPopupEl = null;
+  let bookSummaryPopupAnchor = null; // 今ポップアップを出している元のボタン
+  let bookSummaryPopupPinned = false; // タップで開いた(=ホバーを外しても閉じない)か
+
+  function hideBookSummaryPopup() {
+    if (bookSummaryPopupEl) bookSummaryPopupEl.remove();
+    bookSummaryPopupEl = null;
+    bookSummaryPopupAnchor = null;
+    bookSummaryPopupPinned = false;
+  }
+
+  function positionBookSummaryPopup(anchor) {
+    if (!bookSummaryPopupEl) return;
+    const r = anchor.getBoundingClientRect();
+    const pw = bookSummaryPopupEl.offsetWidth;
+    const ph = bookSummaryPopupEl.offsetHeight;
+    const margin = 8;
+    let left = r.left + r.width / 2 - pw / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
+    // 基本はボタンの上に出し、画面上端に収まらなければ下に出す。
+    let top = r.top - ph - 8;
+    if (top < margin) top = Math.min(r.bottom + 8, window.innerHeight - ph - margin);
+    bookSummaryPopupEl.style.left = `${left}px`;
+    bookSummaryPopupEl.style.top = `${Math.max(margin, top)}px`;
+  }
+
+  async function showBookSummaryPopup(anchor, entryId, mode, pinned) {
+    hideBookSummaryPopup();
+    const label = mode === 'easy' ? '👦 Boy' : '🎓 Professor';
+    const pop = document.createElement('div');
+    pop.className = 'star-card-book-summary-popup';
+    pop.innerHTML = `<div class="star-card-book-summary-label">${label}</div><div class="star-card-book-summary-text">読み込み中…</div>`;
+    pop.addEventListener('pointerdown', (e) => e.stopPropagation());
+    document.body.appendChild(pop);
+    bookSummaryPopupEl = pop;
+    bookSummaryPopupAnchor = anchor;
+    bookSummaryPopupPinned = pinned;
+    positionBookSummaryPopup(anchor);
+
+    const entry = getAlmagestEntryById(entryId);
+    let text = null;
+    let message = null;
+    if (!entry) {
+      message = '(書庫から削除されました)';
+    } else if (!(entry.summaries && entry.summaries[mode])) {
+      message = 'まだ要約がありません。Almagestの読書ビューで作成できます。';
+    } else {
+      // 索引には要約の有無(true/false)しか無いので、本文ファイルから実際の文章を取得する
+      // (一度開いた本・端末内キャッシュ済みの本なら通信しない)。
+      if (!isEntryContentLoaded(entry)) await ensureEntryContentLoaded(entry);
+      const v = entry.summaries && entry.summaries[mode];
+      if (typeof v === 'string' && v) text = v;
+      else message = isEntryContentLoaded(entry) ? 'まだ要約がありません。' : 'オフラインのため要約を読み込めませんでした。';
+    }
+    if (bookSummaryPopupEl !== pop) return; // 読み込み中に閉じられた/別のポップアップに替わった
+    const textEl = pop.querySelector('.star-card-book-summary-text');
+    textEl.textContent = text || message;
+    textEl.classList.toggle('muted', !text);
+    positionBookSummaryPopup(anchor);
+  }
+
+  /** js/app.jsのrenderCard()から、本カードのDOMを作った直後に呼ばれる(薄いフック)。 */
+  function wireAlmagestBookCard(card, el) {
+    el.querySelectorAll('.star-card-book-act').forEach((btn) => {
+      // キャンバスのパン・カードの長押し判定へ伝わらないようにする。
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    });
+    el.querySelectorAll('[data-book-summary]').forEach((btn) => {
+      const mode = btn.dataset.bookSummary;
+      btn.addEventListener('pointerenter', (e) => {
+        if (e.pointerType !== 'mouse' || bookSummaryPopupPinned) return;
+        showBookSummaryPopup(btn, card.almagestEntryId, mode, false);
+      });
+      btn.addEventListener('pointerleave', (e) => {
+        if (e.pointerType !== 'mouse' || bookSummaryPopupPinned) return;
+        if (bookSummaryPopupAnchor === btn) hideBookSummaryPopup();
+      });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // タップ(スマホ)/クリック(PC)では開いたままにする。同じボタンをもう一度押すと閉じる。
+        if (bookSummaryPopupAnchor === btn && bookSummaryPopupPinned) { hideBookSummaryPopup(); return; }
+        showBookSummaryPopup(btn, card.almagestEntryId, mode, true);
+      });
+    });
+    const openBtn = el.querySelector('[data-book-open]');
+    if (openBtn) {
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideBookSummaryPopup();
+        jumpToAlmagestEntry(card.almagestEntryId);
+      });
+    }
+  }
+
+  // 開いたままのポップアップは、ポップアップ・元のボタン以外をタップしたら閉じる。
+  document.addEventListener('pointerdown', (e) => {
+    if (!bookSummaryPopupEl) return;
+    if (bookSummaryPopupEl.contains(e.target) || (bookSummaryPopupAnchor && bookSummaryPopupAnchor.contains(e.target))) return;
+    hideBookSummaryPopup();
+  }, true);
 
   // Escキーで閉じる(モジュール共通デザイン言語)。読書ビューが開いていればそちらを先に
   // 閉じ、本棚だけが開いていれば本棚ごと閉じる(Crews Constellationと同じ考え方)。
@@ -2580,6 +2694,7 @@
   window.getAlmagestEntryById = getAlmagestEntryById;
   window.almagestBookCardInnerHtml = almagestBookCardInnerHtml;
   window.jumpToAlmagestEntry = jumpToAlmagestEntry;
+  window.wireAlmagestBookCard = wireAlmagestBookCard;
   window.openAlmagest = openAlmagest;
   window.initAlmagestData = initAlmagestData;
   window.buildAlmagestChatContext = buildAlmagestChatContext;
