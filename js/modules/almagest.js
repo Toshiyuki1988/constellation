@@ -139,7 +139,60 @@
     return (raw || '')
       .split(',')
       .map((t) => t.trim())
-      .filter(Boolean);
+      .filter((t, i, arr) => t && arr.indexOf(t) === i);
+  }
+
+  /** タグ入力欄の右に「▾ 既存のタグ」ボタンを付け、押すと登録済みタグ(collectAllTags()、
+   *  使用中のタグだけを都度集計するので使用0件のタグは出てこない)の一覧が入力欄の下に開く
+   *  プルダウン(2026年9月追加)。タップするたびに入力欄のカンマ区切りへ追加/削除をトグルする。
+   *  新規登録パネルは縦スクロールする領域のため、absolute配置のポップオーバーではなく
+   *  入力欄の直下に展開する形にしてクリップを避けている。 */
+  function attachTagPicker(inputEl) {
+    const wrap = document.createElement('div');
+    wrap.className = 'al-tag-input-row';
+    inputEl.parentNode.insertBefore(wrap, inputEl);
+    wrap.appendChild(inputEl);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'al-tag-picker-btn';
+    btn.textContent = '▾ 既存';
+    wrap.appendChild(btn);
+    const list = document.createElement('div');
+    list.className = 'al-tag-picker-list';
+    list.hidden = true;
+    wrap.after(list);
+
+    function render() {
+      const all = collectAllTags();
+      const current = parseTags(inputEl.value);
+      list.innerHTML = all.length
+        ? all.map((t) => `<button type="button" class="al-tag-picker-item${current.includes(t) ? ' selected' : ''}" data-tag="${escapeAttrLocal(t)}">${current.includes(t) ? '✓ ' : ''}${escapeHtml(t)}</button>`).join('')
+        : '<span class="al-tag-picker-empty">まだタグがありません</span>';
+    }
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      list.hidden = !list.hidden;
+      btn.classList.toggle('open', !list.hidden);
+      if (!list.hidden) render();
+    });
+    list.addEventListener('pointerdown', (e) => e.stopPropagation());
+    list.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = e.target.closest('.al-tag-picker-item');
+      if (!item) return;
+      const tag = item.dataset.tag;
+      const current = parseTags(inputEl.value);
+      const next = current.includes(tag) ? current.filter((t) => t !== tag) : [...current, tag];
+      inputEl.value = next.join(', ');
+      // 新規登録パネルの自動保存など、inputイベントを見ている既存の処理へ変更を伝える。
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      render();
+    });
+    inputEl.addEventListener('input', () => { if (!list.hidden) render(); });
+    return {
+      close() { list.hidden = true; btn.classList.remove('open'); },
+    };
   }
 
   function byCreatedDesc(a, b) {
@@ -705,6 +758,30 @@
         overflow-wrap: anywhere; word-break: break-word;
       }
       .al-field input::placeholder, .al-field textarea::placeholder { color: rgba(255, 255, 255, 0.3); }
+      /* タグ入力欄+「▾ 既存」プルダウン(2026年9月追加)。 */
+      .al-tag-input-row { display: flex; gap: 6px; align-items: stretch; }
+      .al-tag-input-row input { flex: 1; min-width: 0; }
+      .al-tag-picker-btn {
+        flex: none; padding: 0 10px; border-radius: 6px; border: 1px solid rgba(201, 162, 39, 0.5);
+        background: rgba(201, 162, 39, 0.14); color: #f1e4bd; font-family: 'Zen Kaku Gothic New', sans-serif;
+        font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap;
+      }
+      .al-tag-picker-btn.open { background: rgba(201, 162, 39, 0.32); }
+      .al-tag-picker-list {
+        display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; padding: 8px;
+        background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(201, 162, 39, 0.28); border-radius: 8px;
+        max-height: 160px; overflow-y: auto;
+      }
+      .al-tag-picker-list[hidden] { display: none; }
+      .al-tag-picker-item {
+        font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 11.5px; padding: 5px 11px; border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.75); cursor: pointer;
+      }
+      .al-tag-picker-item.selected {
+        background: linear-gradient(155deg, #c9a227, #8a6d10); color: #241a06; border-color: transparent; font-weight: 700;
+      }
+      .al-tag-picker-empty { font-size: 11px; color: rgba(255, 255, 255, 0.4); }
       /* 本文編集欄の高さ(2026年9月、PCでの編集作業向けに約5倍へ拡大: 96px→480px)。
          長文のOCR結果・貼り付けを読み書きする画面のため、縦スクロールに頼りきらず
          できるだけ広い面積で編集できるようにする狙い。 */
@@ -1085,7 +1162,7 @@
             <input type="text" class="al-new-citation-input" placeholder="例: 美術手帖 2024年9月号 p.34">
           </div>
           <div class="al-field">
-            <label>タグ(カンマ区切り・任意)</label>
+            <label>タグ(カンマ区切り・▾で既存から選択・任意)</label>
             <input type="text" class="al-new-tags-input" placeholder="例: 現代美術, 陶芸">
           </div>
         </div>
@@ -1099,7 +1176,7 @@
             <input type="text" class="al-new-url-input" placeholder="https://...">
           </div>
           <div class="al-field">
-            <label>タグ(カンマ区切り・任意)</label>
+            <label>タグ(カンマ区切り・▾で既存から選択・任意)</label>
             <input type="text" class="al-new-url-tags-input" placeholder="例: 展覧会情報">
           </div>
         </div>
@@ -1145,6 +1222,9 @@
     overlay.querySelectorAll('input, textarea, button').forEach((el) => {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
     });
+
+    alEls.newTagsPicker = attachTagPicker(alEls.newTagsInput);
+    alEls.newUrlTagsPicker = attachTagPicker(alEls.newUrlTagsInput);
 
     overlay.querySelector('.al-close').addEventListener('click', (e) => { e.stopPropagation(); closeAlmagest(); });
     // このオーバーレイはCrews Constellationと同様、topbar/toolbar/shelfが縦に積み重なって
@@ -1275,6 +1355,8 @@
     alEls.newUrlTitleInput.value = '';
     alEls.newUrlInput.value = '';
     alEls.newUrlTagsInput.value = '';
+    alEls.newTagsPicker.close();
+    alEls.newUrlTagsPicker.close();
     renderDraftThumbBox();
     renderNewBodyImagesGallery();
   }
@@ -1641,6 +1723,12 @@
    *  ある間に「まだ端末に取り込んでいない本」だけを一覧して開いておく、Kindleのダウンロード
    *  確認に近い使い方を想定している。1件も無ければ紛らわしいので出さない。 */
   function renderTagChips() {
+    // 絞り込み中のタグが最後の1冊から外される/その本が削除されると、使用0件のタグは
+    // collectAllTags()から自動的に消える。チップが消えたのに絞り込みだけ残って本棚が空になら
+    // ないよう、「すべて」へ戻す(2026年9月)。
+    if (activeTagFilter && !activeTagFilter.startsWith('__') && !collectAllTags().includes(activeTagFilter)) {
+      activeTagFilter = null;
+    }
     const offlineMissingCount = getEntries().filter((e) => isOfflineReady(e) === false).length;
     const chips = [
       { key: null, label: 'すべて' },
@@ -1852,7 +1940,7 @@
             <input type="text" class="al-edit-url-input">
           </div>
           <div class="al-field">
-            <label>タグ(カンマ区切り)</label>
+            <label>タグ(カンマ区切り・▾で既存から選択)</label>
             <input type="text" class="al-edit-tags-input">
           </div>
           <div class="al-read-edit-actions">
@@ -1911,6 +1999,7 @@
       pinBtn: overlay.querySelector('.al-read-pin-btn'),
       deleteBtn: overlay.querySelector('.al-read-delete-btn'),
     };
+    rdEls.editTagsPicker = attachTagPicker(rdEls.editTagsInput);
 
     overlay.querySelectorAll('input, textarea, button').forEach((el) => {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -2038,6 +2127,7 @@
       rdEls.editForm.hidden = false;
       rdEls.editTitleInput.value = entry.title || '';
       rdEls.editTagsInput.value = (entry.tags || []).join(', ');
+      rdEls.editTagsPicker.close();
       rdEls.editBodyField.hidden = isUrl;
       rdEls.editThumbField.hidden = isUrl;
       rdEls.editCitationField.hidden = isUrl;
