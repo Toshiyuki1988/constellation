@@ -142,12 +142,14 @@
       .filter((t, i, arr) => t && arr.indexOf(t) === i);
   }
 
-  /** タグ入力欄の右に「▾ 既存のタグ」ボタンを付け、押すと登録済みタグ(collectAllTags()、
-   *  使用中のタグだけを都度集計するので使用0件のタグは出てこない)の一覧が入力欄の下に開く
-   *  プルダウン(2026年9月追加)。タップするたびに入力欄のカンマ区切りへ追加/削除をトグルする。
+  /** 入力欄の右に「▾ 既存」ボタンを付け、押すと登録済みの値の一覧が入力欄の下に開く
+   *  プルダウン(2026年9月追加、タグ・出典で共用)。一覧は各本から都度集計する(collect())
+   *  ので、使用0件になった値は自動的に出てこない。
+   *  - multi:true(タグ): タップするたびカンマ区切りの入力欄へ追加/削除をトグル
+   *  - multi:false(出典): タップした値で入力欄を置き換えて一覧を閉じる
    *  新規登録パネルは縦スクロールする領域のため、absolute配置のポップオーバーではなく
    *  入力欄の直下に展開する形にしてクリップを避けている。 */
-  function attachTagPicker(inputEl) {
+  function attachValuePicker(inputEl, { collect, multi, emptyLabel }) {
     const wrap = document.createElement('div');
     wrap.className = 'al-tag-input-row';
     inputEl.parentNode.insertBefore(wrap, inputEl);
@@ -162,13 +164,18 @@
     list.hidden = true;
     wrap.after(list);
 
+    const currentValues = () => (multi ? parseTags(inputEl.value) : [inputEl.value.trim()].filter(Boolean));
     function render() {
-      const all = collectAllTags();
-      const current = parseTags(inputEl.value);
+      const all = collect();
+      const current = currentValues();
       list.innerHTML = all.length
-        ? all.map((t) => `<button type="button" class="al-tag-picker-item${current.includes(t) ? ' selected' : ''}" data-tag="${escapeAttrLocal(t)}">${current.includes(t) ? '✓ ' : ''}${escapeHtml(t)}</button>`).join('')
-        : '<span class="al-tag-picker-empty">まだタグがありません</span>';
+        ? all.map((v) => {
+          const sel = current.includes(v);
+          return `<button type="button" class="al-tag-picker-item${sel ? ' selected' : ''}" data-value="${escapeAttrLocal(v)}">${sel ? '✓ ' : ''}${escapeHtml(v)}</button>`;
+        }).join('')
+        : `<span class="al-tag-picker-empty">${escapeHtml(emptyLabel)}</span>`;
     }
+    function close() { list.hidden = true; btn.classList.remove('open'); }
     btn.addEventListener('pointerdown', (e) => e.stopPropagation());
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -181,18 +188,28 @@
       e.stopPropagation();
       const item = e.target.closest('.al-tag-picker-item');
       if (!item) return;
-      const tag = item.dataset.tag;
-      const current = parseTags(inputEl.value);
-      const next = current.includes(tag) ? current.filter((t) => t !== tag) : [...current, tag];
-      inputEl.value = next.join(', ');
+      const value = item.dataset.value;
+      if (multi) {
+        const current = parseTags(inputEl.value);
+        const next = current.includes(value) ? current.filter((t) => t !== value) : [...current, value];
+        inputEl.value = next.join(', ');
+      } else {
+        inputEl.value = value;
+      }
       // 新規登録パネルの自動保存など、inputイベントを見ている既存の処理へ変更を伝える。
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-      render();
+      if (multi) render(); else close();
     });
     inputEl.addEventListener('input', () => { if (!list.hidden) render(); });
-    return {
-      close() { list.hidden = true; btn.classList.remove('open'); },
-    };
+    return { close };
+  }
+
+  function attachTagPicker(inputEl) {
+    return attachValuePicker(inputEl, { collect: collectAllTags, multi: true, emptyLabel: 'まだタグがありません' });
+  }
+
+  function attachCitationPicker(inputEl) {
+    return attachValuePicker(inputEl, { collect: collectAllCitations, multi: false, emptyLabel: 'まだ出典がありません' });
   }
 
   function byCreatedDesc(a, b) {
@@ -290,6 +307,9 @@
       return {
         ...base,
         excerpt: entry.bodyText ? computeExcerpt(entry) : (entry.excerpt || ''),
+        // 出典は短い文字列なので索引にも残す(出典プルダウンで、まだ開いていない本の出典も
+        // 選べるようにするため。2026年9月)。本文ファイル側にも従来どおり保存している。
+        citation: entry.citation || null,
         summaries: { easy: Boolean(entry.summaries && entry.summaries.easy), academic: Boolean(entry.summaries && entry.summaries.academic) },
         bodyFileId: entry.bodyFileId || null,
       };
@@ -1225,6 +1245,7 @@
 
     alEls.newTagsPicker = attachTagPicker(alEls.newTagsInput);
     alEls.newUrlTagsPicker = attachTagPicker(alEls.newUrlTagsInput);
+    alEls.newCitationPicker = attachCitationPicker(alEls.newCitationInput);
 
     overlay.querySelector('.al-close').addEventListener('click', (e) => { e.stopPropagation(); closeAlmagest(); });
     // このオーバーレイはCrews Constellationと同様、topbar/toolbar/shelfが縦に積み重なって
@@ -1357,6 +1378,7 @@
     alEls.newUrlTagsInput.value = '';
     alEls.newTagsPicker.close();
     alEls.newUrlTagsPicker.close();
+    alEls.newCitationPicker.close();
     renderDraftThumbBox();
     renderNewBodyImagesGallery();
   }
@@ -1713,6 +1735,14 @@
     return (entry.tags || []).includes(activeTagFilter);
   }
 
+  /** 登録済みの出典の一覧(出典プルダウン用)。出典は索引にも持たせている(toIndexEntry())
+   *  ので、まだ開いていない本の出典も含まれる。 */
+  function collectAllCitations() {
+    const set = new Set();
+    getEntries().forEach((e) => { if (e.kind !== 'url' && e.citation) set.add(e.citation); });
+    return [...set].sort();
+  }
+
   function collectAllTags() {
     const set = new Set();
     getEntries().forEach((e) => (e.tags || []).forEach((t) => set.add(t)));
@@ -2000,6 +2030,7 @@
       deleteBtn: overlay.querySelector('.al-read-delete-btn'),
     };
     rdEls.editTagsPicker = attachTagPicker(rdEls.editTagsInput);
+    rdEls.editCitationPicker = attachCitationPicker(rdEls.editCitationInput);
 
     overlay.querySelectorAll('input, textarea, button').forEach((el) => {
       el.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -2140,6 +2171,7 @@
       } else {
         rdEls.editBodyInput.value = entry.bodyText || '';
         rdEls.editCitationInput.value = entry.citation || '';
+        rdEls.editCitationPicker.close();
         editThumbDataUrl = entry.thumbDataUrl || null;
         renderEditThumbBox();
         editBodyImages = (entry.bodyImages || []).slice();
