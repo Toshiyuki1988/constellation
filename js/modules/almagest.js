@@ -2584,8 +2584,26 @@
   let bookSummaryPopupEl = null;
   let bookSummaryPopupAnchor = null; // 今ポップアップを出している元のボタン
   let bookSummaryPopupPinned = false; // タップで開いた(=ホバーを外しても閉じない)か
+  let bookSummaryHideTimer = null;
+  // ホバーで開いたポップアップの閉じ猶予(2026年9月、実機報告「スクロールしようとずらすと
+  // 閉じてしまう」への対応)。顔アイコンからポップアップへマウスを移す間はアイコンの外に
+  // 出るため、即座に閉じず少し待ち、その間にポップアップへ入ればそのまま開いておく。
+  const BOOK_SUMMARY_HOVER_GRACE_MS = 350;
+
+  function cancelBookSummaryHide() {
+    if (bookSummaryHideTimer) { clearTimeout(bookSummaryHideTimer); bookSummaryHideTimer = null; }
+  }
+
+  function scheduleBookSummaryHide() {
+    cancelBookSummaryHide();
+    bookSummaryHideTimer = setTimeout(() => {
+      bookSummaryHideTimer = null;
+      if (!bookSummaryPopupPinned) hideBookSummaryPopup();
+    }, BOOK_SUMMARY_HOVER_GRACE_MS);
+  }
 
   function hideBookSummaryPopup() {
+    cancelBookSummaryHide();
     if (bookSummaryPopupEl) bookSummaryPopupEl.remove();
     bookSummaryPopupEl = null;
     bookSummaryPopupAnchor = null;
@@ -2613,7 +2631,17 @@
     const pop = document.createElement('div');
     pop.className = 'star-card-book-summary-popup';
     pop.innerHTML = `<div class="star-card-book-summary-label">${label}</div><div class="star-card-book-summary-text">読み込み中…</div>`;
-    pop.addEventListener('pointerdown', (e) => e.stopPropagation());
+    pop.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      // ポップアップ内でクリック/ドラッグ(スクロールバー操作・文字選択)を始めたら、以後は
+      // マウスを外しても閉じない固定表示にする(外側クリックで閉じる)。
+      bookSummaryPopupPinned = true;
+      cancelBookSummaryHide();
+    });
+    pop.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') cancelBookSummaryHide(); });
+    pop.addEventListener('pointerleave', (e) => {
+      if (e.pointerType === 'mouse' && !bookSummaryPopupPinned) scheduleBookSummaryHide();
+    });
     document.body.appendChild(pop);
     bookSummaryPopupEl = pop;
     bookSummaryPopupAnchor = anchor;
@@ -2652,11 +2680,12 @@
       const mode = btn.dataset.bookSummary;
       btn.addEventListener('pointerenter', (e) => {
         if (e.pointerType !== 'mouse' || bookSummaryPopupPinned) return;
+        if (bookSummaryPopupAnchor === btn) { cancelBookSummaryHide(); return; } // 戻ってきただけ
         showBookSummaryPopup(btn, card.almagestEntryId, mode, false);
       });
       btn.addEventListener('pointerleave', (e) => {
         if (e.pointerType !== 'mouse' || bookSummaryPopupPinned) return;
-        if (bookSummaryPopupAnchor === btn) hideBookSummaryPopup();
+        if (bookSummaryPopupAnchor === btn) scheduleBookSummaryHide();
       });
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2686,8 +2715,97 @@
   // 閉じ、本棚だけが開いていれば本棚ごと閉じる(Crews Constellationと同じ考え方)。
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (pinPickerEl) { closePinPicker(); return; }
     if (rdEls && rdEls.overlay.classList.contains('open')) { closeReadingView(); return; }
     if (alEls && alEls.overlay.classList.contains('open')) closeAlmagest();
+  });
+
+  /* ---------------- Shift+A: 本の一覧からこのセッションへピン留め(PC専用、2026年9月追加) ----------------
+     Almagestの本棚を開かずに、キャンバス上で直接「書庫の本をこのセッションに置く」ための
+     小さな一覧ピッカー。キーボード前提のPC専用ショートカット(タッチ端末では起動手段を持たない)。
+     検索欄に打ち込んで絞り込み、クリック(または↑↓+Enter)で選ぶとplaceEntryOnCanvas()で
+     置く(本棚の📌/読書ビューの「このセッションに置く」と同じ処理)。 */
+
+  let pinPickerEl = null;
+  let pinPickerIndex = 0;
+
+  function closePinPicker() {
+    if (pinPickerEl) pinPickerEl.remove();
+    pinPickerEl = null;
+  }
+
+  function renderPinPickerList() {
+    if (!pinPickerEl) return;
+    const q = pinPickerEl.querySelector('.al-pin-picker-search').value;
+    const listEl = pinPickerEl.querySelector('.al-pin-picker-list');
+    const items = getEntries().filter((e) => matchesSearch(e, q)).sort(byCreatedDesc);
+    pinPickerIndex = Math.max(0, Math.min(pinPickerIndex, items.length - 1));
+    listEl.innerHTML = items.length
+      ? items.map((e, i) => `
+        <button type="button" class="al-pin-picker-item${i === pinPickerIndex ? ' active' : ''}" data-entry-id="${escapeAttrLocal(e.id)}">
+          <span class="al-pin-picker-icon">${e.kind === 'url' ? '🔖' : '📖'}</span>
+          <span class="al-pin-picker-title">${escapeHtml(e.title || '(無題)')}</span>
+          ${(e.tags || []).length ? `<span class="al-pin-picker-tags">${escapeHtml(e.tags.join(', '))}</span>` : ''}
+        </button>`).join('')
+      : '<div class="al-pin-picker-empty">該当する本がありません</div>';
+    const active = listEl.querySelector('.al-pin-picker-item.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }
+
+  function pickFromPinPicker(entryId) {
+    closePinPicker();
+    placeEntryOnCanvas(entryId);
+  }
+
+  async function openPinPicker() {
+    if (pinPickerEl) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'al-pin-picker-overlay';
+    overlay.innerHTML = `
+      <div class="al-pin-picker">
+        <div class="al-pin-picker-head">
+          <span class="al-pin-picker-heading">📖 Almagest — このセッションに置く</span>
+          <button type="button" class="al-pin-picker-close" aria-label="閉じる">✕</button>
+        </div>
+        <input type="text" class="al-pin-picker-search" placeholder="タイトル・タグ・本文で検索(↑↓で選択、Enterで置く)">
+        <div class="al-pin-picker-list"><div class="al-pin-picker-empty">読み込み中…</div></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    pinPickerEl = overlay;
+    pinPickerIndex = 0;
+    const searchEl = overlay.querySelector('.al-pin-picker-search');
+    overlay.querySelector('.al-pin-picker-close').addEventListener('click', closePinPicker);
+    attachBackgroundTapToClose(overlay, closePinPicker);
+    overlay.querySelector('.al-pin-picker-list').addEventListener('click', (e) => {
+      const item = e.target.closest('.al-pin-picker-item');
+      if (item) pickFromPinPicker(item.dataset.entryId);
+    });
+    searchEl.addEventListener('input', () => { pinPickerIndex = 0; renderPinPickerList(); });
+    searchEl.addEventListener('keydown', (e) => {
+      const items = overlay.querySelectorAll('.al-pin-picker-item');
+      if (e.key === 'ArrowDown') { e.preventDefault(); pinPickerIndex = Math.min(pinPickerIndex + 1, items.length - 1); renderPinPickerList(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); pinPickerIndex = Math.max(pinPickerIndex - 1, 0); renderPinPickerList(); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        const item = items[pinPickerIndex];
+        if (item) pickFromPinPicker(item.dataset.entryId);
+      } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePinPicker(); }
+    });
+    searchEl.focus();
+    await ensureAlmagestDataLoaded();
+    renderPinPickerList();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.code !== 'KeyA' || e.repeat) return;
+    const active = document.activeElement;
+    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.isContentEditable)) return;
+    // セッションの中(キャンバス表示中)で、他のオーバーレイが開いていない時だけ。
+    if (!state.breadcrumb || state.breadcrumb.length === 0) return;
+    if ((alEls && alEls.overlay.classList.contains('open')) || (rdEls && rdEls.overlay.classList.contains('open'))) return;
+    if (document.querySelector('.modal-overlay.visible, #camera-overlay.open')) return;
+    e.preventDefault();
+    openPinPicker();
   });
 
   registerModuleCode('159', openAlmagest);
