@@ -2550,7 +2550,40 @@
 
   /* ---------------- カードのHTML生成(js/app.jsのrenderCard()から薄いフック経由で呼ばれる) ---------------- */
 
+  /** 書庫データ(索引)がまだ読み込まれていない間に描画された本カードを、読み込み完了後に
+   *  描き直す(2026年9月、不具合修正)。セッション単位ロードへの移行で、本カードを含む
+   *  セッションの描画が書庫データの読み込みを待たなくなり、リロード直後は参照先が
+   *  見つからず「書庫から削除されました」と誤表示されていた。 */
+  let bookCardsRefreshScheduled = false;
+  function scheduleBookCardsRefreshAfterLoad() {
+    if (bookCardsRefreshScheduled) return;
+    bookCardsRefreshScheduled = true;
+    ensureAlmagestDataLoaded()
+      .catch(() => {})
+      .then(() => {
+        bookCardsRefreshScheduled = false;
+        let changed = false;
+        state.cards.forEach((c) => {
+          if (c.mediaType !== 'book') return;
+          const oldEl = cardElById(c.id);
+          if (!oldEl || !oldEl.querySelector('.star-card-book-loading')) return;
+          oldEl.remove();
+          renderCard(c);
+          changed = true;
+        });
+        if (changed) redrawAsterismLines();
+      });
+  }
+
   function almagestBookCardInnerHtml(card) {
+    if (!almagestDataLoaded) {
+      scheduleBookCardsRefreshAfterLoad();
+      return (
+        '<div class="star-card-book-head"><span class="star-card-book-icon">📖</span><span class="star-card-book-label">Almagest</span></div>' +
+        '<p class="star-card-book-missing star-card-book-loading">書庫を読み込み中…</p>' +
+        EDIT_GUIDE_HANDLES_HTML + editGuideHexHtml('book')
+      );
+    }
     const entry = getAlmagestEntryById(card.almagestEntryId);
     if (!entry) {
       return (
@@ -2648,6 +2681,7 @@
     bookSummaryPopupPinned = pinned;
     positionBookSummaryPopup(anchor);
 
+    await ensureAlmagestDataLoaded().catch(() => {});
     const entry = getAlmagestEntryById(entryId);
     let text = null;
     let message = null;
